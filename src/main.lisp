@@ -136,7 +136,12 @@
                 (self-git-command configuration '("rev-parse" "HEAD")))
              (error ()
                nil)))
-         (safe-backtrace (subseq backtrace 0 (min 30 (length backtrace)))))
+         (safe-backtrace
+           (mapcar (lambda (frame-name)
+                     (if (or (symbolp frame-name) (stringp frame-name))
+                         (bounded-string frame-name :limit 300)
+                         (bounded-string (type-of frame-name) :limit 300)))
+                   (subseq backtrace 0 (min 30 (length backtrace))))))
     (generation--write-form-atomically
      pathname
      (list :crash
@@ -230,19 +235,29 @@
                    :agent agent
                    :ui ui)))
 
-(-> application-reconnect (application) application)
-(defun application-reconnect (application)
-  "Reconnect APPLICATION's ephemeral resources after a retained core boots."
+(-> application-reconnect
+    (application &key (:conversation-id (option string)))
+    application)
+(defun application-reconnect (application &key conversation-id)
+  "Reconnect retained APPLICATION resources, optionally selecting CONVERSATION-ID."
   (let* ((previous (application-configuration application))
          (configuration
            (configuration-create
             :working-directory (uiop:getcwd)
             :model (configuration-model previous)
             :reasoning-effort (configuration-reasoning-effort previous)))
+         (recovery-conversation-id
+           (uiop:getenv "FROB_RECOVERY_CONVERSATION_ID"))
+         (selected-conversation-id
+           (or conversation-id
+               (and (non-empty-string-p recovery-conversation-id)
+                    recovery-conversation-id)
+               (conversation-identifier
+                (application-conversation application))))
          (conversation
            (conversation-load-by-id
             configuration
-            (conversation-identifier (application-conversation application))))
+            selected-conversation-id))
          (provider (provider-create configuration))
          (worker (lisp-worker-create configuration))
          (registry (application-tool-registry application))
@@ -254,14 +269,26 @@
          (ui (terminal-ui-create
               :terminal (stream-terminal-create
                          :columns (terminal-current-columns))
-              :prompt "frob> ")))
+              :prompt "frob> "))
+         (recovery-rendered-sequence
+           (handler-case
+               (let ((value (uiop:getenv "FROB_RECOVERY_RENDERED_SEQUENCE")))
+                 (and (non-empty-string-p value)
+                      (parse-integer value :junk-allowed nil)))
+             (error ()
+               nil))))
     (setf (application-configuration application) configuration
           (application-conversation application) conversation
           (application-provider application) provider
           (application-worker application) worker
           (application-agent application) agent
           (application-ui application) ui
-          (application-rendered-sequence application) 0)
+          (application-rendered-sequence application)
+          (if (and recovery-rendered-sequence
+                   (string= selected-conversation-id
+                            (or recovery-conversation-id "")))
+              recovery-rendered-sequence
+              0))
     application))
 
 (defmethod checkpoint-detach-state ((application application))
@@ -699,9 +726,9 @@
   (format t "~&ChatGPT authentication was saved by Frob.~%")
   nil)
 
-(-> main (list) null)
-(defun main (arguments)
-  "Run the Frob command described by ARGUMENTS."
+(-> main-dispatch (list) null)
+(defun main-dispatch (arguments)
+  "Dispatch validated Frob ARGUMENTS inside the active process."
   (cond
     ((member "--worker" arguments :test #'string=)
      (worker-main))
@@ -723,9 +750,11 @@
          (t
           (setf *active-application*
                 (if (typep *active-application* 'application)
-                    (application-reconnect *active-application*)
+                    (application-reconnect *active-application*
+                                           :conversation-id resume-id)
                     (application-create configuration :conversation-id resume-id)))
-          (when (member "--simulate-crash" arguments :test #'string=)
+          (when (and (member "--simulate-crash" arguments :test #'string=)
+                     (not (non-empty-string-p (uiop:getenv "FROB_RECOVERED"))))
             (let ((capsule
                     (application-write-crash-capsule
                      *active-application*
@@ -741,4 +770,14 @@
                       "Frob entered recovery after a fatal error. Capsule: ~A~%"
                       (fatal-control-path-error-capsule-pathname condition))
               (uiop:quit 70))))))))
+  nil)
+
+(-> main (list) null)
+(defun main (arguments)
+  "Run the Frob command described by ARGUMENTS with stable exit classification."
+  (handler-case
+      (main-dispatch arguments)
+    (frob-error (condition)
+      (format *error-output* "Frob could not start: ~A~%" condition)
+      (uiop:quit 64)))
   nil)

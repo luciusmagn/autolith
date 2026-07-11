@@ -1,0 +1,587 @@
+(in-package #:frob)
+
+;;;; -- Recovery State --
+
+(defclass recovery-context ()
+  ((source-root
+    :initarg :source-root
+    :reader recovery-context-source-root
+    :type pathname
+    :documentation "The stable Frob source checkout containing Git history.")
+   (generation-root
+    :initarg :generation-root
+    :reader recovery-context-generation-root
+    :type pathname
+    :documentation "The retained generation directory.")
+   (worktree-root
+    :initarg :worktree-root
+    :reader recovery-context-worktree-root
+    :type pathname
+    :documentation "The directory for exact-commit recovery worktrees.")
+   (state-root
+    :initarg :state-root
+    :reader recovery-context-state-root
+    :type pathname
+    :documentation "The Frob state directory containing selection and journals.")
+   (current-pathname
+    :initarg :current-pathname
+    :reader recovery-context-current-pathname
+    :type pathname
+    :documentation "The atomically selected generation record."))
+  (:documentation "Stable paths available to the pristine recovery image."))
+
+(defclass recovery-generation ()
+  ((identifier
+    :initarg :identifier
+    :reader recovery-generation-identifier
+    :type string
+    :documentation "The validated retained generation identifier.")
+   (core-pathname
+    :initarg :core-pathname
+    :reader recovery-generation-core-pathname
+    :type pathname
+    :documentation "The contained saved core pathname.")
+   (manifest-pathname
+    :initarg :manifest-pathname
+    :reader recovery-generation-manifest-pathname
+    :type pathname
+    :documentation "The validated manifest pathname.")
+   (git-commit
+    :initarg :git-commit
+    :reader recovery-generation-git-commit
+    :type string
+    :documentation "The exact source revision paired with the core.")
+   (sbcl-version
+    :initarg :sbcl-version
+    :reader recovery-generation-sbcl-version
+    :type string
+    :documentation "The SBCL version that wrote the core.")
+   (operating-system
+    :initarg :operating-system
+    :reader recovery-generation-operating-system
+    :type string
+    :documentation "The operating system type that wrote the core.")
+   (operating-system-version
+    :initarg :operating-system-version
+    :reader recovery-generation-operating-system-version
+    :type string
+    :documentation "The operating system build that wrote the core.")
+   (architecture
+    :initarg :architecture
+    :reader recovery-generation-architecture
+    :type string
+    :documentation "The machine architecture that wrote the core.")
+   (created-at
+    :initarg :created-at
+    :reader recovery-generation-created-at
+    :type integer
+    :documentation "The universal time at which the generation was created."))
+  (:documentation "A minimally validated generation visible to recovery."))
+
+(serapeum:-> recovery-context-create (pathname) recovery-context)
+(defun recovery-context-create (source-root)
+  "Return recovery context rooted at SOURCE-ROOT and XDG user directories."
+  (let* ((home (user-homedir-pathname))
+         (data-home
+           (uiop:ensure-directory-pathname
+            (or (uiop:getenv "XDG_DATA_HOME")
+                (merge-pathnames ".local/share/" home))))
+         (state-home
+           (uiop:ensure-directory-pathname
+            (or (uiop:getenv "XDG_STATE_HOME")
+                (merge-pathnames ".local/state/" home))))
+         (state-root (merge-pathnames "frob/" state-home)))
+    (make-instance
+     'recovery-context
+     :source-root (uiop:ensure-directory-pathname source-root)
+     :generation-root (merge-pathnames "frob/generations/" data-home)
+     :worktree-root (merge-pathnames "frob/recovery-worktrees/" data-home)
+     :state-root state-root
+     :current-pathname (merge-pathnames "current-generation.sexp" state-root))))
+
+
+;;;; -- Safe Data and Presentation --
+
+(serapeum:-> recovery-sanitize-text (t) string)
+(defun recovery-sanitize-text (value)
+  "Return VALUE as one terminal-safe line without C0, C1, or escape controls."
+  (let ((text (if (stringp value) value (princ-to-string value))))
+    (map 'string
+         (lambda (character)
+           (let ((code (char-code character)))
+             (if (or (< code 32)
+                     (= code 127)
+                     (<= 128 code 159))
+                 #\Space
+                 character)))
+         text)))
+
+(serapeum:-> recovery-read-form (pathname) t)
+(defun recovery-read-form (pathname)
+  "Read exactly one portable form from PATHNAME with reader evaluation disabled."
+  (with-open-file (stream pathname :direction :input :external-format :utf-8)
+    (let ((*read-eval* nil)
+          (end-marker (cons nil nil)))
+      (let ((form (read stream t nil)))
+        (unless (eq (read stream nil end-marker) end-marker)
+          (error "Recovery record ~A contains trailing forms." pathname))
+        form))))
+
+(serapeum:-> recovery-identifier-p (t) boolean)
+(defun recovery-identifier-p (value)
+  "Return true for a bounded path-component-safe generation identifier."
+  (and (stringp value)
+       (plusp (length value))
+       (<= (length value) 128)
+       (every (lambda (character)
+                (or (alphanumericp character) (char= character #\-)))
+              value)
+       t))
+
+(serapeum:-> recovery-git-commit-p (t) boolean)
+(defun recovery-git-commit-p (value)
+  "Return true when VALUE is one full hexadecimal Git object identifier."
+  (and (stringp value)
+       (= (length value) 40)
+       (every (lambda (character) (digit-char-p character 16)) value)
+       t))
+
+(serapeum:-> recovery-read-journal-records (pathname) list)
+(defun recovery-read-journal-records (pathname)
+  "Read complete journal forms from PATHNAME, ignoring an incomplete final form."
+  (if (probe-file pathname)
+      (with-open-file (stream pathname :direction :input :external-format :utf-8)
+        (let ((*read-eval* nil)
+              (end-marker (cons nil nil))
+              (records nil))
+          (handler-case
+              (loop for record = (read stream nil end-marker)
+                    until (eq record end-marker)
+                    do (push record records))
+            (end-of-file ()
+              nil))
+          (nreverse records)))
+      nil))
+
+(serapeum:-> recovery-report-mutations (recovery-context) null)
+(defun recovery-report-mutations (context)
+  "Print pending durable mutation identities from CONTEXT's journal."
+  (let ((latest (make-hash-table :test #'equal))
+        (pathname (merge-pathnames "mutations.sexp"
+                                   (recovery-context-state-root context))))
+    (handler-case
+        (progn
+          (dolist (record (recovery-read-journal-records pathname))
+            (when (and (listp record)
+                       (eq (first record) :mutation)
+                       (eq (getf (rest record) :kind) :durable-definition)
+                       (recovery-identifier-p (getf (rest record) :id)))
+              (setf (gethash (getf (rest record) :id) latest) record)))
+          (let ((pending
+                  (loop for record being the hash-values of latest
+                        unless (member (getf (rest record) :result)
+                                       '(:durable :failed :superseded)
+                                       :test #'eq)
+                          collect record)))
+            (when pending
+              (format *error-output* "Pending durable mutations: ~D~%"
+                      (length pending))
+              (dolist (record pending)
+                (format *error-output* "  ~A  ~A  ~A~%"
+                        (recovery-sanitize-text (getf (rest record) :id))
+                        (recovery-sanitize-text (getf (rest record) :result))
+                        (recovery-sanitize-text (getf (rest record) :pathname)))))))
+      (error (condition)
+        (format *error-output* "Could not inspect the mutation journal: ~A~%"
+                (recovery-sanitize-text condition)))))
+  nil)
+
+
+;;;; -- Generation Validation --
+
+(serapeum:-> recovery-manifest-pathname
+    (recovery-context string)
+    pathname)
+(defun recovery-manifest-pathname (context identifier)
+  "Return IDENTIFIER's contained manifest pathname in CONTEXT."
+  (unless (recovery-identifier-p identifier)
+    (error "Invalid generation identifier ~A."
+           (recovery-sanitize-text identifier)))
+  (merge-pathnames
+   "manifest.sexp"
+   (merge-pathnames (format nil "~A/" identifier)
+                    (recovery-context-generation-root context))))
+
+(serapeum:-> recovery-load-generation
+    (recovery-context pathname &key (:expected-identifier t))
+    recovery-generation)
+(defun recovery-load-generation (context pathname &key expected-identifier)
+  "Load and validate one generation at PATHNAME inside CONTEXT."
+  (unless (and (uiop:subpathp pathname
+                              (recovery-context-generation-root context))
+               (probe-file pathname))
+    (error "Generation manifest is absent or outside the retained root."))
+  (let* ((form (recovery-read-form pathname))
+         (properties (and (listp form) (rest form)))
+         (identifier (and properties (getf properties :id)))
+         (core-value (and properties (getf properties :core)))
+         (commit (and properties (getf properties :git-commit)))
+         (directory (uiop:pathname-directory-pathname pathname))
+         (core-pathname (and (stringp core-value) (pathname core-value))))
+    (unless (and (eq (first form) :generation)
+                 (= (or (getf properties :version) 0) 1)
+                 (recovery-identifier-p identifier)
+                 (or (null expected-identifier)
+                     (string= identifier expected-identifier))
+                 (string= identifier
+                          (car (last (pathname-directory directory))))
+                 core-pathname
+                 (uiop:subpathp core-pathname directory)
+                 (recovery-git-commit-p commit)
+                 (stringp (getf properties :sbcl-version))
+                 (stringp (getf properties :operating-system))
+                 (stringp (getf properties :operating-system-version))
+                 (stringp (getf properties :architecture))
+                 (integerp (getf properties :created-at)))
+      (error "Invalid retained generation manifest at ~A."
+             (recovery-sanitize-text pathname)))
+    (make-instance
+     'recovery-generation
+     :identifier identifier
+     :core-pathname core-pathname
+     :manifest-pathname pathname
+     :git-commit commit
+     :sbcl-version (getf properties :sbcl-version)
+     :operating-system (getf properties :operating-system)
+     :operating-system-version (getf properties :operating-system-version)
+     :architecture (getf properties :architecture)
+     :created-at (getf properties :created-at))))
+
+(serapeum:-> recovery-generation-compatible-p (recovery-generation) boolean)
+(defun recovery-generation-compatible-p (generation)
+  "Return true when GENERATION has a plausible core for this exact SBCL host."
+  (and (string= (recovery-generation-sbcl-version generation)
+                (lisp-implementation-version))
+       (string= (recovery-generation-operating-system generation)
+                (software-type))
+       (string= (recovery-generation-operating-system-version generation)
+                (software-version))
+       (string= (recovery-generation-architecture generation)
+                (machine-type))
+       (probe-file (recovery-generation-core-pathname generation))
+       (with-open-file (stream (recovery-generation-core-pathname generation)
+                               :direction :input
+                               :element-type '(unsigned-byte 8))
+         (> (file-length stream) 1048576))
+       t))
+
+(serapeum:-> recovery-generation-list (recovery-context) list)
+(defun recovery-generation-list (context)
+  "Return valid retained generations in CONTEXT, newest first."
+  (let ((generations nil)
+        (root (recovery-context-generation-root context)))
+    (when (probe-file root)
+      (dolist (directory (uiop:subdirectories root))
+        (let ((pathname (merge-pathnames "manifest.sexp" directory)))
+          (when (probe-file pathname)
+            (handler-case
+                (push (recovery-load-generation context pathname) generations)
+              (error (condition)
+                (format *error-output* "Skipping invalid manifest ~A: ~A~%"
+                        (recovery-sanitize-text pathname)
+                        (recovery-sanitize-text condition))))))))
+    (sort generations #'> :key #'recovery-generation-created-at)))
+
+(serapeum:-> recovery-selected-generation (recovery-context) recovery-generation)
+(defun recovery-selected-generation (context)
+  "Return the generation named by CONTEXT's atomic selection record."
+  (let ((pathname (recovery-context-current-pathname context)))
+    (unless (probe-file pathname)
+      (error "No retained generation is selected."))
+    (let* ((record (recovery-read-form pathname))
+           (identifier
+             (and (listp record)
+                  (eq (first record) :current-generation)
+                  (getf (rest record) :id)))
+           (manifest
+             (and (listp record)
+                  (eq (first record) :current-generation)
+                  (getf (rest record) :manifest))))
+      (unless (and (recovery-identifier-p identifier)
+                   (stringp manifest)
+                   (uiop:subpathp (pathname manifest)
+                                  (recovery-context-generation-root context)))
+        (error "The selected-generation record is invalid."))
+      (recovery-load-generation context
+                                (pathname manifest)
+                                :expected-identifier identifier))))
+
+(serapeum:-> recovery-print-generations (recovery-context) null)
+(defun recovery-print-generations (context)
+  "Print retained generation identifiers, compatibility, and revisions."
+  (let ((generations (recovery-generation-list context)))
+    (if generations
+        (dolist (generation generations)
+          (format t "~A  ~A  commit ~A~%"
+                  (recovery-sanitize-text
+                   (recovery-generation-identifier generation))
+                  (if (recovery-generation-compatible-p generation)
+                      "compatible"
+                      "incompatible")
+                  (recovery-sanitize-text
+                   (recovery-generation-git-commit generation))))
+        (format t "No retained generations exist.~%")))
+  nil)
+
+
+;;;; -- Crash Context --
+
+(serapeum:-> recovery-report-crash
+    (recovery-context t t list)
+    null)
+(defun recovery-report-crash (context status capsule original-arguments)
+  "Report bounded crash context and publish safe reconnection metadata."
+  (when status
+    (format *error-output* "Active Frob exited with status ~A.~%"
+            (recovery-sanitize-text status)))
+  (when (and (stringp capsule) (probe-file capsule))
+    (handler-case
+        (let* ((capsule-pathname (pathname capsule))
+               (crash-root (merge-pathnames "crashes/"
+                                            (recovery-context-state-root context)))
+               (record
+                 (progn
+                   (unless (uiop:subpathp capsule-pathname crash-root)
+                     (error "The crash capsule is outside private Frob state."))
+                   (recovery-read-form capsule-pathname)))
+               (properties (and (listp record) (rest record)))
+               (conversation-id (and properties
+                                     (getf properties :conversation-id)))
+               (rendered-sequence (and properties
+                                       (getf properties :rendered-sequence))))
+          (unless (eq (first record) :crash)
+            (error "The crash capsule has an invalid header."))
+          (format *error-output*
+                  "Crash capsule: ~A~%Condition: ~A~%Conversation: ~A~%"
+                  (recovery-sanitize-text capsule)
+                  (recovery-sanitize-text
+                   (or (getf properties :condition) "unknown"))
+                  (recovery-sanitize-text (or conversation-id "unknown")))
+          (when (and (stringp conversation-id)
+                     (recovery-identifier-p conversation-id))
+            (sb-posix:setenv "FROB_RECOVERY_CONVERSATION_ID" conversation-id 1))
+          (when (and (integerp rendered-sequence) (not (minusp rendered-sequence)))
+            (sb-posix:setenv "FROB_RECOVERY_RENDERED_SEQUENCE"
+                             (write-to-string rendered-sequence)
+                             1)))
+      (error (condition)
+        (format *error-output* "Could not read crash capsule ~A: ~A~%"
+                (recovery-sanitize-text capsule)
+                (recovery-sanitize-text condition)))))
+  (when original-arguments
+    (format *error-output* "Original arguments: ~{~A~^ ~}~%"
+            (mapcar #'recovery-sanitize-text original-arguments)))
+  (recovery-report-mutations context)
+  nil)
+
+
+;;;; -- Exact Source and Core Boot --
+
+(serapeum:-> recovery-source-worktree
+    (recovery-context recovery-generation)
+    pathname)
+(defun recovery-source-worktree (context generation)
+  "Return a clean detached worktree for GENERATION's exact source revision."
+  (let* ((identifier (recovery-generation-identifier generation))
+         (commit (recovery-generation-git-commit generation))
+         (worktree
+           (merge-pathnames (format nil "~A/" identifier)
+                            (recovery-context-worktree-root context))))
+    (if (probe-file worktree)
+        (let ((actual
+                (string-trim
+                 '(#\Space #\Tab #\Newline #\Return)
+                 (uiop:run-program
+                  (list "git" "-C" (namestring worktree) "rev-parse" "HEAD")
+                  :output :string
+                  :error-output :output)))
+              (status
+                (uiop:run-program
+                 (list "git" "-C" (namestring worktree) "status" "--porcelain")
+                 :output :string
+                 :error-output :output)))
+          (unless (and (string= actual commit) (zerop (length status)))
+            (error "Recovery worktree ~A is not clean at commit ~A."
+                   (recovery-sanitize-text worktree)
+                   (recovery-sanitize-text commit))))
+        (progn
+          (ensure-directories-exist
+           (recovery-context-worktree-root context))
+          (uiop:run-program
+           (list "git"
+                 "-C" (namestring (recovery-context-source-root context))
+                 "worktree" "add" "--detach"
+                 (namestring worktree)
+                 commit)
+           :output :string
+           :error-output :output)))
+    worktree))
+
+(serapeum:-> recovery-boot-generation
+    (recovery-context recovery-generation list)
+    integer)
+(defun recovery-boot-generation (context generation forwarded-arguments)
+  "Boot GENERATION with FORWARDED-ARGUMENTS and return its process status."
+  (unless (recovery-generation-compatible-p generation)
+    (error "Generation ~A is incompatible with this SBCL runtime."
+           (recovery-sanitize-text
+            (recovery-generation-identifier generation))))
+  (let* ((worktree (recovery-source-worktree context generation))
+         (sbcl-command (or (uiop:getenv "FROB_SBCL") "sbcl")))
+    (sb-posix:setenv "FROB_SOURCE_ROOT" (namestring worktree) 1)
+    (sb-posix:setenv "FROB_RECOVERED" "1" 1)
+    (let ((process
+            (uiop:launch-program
+             (append
+              (list sbcl-command
+                    "--noinform"
+                    "--core"
+                    (namestring (recovery-generation-core-pathname generation))
+                    "--end-runtime-options")
+              forwarded-arguments)
+             :directory worktree
+             :input :interactive
+             :output :interactive
+             :error-output :interactive
+             :wait nil)))
+      (uiop:wait-process process))))
+
+(serapeum:-> recovery-boot-with-fallback
+    (recovery-context recovery-generation list)
+    integer)
+(defun recovery-boot-with-fallback (context selected forwarded-arguments)
+  "Boot SELECTED, falling back to other compatible generations after fatal exits."
+  (let ((candidates
+          (cons selected
+                (remove (recovery-generation-identifier selected)
+                        (recovery-generation-list context)
+                        :key #'recovery-generation-identifier
+                        :test #'string=))))
+    (dolist (generation candidates)
+      (when (recovery-generation-compatible-p generation)
+        (handler-case
+            (let ((status
+                    (recovery-boot-generation context
+                                              generation
+                                              forwarded-arguments)))
+              (when (member status '(0 64 130 143) :test #'=)
+                (return-from recovery-boot-with-fallback status))
+              (format *error-output*
+                      "Generation ~A exited with status ~D; trying fallback.~%"
+                      (recovery-sanitize-text
+                       (recovery-generation-identifier generation))
+                      status))
+          (error (condition)
+            (format *error-output* "Could not boot generation ~A: ~A~%"
+                    (recovery-sanitize-text
+                     (recovery-generation-identifier generation))
+                    (recovery-sanitize-text condition))))))
+    (error "No retained generation could be booted.")))
+
+
+;;;; -- Argument Parsing and Entry --
+
+(serapeum:-> recovery-parse-arguments (list) *)
+(defun recovery-parse-arguments (arguments)
+  "Return recovery options and forwarded application arguments from ARGUMENTS."
+  (let ((generation nil)
+        (list-p nil)
+        (status nil)
+        (capsule nil)
+        (forwarded nil)
+        (original-arguments nil)
+        (remaining arguments))
+    (loop while remaining
+          for argument = (pop remaining)
+          do (cond
+               ((string= argument "--")
+                (setf forwarded remaining
+                      remaining nil))
+               ((string= argument "--list")
+                (setf list-p t))
+               ((string= argument "--generation")
+                (setf generation
+                      (or (pop remaining)
+                          (error "--generation requires an identifier."))))
+               ((string= argument "--status")
+                (setf status
+                      (or (pop remaining)
+                          (error "--status requires an exit code."))))
+               ((string= argument "--capsule")
+                (setf capsule
+                      (or (pop remaining)
+                          (error "--capsule requires a pathname."))))
+               ((string= argument "--original-argument")
+                (push (or (pop remaining)
+                          (error "--original-argument requires a value."))
+                      original-arguments))
+               (t
+                (setf forwarded (cons argument remaining)
+                      remaining nil))))
+    (values generation
+            list-p
+            status
+            capsule
+            forwarded
+            (nreverse original-arguments))))
+
+(serapeum:-> recovery-run (list) integer)
+(defun recovery-run (arguments)
+  "Run pristine recovery using complete command-line ARGUMENTS."
+  (let* ((source-root
+           (uiop:ensure-directory-pathname
+            (or (first arguments)
+                (error "The recovery image needs the source root."))))
+         (context (recovery-context-create source-root)))
+    (multiple-value-bind
+        (generation list-p status capsule forwarded original-arguments)
+        (recovery-parse-arguments (rest arguments))
+      (if list-p
+          (progn
+            (recovery-print-generations context)
+            0)
+          (let ((selected
+                  (if generation
+                      (recovery-load-generation
+                       context
+                       (recovery-manifest-pathname context generation)
+                       :expected-identifier generation)
+                      (recovery-selected-generation context))))
+            (recovery-report-crash context status capsule original-arguments)
+            (recovery-boot-with-fallback context selected forwarded))))))
+
+(serapeum:-> recovery-main () null)
+(defun recovery-main ()
+  "Run the pristine recovery core and terminate with its explicit status."
+  (sb-ext:disable-debugger)
+  (restart-case
+      (handler-case
+          (uiop:quit (recovery-run (uiop:command-line-arguments)))
+        (error (condition)
+          (format *error-output* "Recovery could not continue: ~A~%"
+                  (recovery-sanitize-text condition))
+          (uiop:quit 1)))
+    (abort ()
+      :report "Exit the pristine Frob recovery image."
+      (uiop:quit 1)))
+  nil)
+
+(serapeum:-> recovery-image-save (pathname) null)
+(defun recovery-image-save (pathname)
+  "Save the current minimal image to PATHNAME with RECOVERY-MAIN as its entry."
+  (ensure-directories-exist pathname)
+  (sb-ext:save-lisp-and-die (namestring pathname)
+                            :toplevel #'recovery-main
+                            :executable nil
+                            :purify t
+                            :compression t))

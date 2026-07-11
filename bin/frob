@@ -8,6 +8,10 @@ sbcl_command=${FROB_SBCL:-sbcl}
 terminal_state=
 recovery_requested=false
 remaining_arguments=()
+state_home=${XDG_STATE_HOME:-$HOME/.local/state}
+data_home=${XDG_DATA_HOME:-$HOME/.local/share}
+recovery_core=${FROB_RECOVERY_CORE:-$data_home/frob/recovery/frob-recovery.core}
+crash_pointer=
 
 for argument in "$@"; do
   if [[ "$argument" == "--recovery" ]]; then
@@ -29,14 +33,40 @@ restore_terminal()
   fi
 }
 
-trap restore_terminal EXIT HUP INT TERM
+finish_launcher()
+{
+  restore_terminal
+  if [[ -n "$crash_pointer" ]]; then
+    rm -f -- "$crash_pointer"
+  fi
+}
+
+run_recovery()
+{
+  if [[ -f "$recovery_core" ]]; then
+    "$sbcl_command" --noinform --core "$recovery_core" \
+      --end-runtime-options "$source_root" "$@"
+  else
+    printf 'Pristine recovery image is missing; using source bootstrap. Run ./bootstrap to install it.\n' >&2
+    "$sbcl_command" --script "$source_root/recovery/launcher.lisp" \
+      "$source_root" "$@"
+  fi
+}
+
+trap finish_launcher EXIT HUP INT TERM
 
 if [[ "$recovery_requested" == true ]]; then
   restore_terminal
-  "$sbcl_command" --script "$source_root/recovery/launcher.lisp" \
-    "$source_root" "${remaining_arguments[@]}"
+  run_recovery "${remaining_arguments[@]}"
   exit $?
 fi
+
+crash_pointer_directory="$state_home/frob/crash-pointers"
+mkdir -p -- "$crash_pointer_directory"
+chmod 700 -- "$crash_pointer_directory"
+crash_pointer="$crash_pointer_directory/launcher-$$.path"
+rm -f -- "$crash_pointer"
+export FROB_CRASH_POINTER="$crash_pointer"
 
 if "$sbcl_command" --script "$source_root/bin/frob-active" "$@"; then
   exit 0
@@ -46,12 +76,20 @@ fi
 
 restore_terminal
 
-if [[ "$status" -ne 130 && "$status" -ne 143 ]]; then
-  state_home=${XDG_STATE_HOME:-$HOME/.local/state}
+if [[ "$status" -ne 64 && "$status" -ne 130 && "$status" -ne 143 ]]; then
   capsule=
-  if [[ -d "$state_home/frob/crashes" ]]; then
-    capsule=$(find "$state_home/frob/crashes" -maxdepth 1 -type f -name '*.sexp' \
-      -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
+  if [[ -f "$crash_pointer" ]]; then
+    IFS= read -r capsule < "$crash_pointer" || capsule=
+    case "$capsule" in
+      "$state_home/frob/crashes/"*.sexp)
+        if [[ ! -f "$capsule" ]]; then
+          capsule=
+        fi
+        ;;
+      *)
+        capsule=
+        ;;
+    esac
   fi
   recovery_arguments=("--status" "$status")
   if [[ -n "$capsule" ]]; then
@@ -60,8 +98,8 @@ if [[ "$status" -ne 130 && "$status" -ne 143 ]]; then
   for argument in "$@"; do
     recovery_arguments+=("--original-argument" "$argument")
   done
-  "$sbcl_command" --script "$source_root/recovery/launcher.lisp" \
-    "$source_root" "${recovery_arguments[@]}"
+  recovery_arguments+=("--" "$@")
+  run_recovery "${recovery_arguments[@]}"
   exit $?
 fi
 

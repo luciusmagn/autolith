@@ -216,11 +216,15 @@
 
 (-> generation-compatible-p (generation) boolean)
 (defun generation-compatible-p (generation)
-  "Return true when this runtime can load GENERATION's core."
+  "Return true when GENERATION has a plausible core for this exact runtime."
   (handler-case
       (let ((manifest (read-portable-form
                        (generation-manifest-pathname generation))))
         (and (probe-file (generation-core-pathname generation))
+             (with-open-file (stream (generation-core-pathname generation)
+                                     :direction :input
+                                     :element-type '(unsigned-byte 8))
+               (> (file-length stream) 1048576))
              (string= (or (getf (rest manifest) :sbcl-version) "")
                       (lisp-implementation-version))
              (string= (or (getf (rest manifest) :operating-system) "")
@@ -262,6 +266,11 @@
 (-> generation-select (configuration generation) generation)
 (defun generation-select (configuration generation)
   "Select compatible GENERATION for the next recovery startup."
+  (when *checkpoint-in-progress-p*
+    (error 'checkpoint-error
+           :message "A generation cannot be selected while a checkpoint publishes."
+           :stage ':selection
+           :pathname (generation-current-pathname configuration)))
   (unless (generation-compatible-p generation)
     (error 'checkpoint-error
            :message (format nil "Generation ~A is not compatible with this runtime."

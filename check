@@ -4,12 +4,20 @@
 
 (let* ((script-path (truename *load-truename*))
        (source-root (uiop:pathname-directory-pathname script-path))
+       (version-pathname (merge-pathnames "sbcl.version" source-root))
        (project-setup (merge-pathnames ".qlot/setup.lisp" source-root))
        (user-setup (merge-pathnames "quicklisp/setup.lisp"
                                     (user-homedir-pathname)))
        (quicklisp-setup (if (probe-file project-setup)
                            project-setup
                            user-setup)))
+  (let ((expected-version
+          (string-trim '(#\Space #\Tab #\Newline #\Return)
+                       (uiop:read-file-string version-pathname))))
+    (unless (string= expected-version (lisp-implementation-version))
+      (error "Frob pins SBCL ~A, but this process is ~A."
+             expected-version
+             (lisp-implementation-version))))
   (unless (probe-file quicklisp-setup)
     (error "Frob needs Quicklisp at ~A" quicklisp-setup))
   (load quicklisp-setup)
@@ -23,4 +31,23 @@
                (symbol-value library-directories)
                :test #'equal)))
   (asdf:load-asd (merge-pathnames "frob.asd" source-root))
-  (asdf:test-system :frob))
+  (asdf:test-system :frob)
+  (let* ((home (user-homedir-pathname))
+         (data-home
+           (uiop:ensure-directory-pathname
+            (or (uiop:getenv "XDG_DATA_HOME")
+                (merge-pathnames ".local/share/" home))))
+         (recovery-core
+           (merge-pathnames "frob/recovery/frob-recovery.core" data-home))
+         (sbcl-command (or (uiop:getenv "FROB_SBCL") "sbcl")))
+    (unless (probe-file recovery-core)
+      (error "Frob's pristine recovery image is missing; run ./bootstrap."))
+    (uiop:run-program
+     (list sbcl-command
+           "--noinform"
+           "--core" (namestring recovery-core)
+           "--end-runtime-options"
+           (namestring source-root)
+           "--list")
+     :output :string
+     :error-output :output)))

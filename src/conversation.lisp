@@ -88,7 +88,7 @@
 (defmethod conversation-append-record ((conversation conversation) (record list))
   "Assign sequence and time metadata, then append RECORD to CONVERSATION."
   (unless (keywordp (first record))
-    (error 'conversation-error
+    (error 'conversation-invariant-error
            :message "A conversation record must begin with a keyword."
            :pathname (conversation-pathname conversation)
            :sequence (conversation-next-sequence conversation)))
@@ -103,7 +103,7 @@
          sequenced
          :append t)
       (error (condition)
-        (error 'conversation-error
+        (error 'conversation-invariant-error
                :message (format nil "Could not append conversation record: ~A" condition)
                :pathname (conversation-pathname conversation)
                :sequence sequence)))
@@ -196,7 +196,7 @@
         (end-of-file ()
           nil)
         (reader-error (condition)
-          (error 'conversation-error
+          (error 'conversation-invariant-error
                  :message (format nil "Malformed conversation record: ~A" condition)
                  :pathname pathname
                  :sequence nil)))
@@ -206,7 +206,7 @@
 (defun conversation--apply-record (conversation record)
   "Project one persisted RECORD into CONVERSATION's in-memory state."
   (unless (and (listp record) (keywordp (first record)))
-    (error 'conversation-error
+    (error 'conversation-invariant-error
            :message "A persisted conversation record is not a keyword list."
            :pathname (conversation-pathname conversation)
            :sequence nil))
@@ -220,7 +220,7 @@
                (stringp wire-json))
       (let ((item (json-decode wire-json)))
         (unless (json-object-p item)
-          (error 'conversation-error
+          (error 'conversation-invariant-error
                  :message "A persisted provider item is not a JSON object."
                  :pathname (conversation-pathname conversation)
                  :sequence sequence))
@@ -236,7 +236,7 @@
                  (eq (first header) :conversation)
                  (= (or (getf (rest header) :version) 0) 1)
                  (non-empty-string-p (getf (rest header) :id)))
-      (error 'conversation-error
+      (error 'conversation-invariant-error
              :message "The conversation header is missing or unsupported."
              :pathname pathname
              :sequence nil))
