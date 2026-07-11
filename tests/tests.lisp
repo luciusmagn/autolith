@@ -35,6 +35,7 @@
     (run-device-authentication-tests)
     (run-agent-tests)
     (run-terminal-tests)
+    (run-markdown-tests)
     (run-application-tests))
   (format t "~&~:D Frob tests passed.~%" *test-count*)
   t)
