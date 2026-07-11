@@ -14,6 +14,10 @@
   "A provider's explicit continuation, completion, or unspecified turn state."
   '(member :continue :end :unspecified))
 
+(deftype turn-budget-state ()
+  "The normal, warning, or tools-disabled finalization phase of an agent turn."
+  '(member :normal :warning :finalization))
+
 (-> non-empty-string-p (t) boolean)
 (defun non-empty-string-p (value)
   "Return true when VALUE is a string containing a non-whitespace character."

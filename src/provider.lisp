@@ -127,9 +127,12 @@
                  :session-id (make-identifier)))
 
 (-> provider-stream-turn
-    (model-provider conversation vector function)
+    (model-provider conversation vector function
+     &key (:turn-budget-state turn-budget-state))
     provider-result)
-(defgeneric provider-stream-turn (provider conversation tool-namespaces event-callback)
+(defgeneric provider-stream-turn
+    (provider conversation tool-namespaces event-callback
+     &key turn-budget-state)
   (:documentation
    "Stream one model response for CONVERSATION using TOOL-NAMESPACES and EVENT-CALLBACK."))
 
@@ -161,6 +164,27 @@
    "role" "developer"
    "tools" tool-namespaces))
 
+(define-constant +turn-budget-warning-instructions+
+  "This turn is approaching its step budget. Finish the task efficiently. Avoid redundant inspection, combine independent work where practical, and preserve enough time to verify and summarize the result."
+  :test #'string=
+  :documentation "The model-visible reminder added late in a long agent turn.")
+
+(define-constant +turn-budget-finalization-instructions+
+  "This is the final step available for the current user turn. Tools are disabled. Respond with text only, stating what was completed, what remains, and the safest next action. Do not request or describe a tool call as completed."
+  :test #'string=
+  :documentation "The text-only instruction used for the final provider step.")
+
+(-> responses-lite-budget-message (turn-budget-state) (option json-object))
+(defun responses-lite-budget-message (state)
+  "Return the transient developer message for turn-budget STATE, if any."
+  (case state
+    (:warning
+     (responses-lite-developer-message +turn-budget-warning-instructions+))
+    (:finalization
+     (responses-lite-developer-message +turn-budget-finalization-instructions+))
+    (t
+     nil)))
+
 (-> provider-web-search-tool (configuration) (option json-object))
 (defun provider-web-search-tool (configuration)
   "Return the hosted web search tool for CONFIGURATION, or NIL when disabled.
@@ -185,23 +209,35 @@ at reference commit 5c19155c."
 ;; drains subscription rate limits much faster (Codex reference commit
 ;; 5c19155c filters its explicit "default" sentinel out of requests too).
 (-> provider-request-object
-    (codex-subscription-provider conversation vector)
+    (codex-subscription-provider conversation vector
+     &key (:turn-budget-state turn-budget-state))
     json-object)
-(defun provider-request-object (provider conversation tool-namespaces)
+(defun provider-request-object
+    (provider conversation tool-namespaces &key (turn-budget-state :normal))
   "Build the complete stateless Sol Responses Lite request for CONVERSATION.
 
 The request never carries a service_tier, keeping Frob on the standard path."
   (let* ((configuration (provider-configuration provider))
-         (web-search-tool (provider-web-search-tool configuration))
-         (prefix (list
-                  (responses-lite-additional-tools
-                   (if web-search-tool
-                       (concatenate 'vector
-                                    tool-namespaces
-                                    (vector web-search-tool))
-                       tool-namespaces))
-                  (responses-lite-developer-message
-                   (system-prompt configuration))))
+         (finalization-p (eq turn-budget-state :finalization))
+         (web-search-tool (and (not finalization-p)
+                               (provider-web-search-tool configuration)))
+         (effective-tools
+           (cond
+             (finalization-p
+              #())
+             (web-search-tool
+              (concatenate 'vector
+                           tool-namespaces
+                           (vector web-search-tool)))
+             (t
+              tool-namespaces)))
+         (budget-message (responses-lite-budget-message turn-budget-state))
+         (prefix (append
+                  (list (responses-lite-additional-tools effective-tools)
+                        (responses-lite-developer-message
+                         (system-prompt configuration)))
+                  (when budget-message
+                    (list budget-message))))
          (input (coerce (append prefix (conversation-input-items conversation))
                         'vector)))
     (json-object
@@ -483,10 +519,13 @@ The request never carries a service_tier, keeping Frob on the standard path."
                      :turn-completion turn-completion))))
 
 (-> provider-attempt-turn
-    (model-provider conversation vector function boolean)
+    (model-provider conversation vector function
+     &key (:force-refresh boolean)
+          (:turn-budget-state turn-budget-state))
     provider-result)
 (defgeneric provider-attempt-turn
-    (provider conversation tool-namespaces event-callback force-refresh)
+    (provider conversation tool-namespaces event-callback
+     &key force-refresh turn-budget-state)
   (:documentation
    "Perform one normalized provider attempt, optionally forcing credential refresh."))
 
@@ -495,7 +534,9 @@ The request never carries a service_tier, keeping Frob on the standard path."
      (conversation conversation)
      (tool-namespaces vector)
      (event-callback function)
-     force-refresh)
+     &key
+       force-refresh
+       (turn-budget-state :normal))
   "Perform one direct request and normalize every HTTP boundary condition."
   (declare (type boolean force-refresh))
   (handler-case
@@ -504,7 +545,11 @@ The request never carries a service_tier, keeping Frob on the standard path."
         (multiple-value-bind (stream status headers)
             (provider-open-response-stream
              provider
-             (provider-request-object provider conversation tool-namespaces)
+             (provider-request-object
+              provider
+              conversation
+              tool-namespaces
+              :turn-budget-state turn-budget-state)
              credentials
              conversation)
           (let ((snapshot (provider-rate-limit-snapshot headers)))
@@ -550,7 +595,9 @@ The request never carries a service_tier, keeping Frob on the standard path."
     ((provider codex-subscription-provider)
      (conversation conversation)
      (tool-namespaces vector)
-     (event-callback function))
+     (event-callback function)
+     &key
+       (turn-budget-state :normal))
   "Stream one Sol turn with one credential reload and one bounded refresh attempt."
   (loop for attempt-number from 1 to 3
         for force-refresh = (= attempt-number 3)
@@ -560,7 +607,8 @@ The request never carries a service_tier, keeping Frob on the standard path."
                                         conversation
                                         tool-namespaces
                                         event-callback
-                                        force-refresh))
+                                        :force-refresh force-refresh
+                                        :turn-budget-state turn-budget-state))
              (provider-unauthorized ()
                (when (= attempt-number 3)
                  (error 'authentication-error

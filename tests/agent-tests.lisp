@@ -17,20 +17,35 @@
     :initform nil
     :accessor scripted-provider-turn-states
     :type list
-    :documentation "Request-local turn states observed before each request."))
+    :documentation "Request-local turn states observed before each request.")
+   (tool-schema-counts
+    :initform nil
+    :accessor scripted-provider-tool-schema-counts
+    :type list
+    :documentation "The number of tool namespaces advertised on each request.")
+   (turn-budget-states
+    :initform nil
+    :accessor scripted-provider-turn-budget-states
+    :type list
+    :documentation "The turn-budget state supplied on each request."))
   (:documentation "A deterministic provider for exercising repeated agent rounds."))
 
 (defmethod provider-stream-turn
     ((provider scripted-provider)
      (conversation conversation)
      (tool-namespaces vector)
-     (event-callback function))
+     (event-callback function)
+     &key
+       (turn-budget-state :normal))
   "Return PROVIDER's next scripted result after recording request state."
-  (declare (ignore tool-namespaces))
   (push (length (conversation-input-items conversation))
         (scripted-provider-input-counts provider))
   (push (conversation-turn-state conversation)
         (scripted-provider-turn-states provider))
+  (push (length tool-namespaces)
+        (scripted-provider-tool-schema-counts provider))
+  (push turn-budget-state
+        (scripted-provider-turn-budget-states provider))
   (let ((result (pop (scripted-provider-results provider))))
     (unless result
       (error "The scripted provider has no remaining result."))
@@ -152,8 +167,7 @@
                           :provider provider
                           :conversation conversation
                           :tool-registry registry
-                          :worker ':unused
-                          :maximum-tool-rounds 2))
+                          :worker ':unused))
                   (observer
                     (callback-agent-observer-create
                      :text-callback (lambda (text)
@@ -205,7 +219,8 @@
                         :conversation conversation
                         :tool-registry (agent-test-registry)
                         :worker ':unused
-                        :maximum-provider-requests 3))
+                        :maximum-provider-steps 3
+                        :provider-step-warning nil))
                 (result (agent-run-user-turn agent "continue explicitly")))
            (test-assert (string= (provider-result-response-id result) "response-2")
                         "the agent follows an explicit provider continuation")
@@ -344,12 +359,10 @@
                      :results
                      (list
                       (agent-test-result
-                       "tool-one"
+                       "tool-overflow"
                        (list (agent-test-call :call-id "one"
-                                              :arguments "{\"value\":\"one\"}")))
-                      (agent-test-result
-                       "tool-two"
-                       (list (agent-test-call :call-id "two"
+                                              :arguments "{\"value\":\"one\"}")
+                             (agent-test-call :call-id "two"
                                               :arguments "{\"value\":\"two\"}"))))))
                   (agent
                     (agent-create :configuration configuration
@@ -357,47 +370,133 @@
                                   :conversation conversation
                                   :tool-registry (agent-test-registry)
                                   :worker ':unused
-                                  :maximum-tool-rounds 1)))
+                                  :maximum-provider-steps 4
+                                  :provider-step-warning nil
+                                  :maximum-tool-calls 1)))
              (test-assert
               (handler-case
                   (progn
                     (agent-run-user-turn agent "reach tool bound")
                     nil)
-                (agent-tool-round-limit-exceeded ()
-                  t))
-              "the agent stops beyond its independent tool-round bound")
+                (agent-turn-budget-exhausted (condition)
+                  (and (eq (agent-turn-budget-exhausted-reason condition)
+                           :tool-call-limit)
+                       (not (typep condition 'agent-loop-error)))))
+              "the individual call ceiling is expected nonfatal control flow")
              (test-assert (= (length (conversation-input-items conversation)) 5)
                           "the rejected over-limit call still receives a failure output"))
            (let* ((conversation
-                    (conversation-create configuration :identifier "provider-bound"))
+                    (conversation-create configuration :identifier "final-step"))
                   (provider
                     (make-instance
                      'scripted-provider
                      :results
                      (list
-                      (agent-test-result "continue-one"
-                                         (list (agent-test-message "one"))
-                                         :turn-completion :continue)
-                      (agent-test-result "continue-two"
-                                         (list (agent-test-message "two"))
-                                         :turn-completion :continue))))
+                      (agent-test-result
+                       "tool-one"
+                       (list (agent-test-call :call-id "final-one"
+                                              :arguments "{\"value\":\"one\"}")))
+                      (agent-test-result "final-text"
+                                         (list (agent-test-message "summary"))))))
                   (agent
                     (agent-create :configuration configuration
                                   :provider provider
                                   :conversation conversation
                                   :tool-registry (agent-test-registry)
                                   :worker ':unused
-                                  :maximum-provider-requests 2)))
+                                  :maximum-provider-steps 2
+                                  :provider-step-warning nil)))
+             (test-assert
+              (string= (provider-result-response-id
+                        (agent-run-user-turn agent "finish within the budget"))
+                       "final-text")
+              "the reserved final step returns a text summary normally")
+             (test-assert
+              (equal (nreverse (scripted-provider-turn-budget-states provider))
+                     '(:normal :finalization))
+              "the last provider step is explicitly marked for finalization")
+             (test-assert
+              (equal (nreverse (scripted-provider-tool-schema-counts provider))
+                     '(1 0))
+              "the final provider step advertises no active-image tools"))
+           (let* ((conversation
+                    (conversation-create configuration
+                                         :identifier "ignored-final-tools"))
+                  (provider
+                    (make-instance
+                     'scripted-provider
+                     :results
+                     (list
+                      (agent-test-result
+                       "continue"
+                       (list (agent-test-message "still working"))
+                       :turn-completion :continue)
+                      (agent-test-result
+                       "ignored-call"
+                       (list (agent-test-call :call-id "ignored"
+                                              :arguments "{\"value\":\"no\"}"))))))
+                  (agent
+                    (agent-create :configuration configuration
+                                  :provider provider
+                                  :conversation conversation
+                                  :tool-registry (agent-test-registry)
+                                  :worker ':unused
+                                  :maximum-provider-steps 2
+                                  :provider-step-warning nil)))
              (test-assert
               (handler-case
                   (progn
-                    (agent-run-user-turn agent "reach provider bound")
+                    (agent-run-user-turn agent "ignore tools on final step")
                     nil)
-                (agent-provider-request-limit-exceeded ()
-                  t))
-              "explicit continuations stop at the provider-request bound")
-             (test-assert (= (length (conversation-input-items conversation)) 3)
-                          "bounded provider results remain durable and replayable")))
+                (agent-turn-budget-exhausted (condition)
+                  (eq (agent-turn-budget-exhausted-reason condition)
+                      :tools-requested-during-finalization)))
+              "a model that ignores disabled tools stops through an expected condition")
+             (test-assert (= (length (conversation-input-items conversation)) 4)
+                          "an ignored final-step call receives a correlated failure output")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-agent-long-tool-turn () null)
+(defun test-agent-long-tool-turn ()
+  "Test a useful turn may execute more than eight tool batches before completion."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation (conversation-create configuration :identifier "long-turn"))
+         (tool-results
+           (loop for index from 1 to 12
+                 collect (agent-test-result
+                          (format nil "tool-~D" index)
+                          (list (agent-test-call
+                                 :call-id (format nil "call-~D" index)
+                                 :arguments (format nil "{\"value\":\"~D\"}" index))))))
+         (provider
+           (make-instance
+            'scripted-provider
+            :results (append tool-results
+                             (list (agent-test-result
+                                    "long-final"
+                                    (list (agent-test-message "done")))))))
+         (agent
+           (agent-create :configuration configuration
+                         :provider provider
+                         :conversation conversation
+                         :tool-registry (agent-test-registry)
+                         :worker ':unused)))
+    (unwind-protect
+         (progn
+           (test-assert
+            (string= (provider-result-response-id
+                      (agent-run-user-turn agent "perform a long task"))
+                     "long-final")
+            "a twelve-batch turn completes without a fixed eight-round cutoff")
+           (test-assert
+            (= (count-if (lambda (record)
+                           (eq (first record) :tool-result))
+                         (conversation--read-records
+                          (conversation-pathname conversation)))
+               12)
+            "every long-turn tool call receives a durable correlated output"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -408,4 +507,5 @@
   (test-agent-explicit-continuation)
   (test-agent-invalid-call-history)
   (test-agent-bounds-and-tool-failures)
+  (test-agent-long-tool-turn)
   t)

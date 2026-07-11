@@ -87,6 +87,12 @@ is repainted. Model and pasted text are sanitized before they reach the
 terminal. Styling uses only the basic terminal palette and emphasis, so Frob
 follows the terminal theme; set =NO_COLOR= to disable styling entirely.
 
+Long agent turns are allowed to continue well beyond eight tool batches. Frob
+warns the model as provider step 48 approaches, reserves step 64 for a
+tools-disabled text summary, and separately caps a turn at 256 individual tool
+calls. Reaching a spending guard leaves the application and conversation usable;
+it does not invoke image recovery.
+
 Typing =/= opens command suggestions under the prompt. Arrow keys move the
 selection, Tab fills it in, and Enter runs it, first filling in the command
 name when it still needs an argument. The commands are:

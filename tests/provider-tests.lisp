@@ -72,6 +72,36 @@
               "the Frob system prompt is the second input item")
              (test-assert (string= (json-get (aref input 2) "role") "user")
                           "conversation history follows the developer prefix"))
+           (let* ((warning-request
+                    (provider-request-object
+                     provider conversation schemas
+                     :turn-budget-state :warning))
+                  (warning-input (json-get warning-request "input"))
+                  (warning-message (aref warning-input 2)))
+             (test-assert (= (length warning-input) 4)
+                          "a late turn adds one transient budget reminder")
+             (test-assert
+              (search "approaching its step budget"
+                      (json-get (aref (json-get warning-message "content") 0)
+                                "text"))
+              "the warning tells the model to finish efficiently"))
+           (let* ((final-request
+                    (provider-request-object
+                     provider conversation schemas
+                     :turn-budget-state :finalization))
+                  (final-input (json-get final-request "input"))
+                  (additional-tools (aref final-input 0))
+                  (final-message (aref final-input 2)))
+             (test-assert (zerop (length (json-get additional-tools "tools")))
+                          "the final provider step disables all local and hosted tools")
+             (test-assert
+              (search "Tools are disabled"
+                      (json-get (aref (json-get final-message "content") 0)
+                                "text"))
+              "the final provider step requests a text-only summary")
+             (test-assert (string= (json-get (aref final-input 3) "role")
+                                   "user")
+                          "finalization retains the original conversation input"))
            (test-assert
             (null (provider-web-search-tool
                    (make-instance 'configuration
@@ -243,7 +273,12 @@
     :initform nil
     :accessor test-codex-provider-refresh-flags
     :type list
-    :documentation "The force-refresh values observed by attempts."))
+    :documentation "The force-refresh values observed by attempts.")
+   (turn-budget-states
+    :initform nil
+    :accessor test-codex-provider-turn-budget-states
+    :type list
+    :documentation "The turn-budget states observed by attempts."))
   (:documentation "A direct-provider test double for bounded authentication retries."))
 
 (defmethod provider-attempt-turn
@@ -251,10 +286,13 @@
      (conversation conversation)
      (tool-namespaces vector)
      (event-callback function)
-     force-refresh)
+     &key
+       force-refresh
+       (turn-budget-state :normal))
   "Return the next scripted PROVIDER outcome and record FORCE-REFRESH."
   (declare (ignore conversation tool-namespaces event-callback))
   (push force-refresh (test-codex-provider-refresh-flags provider))
+  (push turn-budget-state (test-codex-provider-turn-budget-states provider))
   (let ((outcome (pop (test-codex-provider-outcomes provider))))
     (cond
       ((typep outcome 'provider-result)

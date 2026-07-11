@@ -2,11 +2,14 @@
 
 ;;;; -- Agent Events --
 
-(define-constant +default-maximum-tool-rounds+ 8
-  :documentation "The maximum number of model-requested tool batches in one user turn.")
+(define-constant +default-maximum-provider-steps+ 64
+  :documentation "The final, tools-disabled provider step available to one user turn.")
 
-(define-constant +default-maximum-provider-requests+ 16
-  :documentation "The maximum number of provider requests in one user turn.")
+(define-constant +default-provider-step-warning+ 48
+  :documentation "The provider step at which Frob starts reminding the model to finish.")
+
+(define-constant +default-maximum-tool-calls+ 256
+  :documentation "The maximum number of individual tool calls executed in one user turn.")
 
 (defclass agent-observer ()
   ()
@@ -59,16 +62,21 @@
     :reader agent-worker
     :type t
     :documentation "The disposable Lisp worker supplied to lisp.* calls.")
-   (maximum-tool-rounds
-    :initarg :maximum-tool-rounds
-    :reader agent-maximum-tool-rounds
+   (maximum-provider-steps
+    :initarg :maximum-provider-steps
+    :reader agent-maximum-provider-steps
     :type (integer 1)
-    :documentation "The maximum number of tool batches executed for one user message.")
-   (maximum-provider-requests
-    :initarg :maximum-provider-requests
-    :reader agent-maximum-provider-requests
+    :documentation "The final tools-disabled provider step for one user message.")
+   (provider-step-warning
+    :initarg :provider-step-warning
+    :reader agent-provider-step-warning
+    :type (option (integer 1))
+    :documentation "The step that starts model-visible budget reminders, or NIL.")
+   (maximum-tool-calls
+    :initarg :maximum-tool-calls
+    :reader agent-maximum-tool-calls
     :type (integer 1)
-    :documentation "The maximum provider requests executed for one user message.")
+    :documentation "The maximum individual tool calls executed for one user message.")
    (turn-lock
     :initform (make-lock "Frob agent turn")
     :reader agent-turn-lock
@@ -91,26 +99,28 @@
     :documentation "The provider request number within the user turn, if known."))
   (:documentation "A malformed response or invariant violation in the main agent loop."))
 
-(define-condition agent-tool-round-limit-exceeded (agent-loop-error)
-  ((maximum
-    :initarg :maximum
-    :reader agent-tool-round-limit-exceeded-maximum
+(define-condition agent-turn-budget-exhausted (frob-error)
+  ((maximum-provider-steps
+    :initarg :maximum-provider-steps
+    :reader agent-turn-budget-exhausted-maximum-provider-steps
     :type (integer 1)
-    :documentation "The configured maximum number of executable tool batches.")
-   (tool-round
-    :initarg :tool-round
-    :reader agent-tool-round-limit-exceeded-tool-round
+    :documentation "The configured final provider step for this turn.")
+   (provider-step
+    :initarg :provider-step
+    :reader agent-turn-budget-exhausted-provider-step
     :type (integer 1)
-    :documentation "The first rejected tool round."))
-  (:documentation "The model requested another tool batch after the safe turn limit."))
-
-(define-condition agent-provider-request-limit-exceeded (agent-loop-error)
-  ((maximum
-    :initarg :maximum
-    :reader agent-provider-request-limit-exceeded-maximum
-    :type (integer 1)
-    :documentation "The configured maximum provider requests per user turn."))
-  (:documentation "The provider repeatedly continued beyond the safe request limit."))
+    :documentation "The provider step on which the turn stopped.")
+   (tool-calls
+    :initarg :tool-calls
+    :reader agent-turn-budget-exhausted-tool-calls
+    :type (integer 0)
+    :documentation "The individual tool calls executed before exhaustion.")
+   (reason
+    :initarg :reason
+    :reader agent-turn-budget-exhausted-reason
+    :type keyword
+    :documentation "The deterministic budget rule that stopped the turn."))
+  (:documentation "A long turn reached a configured spending guard without corrupting Frob."))
 
 
 ;;;; -- Observer Protocol --
@@ -194,8 +204,9 @@
      (:conversation (option conversation))
      (:tool-registry (option tool-registry))
      (:worker t)
-     (:maximum-tool-rounds integer)
-     (:maximum-provider-requests integer))
+     (:maximum-provider-steps integer)
+     (:provider-step-warning (option integer))
+     (:maximum-tool-calls integer))
     agent)
 (defun agent-create
     (&key
@@ -204,18 +215,24 @@
        conversation
        tool-registry
        worker
-       (maximum-tool-rounds +default-maximum-tool-rounds+)
-       (maximum-provider-requests +default-maximum-provider-requests+))
+       (maximum-provider-steps +default-maximum-provider-steps+)
+       (provider-step-warning +default-provider-step-warning+)
+       (maximum-tool-calls +default-maximum-tool-calls+))
   "Create an agent, filling unspecified provider, conversation, registry, and worker roles."
   (unless (typep configuration 'configuration)
     (error 'configuration-error
            :message "AGENT-CREATE requires a CONFIGURATION instance."))
-  (unless (typep maximum-tool-rounds '(integer 1))
+  (unless (typep maximum-provider-steps '(integer 1))
     (error 'configuration-error
-           :message "The maximum tool rounds must be a positive integer."))
-  (unless (typep maximum-provider-requests '(integer 1))
+           :message "The maximum provider steps must be a positive integer."))
+  (unless (or (null provider-step-warning)
+              (and (typep provider-step-warning '(integer 1))
+                   (< provider-step-warning maximum-provider-steps)))
     (error 'configuration-error
-           :message "The maximum provider requests must be a positive integer."))
+           :message "The provider step warning must precede the final step."))
+  (unless (typep maximum-tool-calls '(integer 1))
+    (error 'configuration-error
+           :message "The maximum tool calls must be a positive integer."))
   (make-instance 'agent
                  :configuration configuration
                  :provider (or provider (provider-create configuration))
@@ -224,8 +241,9 @@
                  :tool-registry (or tool-registry
                                     (make-default-tool-registry))
                  :worker (or worker (lisp-worker-create configuration))
-                 :maximum-tool-rounds maximum-tool-rounds
-                 :maximum-provider-requests maximum-provider-requests))
+                 :maximum-provider-steps maximum-provider-steps
+                 :provider-step-warning provider-step-warning
+                 :maximum-tool-calls maximum-tool-calls))
 
 (-> agent-run-user-turn
     (agent string &key (:observer agent-observer))
@@ -379,110 +397,167 @@
                  :output (tool-result-content result)))))))
   nil)
 
-(-> agent--reject-tool-calls-at-limit
-    (agent list agent-observer integer)
+(-> agent--reject-tool-calls
+    (agent list agent-observer
+     &key (:tool-round integer) (:message string))
     null)
-(defun agent--reject-tool-calls-at-limit (agent calls observer tool-round)
-  "Append explicit failure outputs for CALLS that exceed AGENT's safe round limit."
-  (let ((maximum (agent-maximum-tool-rounds agent)))
-    (agent-observer-status
-     observer
-     :tool-round-limit-reached
-     (list :tool-round tool-round :maximum maximum))
-    (dolist (call calls)
-      (let* ((call-id (json-get call "call_id"))
-             (tool-name (function-call-canonical-name call))
-             (output
-               (format nil
-                       "~A was not executed because this turn reached the ~:D-round tool limit."
-                       tool-name
-                       maximum)))
-        (conversation-append-tool-result
-         (agent-conversation agent)
-         call-id
-         tool-name
-         output
-         nil)
-        (agent-observer-status
-         observer
-         :tool-call-completed
-         (list :tool-round tool-round
-               :call-id call-id
-               :tool tool-name
-               :success-p nil
-               :output output))))
-  nil))
+(defun agent--reject-tool-calls
+    (agent calls observer &key tool-round message)
+  "Append one explicit MESSAGE failure output for every rejected call in CALLS."
+  (dolist (call calls)
+    (let* ((call-id (json-get call "call_id"))
+           (tool-name (function-call-canonical-name call)))
+      (conversation-append-tool-result
+       (agent-conversation agent)
+       call-id
+       tool-name
+       message
+       nil)
+      (agent-observer-status
+       observer
+       :tool-call-completed
+       (list :tool-round tool-round
+             :call-id call-id
+             :tool tool-name
+             :success-p nil
+             :output message))))
+  nil)
+
+(-> agent--budget-state (agent integer) turn-budget-state)
+(defun agent--budget-state (agent provider-step)
+  "Return AGENT's budget phase for PROVIDER-STEP."
+  (cond
+    ((= provider-step (agent-maximum-provider-steps agent))
+     :finalization)
+    ((and (agent-provider-step-warning agent)
+          (>= provider-step (agent-provider-step-warning agent)))
+     :warning)
+    (t
+     :normal)))
+
+(-> agent--signal-budget-exhausted
+    (agent integer integer keyword string)
+    null)
+(defun agent--signal-budget-exhausted
+    (agent provider-step tool-calls reason message)
+  "Signal deterministic turn-budget REASON for AGENT with a visible MESSAGE."
+  (error 'agent-turn-budget-exhausted
+         :message message
+         :maximum-provider-steps (agent-maximum-provider-steps agent)
+         :provider-step provider-step
+         :tool-calls tool-calls
+         :reason reason))
 
 (-> agent--run-provider-loop (agent agent-observer) provider-result)
 (defun agent--run-provider-loop (agent observer)
   "Run bounded provider and tool rounds until AGENT's turn completes."
   (let ((seen-call-identifiers (make-hash-table :test #'equal))
         (request-number 0)
-        (tool-rounds 0))
+        (tool-rounds 0)
+        (tool-calls 0))
     (loop
-      (when (>= request-number (agent-maximum-provider-requests agent))
-        (error 'agent-provider-request-limit-exceeded
-               :message (format nil
-                                "The provider exceeded the ~:D-request turn limit."
-                                (agent-maximum-provider-requests agent))
-               :conversation-id
-               (conversation-identifier (agent-conversation agent))
-               :request-number request-number
-               :maximum (agent-maximum-provider-requests agent)))
       (incf request-number)
-      (agent-observer-status
-       observer
-       :provider-request-started
-       (list :request-number request-number
-             :tool-rounds tool-rounds))
-      (let* ((conversation (agent-conversation agent))
-             (result
-               (provider-stream-turn
-                (agent-provider agent)
-                conversation
-                (tool-registry-provider-schemas (agent-tool-registry agent))
-                (agent--provider-event-callback observer)))
-             (calls (provider-result-tool-calls result)))
-        (agent--validate-tool-call-identifiers
-         agent calls seen-call-identifiers request-number)
-        (agent--persist-provider-result agent result request-number)
-        (setf (conversation-turn-state conversation)
-              (provider-result-turn-state result))
-        (agent-observer-status
-         observer
-         :provider-request-completed
-         (list :request-number request-number
-               :response-id (provider-result-response-id result)
-               :usage (agent--portable-value (provider-result-usage result))
-               :output-item-count (length (provider-result-output-items result))
-               :tool-call-count (length calls)
-               :turn-completion (provider-result-turn-completion result)))
-        (when (and (null calls)
-                   (not (eq (provider-result-turn-completion result) :continue)))
+      (let ((budget-state (agent--budget-state agent request-number)))
+        (when (eq budget-state :warning)
           (agent-observer-status
            observer
-           :turn-completed
-           (list :provider-requests request-number
-                 :tool-rounds tool-rounds
-                 :response-id (provider-result-response-id result)))
-          (return result))
-        (if (null calls)
+           :turn-budget-warning
+           (list :provider-step request-number
+                 :maximum-provider-steps
+                 (agent-maximum-provider-steps agent))))
+        (agent-observer-status
+         observer
+         :provider-request-started
+         (list :request-number request-number
+               :tool-rounds tool-rounds
+               :turn-budget-state budget-state))
+        (let* ((conversation (agent-conversation agent))
+               (provider-tools
+                 (if (eq budget-state :finalization)
+                     #()
+                     (tool-registry-provider-schemas
+                      (agent-tool-registry agent))))
+               (result
+                 (provider-stream-turn
+                  (agent-provider agent)
+                  conversation
+                  provider-tools
+                  (agent--provider-event-callback observer)
+                  :turn-budget-state budget-state))
+               (calls (provider-result-tool-calls result)))
+          (agent--validate-tool-call-identifiers
+           agent calls seen-call-identifiers request-number)
+          (agent--persist-provider-result agent result request-number)
+          (setf (conversation-turn-state conversation)
+                (provider-result-turn-state result))
+          (agent-observer-status
+           observer
+           :provider-request-completed
+           (list :request-number request-number
+                 :response-id (provider-result-response-id result)
+                 :usage (agent--portable-value (provider-result-usage result))
+                 :output-item-count (length (provider-result-output-items result))
+                 :tool-call-count (length calls)
+                 :turn-completion (provider-result-turn-completion result)
+                 :turn-budget-state budget-state))
+          (when (eq budget-state :finalization)
+            (when calls
+              (let ((message
+                      "Tools were disabled on the final turn step, so this call was not executed."))
+                (agent--reject-tool-calls
+                 agent calls observer
+                 :tool-round (1+ tool-rounds)
+                 :message message)
+                (agent--signal-budget-exhausted
+                 agent
+                 request-number
+                 tool-calls
+                 :tools-requested-during-finalization
+                 "The model requested tools during the text-only final turn step.")))
             (agent-observer-status
              observer
-             :provider-follow-up
-             (list :request-number request-number))
-            (progn
-              (when (>= tool-rounds (agent-maximum-tool-rounds agent))
-                (let ((rejected-round (1+ tool-rounds)))
-                  (agent--reject-tool-calls-at-limit
-                   agent calls observer rejected-round)
-                  (error 'agent-tool-round-limit-exceeded
-                         :message (format nil
-                                          "The model exceeded the ~:D-round tool limit."
-                                          (agent-maximum-tool-rounds agent))
-                         :conversation-id (conversation-identifier conversation)
-                         :request-number request-number
-                         :maximum (agent-maximum-tool-rounds agent)
-                         :tool-round rejected-round)))
-              (incf tool-rounds)
-              (agent--execute-tool-calls agent calls observer tool-rounds)))))))
+             :turn-completed
+             (list :provider-requests request-number
+                   :tool-rounds tool-rounds
+                   :tool-calls tool-calls
+                   :budget-finalization-p t
+                   :response-id (provider-result-response-id result)))
+            (return result))
+          (when (and (null calls)
+                     (not (eq (provider-result-turn-completion result) :continue)))
+            (agent-observer-status
+             observer
+             :turn-completed
+             (list :provider-requests request-number
+                   :tool-rounds tool-rounds
+                   :tool-calls tool-calls
+                   :response-id (provider-result-response-id result)))
+            (return result))
+          (cond
+            ((null calls)
+             (agent-observer-status
+              observer
+              :provider-follow-up
+              (list :request-number request-number)))
+            ((> (+ tool-calls (length calls))
+                (agent-maximum-tool-calls agent))
+             (let ((message
+                     (format nil
+                             "This call was not executed because the turn reached its ~:D-call tool budget."
+                             (agent-maximum-tool-calls agent))))
+               (agent--reject-tool-calls
+                agent calls observer
+                :tool-round (1+ tool-rounds)
+                :message message)
+               (agent--signal-budget-exhausted
+                agent
+                request-number
+                tool-calls
+                :tool-call-limit
+                (format nil
+                        "The turn reached its ~:D-call tool budget."
+                        (agent-maximum-tool-calls agent)))))
+            (t
+             (incf tool-rounds)
+             (incf tool-calls (length calls))
+             (agent--execute-tool-calls agent calls observer tool-rounds))))))))

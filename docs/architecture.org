@@ -100,7 +100,11 @@ controls are added around it.
 
 Coordinates one turn at a time: persist user input, stream a response, append
 completed output items, execute tools, append their results, and continue
-until the provider completes without outstanding calls.
+until the provider completes without outstanding calls. A long turn receives a
+model-visible warning at provider step 48. Step 64 advertises no tools and asks
+for a text-only completion. A separate 256-call ceiling bounds unusually large
+tool batches. Exhausting either guard is expected turn control, not a reason to
+boot recovery.
 
 ** =generations.lisp=
 
