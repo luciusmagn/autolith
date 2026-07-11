@@ -356,6 +356,82 @@
                 context
                 (json-object
                  "definition"
+                 "(defun test-self-target () \"Return the precise value.\" 87)"
+                 "pathname" "src/definitions.lisp"))
+               (let* ((precise
+                        (loop for value being the hash-values of *durable-mutations*
+                              when (and
+                                    (eq (durable-mutation-phase value)
+                                        :source-written)
+                                    (search "precise"
+                                            (durable-mutation-proposed-source value)))
+                                return value))
+                      (identifier (durable-mutation-identifier precise)))
+                 (test-assert
+                  (null
+                   (durable-mutation--revision-source
+                    configuration
+                    precise
+                    "0000000000000000000000000000000000000000"))
+                  "missing historical revisions are ignored safely")
+                 (test-assert
+                  (not
+                   (durable-mutation--source-contains-definition-p
+                    "(defun unreadable"
+                    (self-read-form
+                     (durable-mutation-proposed-source precise)
+                     :read-eval nil)))
+                  "unreadable historical source is ignored safely")
+                 (source-replace-definition
+                  source-pathname
+                  "(defun test-self-target () \"Return an intervening value.\" 870)")
+                 (self-git-command
+                  configuration
+                  '("commit" "--quiet" "-m" "Commit different definition first"
+                    "--only" "--" "src/definitions.lisp"))
+                 (let ((earlier-commit
+                         (string-trim
+                          '(#\Space #\Tab #\Newline #\Return)
+                          (self-git-command configuration
+                                            '("rev-parse" "HEAD")))))
+                   (test-assert
+                    (null (durable-mutation-committing-revision
+                           configuration precise))
+                    "an earlier same-file commit cannot claim the mutation")
+                   (source-replace-definition
+                    source-pathname
+                    (durable-mutation-proposed-source precise))
+                   (self-git-command
+                    configuration
+                    '("commit" "--quiet" "-m" "Commit exact definition second"
+                      "--only" "--" "src/definitions.lisp"))
+                   (let ((matching-commit
+                           (string-trim
+                            '(#\Space #\Tab #\Newline #\Return)
+                            (self-git-command configuration
+                                              '("rev-parse" "HEAD")))))
+                     (test-assert (not (string= earlier-commit matching-commit))
+                                  "the regression creates two distinct commits")
+                     (test-assert
+                      (string= (durable-mutation-committing-revision
+                                configuration precise)
+                               matching-commit)
+                      "reconciliation finds the first commit with the exact definition")
+                     (clrhash *durable-mutations*)
+                     (durable-mutations-load configuration)
+                     (let ((reconciled (gethash identifier *durable-mutations*)))
+                       (test-assert
+                        (and reconciled
+                             (eq (durable-mutation-phase reconciled) :durable)
+                             (string= (durable-mutation-git-commit reconciled)
+                                      matching-commit))
+                        "journal replay records the exact definition commit")))))
+               (setf expected-source-fragment "Return the precise value.")
+               (tool-execute
+                persist-tool
+                context
+                (json-object
+                 "definition"
                  "(defun test-self-target () \"Return a drifting value.\" 86)"
                  "pathname" "src/definitions.lisp"))
                (let ((drifting

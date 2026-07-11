@@ -264,27 +264,69 @@
     (error ()
       nil)))
 
+(-> durable-mutation--revision-source
+    (configuration durable-mutation string)
+    (option string))
+(defun durable-mutation--revision-source (configuration mutation revision)
+  "Return MUTATION's source file at REVISION, or NIL when Git cannot read it."
+  (handler-case
+      (self-git-command
+       configuration
+       (list "show"
+             (format nil
+                     "~A:~A"
+                     revision
+                     (durable-mutation-pathname mutation))))
+    (error ()
+      nil)))
+
+(-> durable-mutation--source-contains-definition-p (string list) boolean)
+(defun durable-mutation--source-contains-definition-p (source definition)
+  "Return true when SOURCE contains a top-level form exactly equal to DEFINITION."
+  (handler-case
+      (and (definition-form-p definition)
+           (some (lambda (source-form)
+                   (equal (source-form-form source-form) definition))
+                 (source-read-forms source))
+           t)
+    (error ()
+      nil)))
+
 (-> durable-mutation-committing-revision
     (configuration durable-mutation)
     (option string))
 (defun durable-mutation-committing-revision (configuration mutation)
-  "Return the first post-base commit touching MUTATION's source pathname."
+  "Return the first post-base commit containing MUTATION's proposed definition."
   (let ((base-commit (durable-mutation-base-commit mutation)))
     (when (non-empty-string-p base-commit)
-      (let* ((output
-               (self-git-command
-                configuration
-                (list "log"
-                      "--format=%H"
-                      "--reverse"
-                      (format nil "~A..HEAD" base-commit)
-                      "--"
-                      (durable-mutation-pathname mutation))))
-             (commits
-               (remove-if-not
-                #'non-empty-string-p
-                (uiop:split-string output :separator '(#\Newline #\Return)))))
-        (first commits)))))
+      (handler-case
+          (let* ((output
+                   (self-git-command
+                    configuration
+                    (list "log"
+                          "--format=%H"
+                          "--reverse"
+                          (format nil "~A..HEAD" base-commit)
+                          "--"
+                          (durable-mutation-pathname mutation))))
+                 (commits
+                   (remove-if-not
+                    #'non-empty-string-p
+                    (uiop:split-string output
+                                       :separator '(#\Newline #\Return))))
+                 (proposed
+                   (self-read-form
+                    (durable-mutation-proposed-source mutation)
+                    :read-eval nil)))
+            (loop for commit in commits
+                  for source = (durable-mutation--revision-source
+                                configuration mutation commit)
+                  when (and source
+                            (durable-mutation--source-contains-definition-p
+                             source proposed))
+                    return commit))
+        (error ()
+          nil)))))
 
 (-> durable-mutation-mark-paths
     (configuration list string)
