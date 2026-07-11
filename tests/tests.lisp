@@ -334,6 +334,17 @@
                  "the worker turns evaluation conditions into protocol errors")
     (test-assert (non-empty-string-p (getf (rest failure) :message))
                  "worker protocol errors carry a readable condition report"))
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (worker (lisp-worker-create configuration)))
+    (unwind-protect
+         (let ((response (lisp-worker-request worker :eval '(:form "(+ 40 2)"))))
+           (test-assert (eq (getf (rest response) :status) :ok)
+                        "the disposable worker starts through its direct active loader")
+           (test-assert (equal (getf (rest response) :values) '("42"))
+                        "the launched worker completes its isolated protocol request"))
+      (lisp-worker-stop worker)
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
 (-> test-self-target () integer)

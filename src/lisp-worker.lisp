@@ -50,11 +50,12 @@
   "Start WORKER when necessary and verify its protocol handshake."
   (unless (lisp-worker-running-p worker)
     (let* ((configuration (lisp-worker-configuration worker))
-           (launcher (merge-pathnames "bin/frob"
-                                      (configuration-source-root configuration)))
+           (worker-launcher (merge-pathnames
+                             "bin/frob-active"
+                             (configuration-source-root configuration)))
            (process
              (uiop:launch-program
-              (list (namestring launcher) "--worker")
+              (list (namestring worker-launcher) "--worker")
               :directory (configuration-working-directory configuration)
               :input :stream
               :output :stream
