@@ -11,6 +11,18 @@
                         :working-directory (asdf:system-source-directory :frob))))
     (test-assert (string= (configuration-model configuration) "gpt-5.6-sol")
                  "the default model is gpt-5.6-sol")
+    (test-assert (string= (configuration-model
+                           (configuration-with-model configuration
+                                                     "gpt-5.6-luna"))
+                          "gpt-5.6-luna")
+                 "model copies swap only the model")
+    (test-assert (handler-case
+                     (progn
+                       (configuration-with-model configuration "gpt-4")
+                       nil)
+                   (configuration-error ()
+                     t))
+                 "model copies reject identifiers outside the 5.6 family")
     (test-assert (string= (configuration-reasoning-effort configuration) "ultra")
                  "the default reasoning effort is ultra")
     (test-assert (string= (configuration-wire-effort configuration) "max")

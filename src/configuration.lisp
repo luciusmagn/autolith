@@ -36,6 +36,10 @@
   '("cached" "live" "disabled")
   "Hosted web search modes accepted by Frob configuration.")
 
+(defparameter +supported-models+
+  '("gpt-5.6-sol" "gpt-5.6-luna" "gpt-5.6-terra")
+  "The 5.6 model family identifiers offered by the interactive model picker.")
+
 
 ;;;; -- Configuration Object --
 
@@ -158,13 +162,12 @@
                    :provider-endpoint (or (uiop:getenv "FROB_PROVIDER_ENDPOINT")
                                           +codex-responses-endpoint+))))
 
-(-> configuration-with-reasoning-effort (configuration string) configuration)
-(defun configuration-with-reasoning-effort (configuration reasoning-effort)
-  "Copy CONFIGURATION with only its REASONING-EFFORT changed."
-  (unless (member reasoning-effort +supported-reasoning-efforts+ :test #'string=)
-    (error 'configuration-error
-           :message (format nil "Unsupported reasoning effort ~S."
-                            reasoning-effort)))
+(-> configuration--clone
+    (configuration &key (:model (option string))
+                   (:reasoning-effort (option string)))
+    configuration)
+(defun configuration--clone (configuration &key model reasoning-effort)
+  "Copy CONFIGURATION, replacing only the supplied model and reasoning effort."
   (make-instance 'configuration
                  :source-root (configuration-source-root configuration)
                  :working-directory
@@ -173,11 +176,32 @@
                  :state-root (configuration-state-root configuration)
                  :cache-root (configuration-cache-root configuration)
                  :codex-auth-path (configuration-codex-auth-path configuration)
-                 :model (configuration-model configuration)
-                 :reasoning-effort reasoning-effort
+                 :model (or model (configuration-model configuration))
+                 :reasoning-effort (or reasoning-effort
+                                       (configuration-reasoning-effort
+                                        configuration))
                  :web-search-mode (configuration-web-search-mode configuration)
                  :provider-endpoint
                  (configuration-provider-endpoint configuration)))
+
+(-> configuration-with-reasoning-effort (configuration string) configuration)
+(defun configuration-with-reasoning-effort (configuration reasoning-effort)
+  "Copy CONFIGURATION with only its REASONING-EFFORT changed."
+  (unless (member reasoning-effort +supported-reasoning-efforts+ :test #'string=)
+    (error 'configuration-error
+           :message (format nil "Unsupported reasoning effort ~S."
+                            reasoning-effort)))
+  (configuration--clone configuration :reasoning-effort reasoning-effort))
+
+(-> configuration-with-model (configuration string) configuration)
+(defun configuration-with-model (configuration model)
+  "Copy CONFIGURATION with only its MODEL changed."
+  (unless (member model +supported-models+ :test #'string=)
+    (error 'configuration-error
+           :message (format nil "Unsupported model ~S. The choices are ~{~A~^, ~}."
+                            model
+                            +supported-models+)))
+  (configuration--clone configuration :model model))
 
 (-> configuration-ensure-directories (configuration) configuration)
 (defun configuration-ensure-directories (configuration)
