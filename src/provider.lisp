@@ -207,6 +207,7 @@
      :headers headers
      :content (json-encode request)
      :want-stream t
+     :force-string t
      :keep-alive nil
      :connect-timeout 30
      :read-timeout 300)))
@@ -228,12 +229,27 @@
                      5)))
       (subseq line start))))
 
+(-> sse-read-line (stream) t)
+(defun sse-read-line (stream)
+  "Read a line from STREAM using only the portable character-stream protocol."
+  (let ((characters nil))
+    (loop for character = (read-char stream nil +sse-end-of-stream+)
+          do (cond
+               ((eq character +sse-end-of-stream+)
+                (return (if characters
+                            (coerce (nreverse characters) 'string)
+                            +sse-end-of-stream+)))
+               ((char= character #\Newline)
+                (return (coerce (nreverse characters) 'string)))
+               (t
+                (push character characters))))))
+
 (-> read-sse-data (stream) t)
 (defun read-sse-data (stream)
   "Read one SSE event's joined data field from STREAM."
   (let ((data-lines nil))
     (loop
-      (let ((raw-line (read-line stream nil +sse-end-of-stream+)))
+      (let ((raw-line (sse-read-line stream)))
         (when (eq raw-line +sse-end-of-stream+)
           (return (if data-lines
                       (format nil "~{~A~^~%~}" (nreverse data-lines))

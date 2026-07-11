@@ -146,6 +146,29 @@
   "Encode EVENT as one complete server-sent event."
   (format nil "data: ~A~%~%" (json-encode event)))
 
+(defclass test-character-input-stream
+    (sb-gray:fundamental-character-input-stream)
+  ((source
+    :initarg :source
+    :reader test-character-input-stream-source
+    :type string
+    :documentation "The deterministic character source.")
+   (position
+    :initform 0
+    :accessor test-character-input-stream-position
+    :type integer
+    :documentation "The next source character offset."))
+  (:documentation "A test stream implementing character reads but not line reads."))
+
+(defmethod sb-gray:stream-read-char ((stream test-character-input-stream))
+  "Read one character from STREAM, returning the Gray-stream EOF marker at its end."
+  (let ((position (test-character-input-stream-position stream))
+        (source (test-character-input-stream-source stream)))
+    (if (< position (length source))
+        (prog1 (char source position)
+          (incf (test-character-input-stream-position stream)))
+        :eof)))
+
 (-> test-provider-stream-decoding () null)
 (defun test-provider-stream-decoding ()
   "Test semantic stream decoding from a deterministic SSE fixture."
@@ -178,7 +201,7 @@
          (events nil)
          (result
            (provider--consume-stream
-            (make-string-input-stream source)
+            (make-instance 'test-character-input-stream :source source)
             '(("x-codex-turn-state" . "turn-state-1"))
             (lambda (event)
               (push event events)))))
