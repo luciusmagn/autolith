@@ -241,6 +241,28 @@
                                 (terminal-sanitize-text text))
                                (application--transcript-width application))))
 
+(-> application--markdown-renderer (application) markdown-renderer)
+(defun application--markdown-renderer (application)
+  "Return a markdown renderer sized to APPLICATION's current terminal width."
+  (markdown-renderer-create
+   :width (max 24
+               (1- (terminal-columns
+                    (terminal-ui-terminal (application-ui application)))))))
+
+(-> application--markdown-body (application string) list)
+(defun application--markdown-body (application text)
+  "Return sanitized TEXT rendered as markdown transcript spans."
+  (let ((renderer (application--markdown-renderer application))
+        (trimmed (string-right-trim '(#\Space #\Tab #\Newline #\Return)
+                                    (terminal-sanitize-text text))))
+    (loop for line in (or (uiop:split-string trimmed :separator '(#\Newline))
+                          (list ""))
+          append (loop for row in (markdown-render-line renderer line)
+                       append (append row
+                                      (list (terminal-span
+                                             ':plain
+                                             (string #\Newline))))))))
+
 (-> application--transcript-entry
     (application &key (:style terminal-style) (:header string)
                  (:detail (option string)) (:body (option string))
@@ -308,11 +330,11 @@
                                    (stringp (json-get part "text")))
                            collect (json-get part "text"))))
              (when parts
-               (application--transcript-entry
-                application
-                :style ':brand
-                :header "● frob"
-                :body (format nil "~{~A~^~%~}" parts)))))))
+               (append (list (terminal-span ':brand "● frob")
+                             (terminal-span ':plain (string #\Newline)))
+                       (application--markdown-body
+                        application
+                        (format nil "~{~A~^~%~}" parts))))))))
       ((string= (or type "") "function_call")
        (application--transcript-entry
         application
@@ -419,29 +441,36 @@ streamed into the transcript."
   (let ((ui (application-ui application))
         (reasoning-tail "")
         (stream-pending "")
-        (stream-open-p nil))
-    (labels ((stream-body-row (line)
-               "Return committed streamed body LINE as one transcript row."
-               (list (terminal-span ':plain (format nil "  ~A" line))))
-
-             (stream-text-delta (delta)
-               "Commit DELTA's completed wrapped lines and repaint the fluid tail."
+        (stream-open-p nil)
+        (stream-renderer nil))
+    (labels ((stream-text-delta (delta)
+               "Commit DELTA's completed markdown rows and repaint the fluid tail."
                (setf stream-pending
-                     (concatenate 'string stream-pending delta))
-               (let* ((lines (terminal--wrap-text
-                              (terminal-sanitize-text stream-pending)
-                              (application--transcript-width application)))
-                      (rows (mapcar #'stream-body-row (butlast lines))))
+                     (terminal-sanitize-text
+                      (concatenate 'string stream-pending delta)))
+               (let ((rows nil))
                  (unless stream-open-p
                    (setf stream-open-p t
-                         reasoning-tail "")
+                         reasoning-tail ""
+                         stream-renderer (application--markdown-renderer
+                                          application))
                    (terminal-ui-set-status ui nil)
                    (push (list (terminal-span ':brand "● frob")) rows))
-                 (setf stream-pending (first (last lines)))
-                 (terminal-ui-stream-update
-                  ui
-                  :rows rows
-                  :tail (format nil "  ~A" stream-pending))))
+                 (loop for newline = (position #\Newline stream-pending)
+                       while newline
+                       do (setf rows
+                                (append rows
+                                        (markdown-render-line
+                                         stream-renderer
+                                         (subseq stream-pending 0 newline)))
+                                stream-pending
+                                (subseq stream-pending (1+ newline))))
+                 (multiple-value-bind (overflow-rows tail retained)
+                     (markdown-render-partial stream-renderer stream-pending)
+                   (setf stream-pending retained)
+                   (terminal-ui-stream-update ui
+                                              :rows (append rows overflow-rows)
+                                              :tail tail))))
 
              (stream-flush ()
                "Finish the streamed block with its remaining text and separator."
@@ -449,11 +478,13 @@ streamed into the transcript."
                  (terminal-ui-stream-update
                   ui
                   :rows (append (when (plusp (length stream-pending))
-                                  (list (stream-body-row stream-pending)))
+                                  (markdown-render-line stream-renderer
+                                                        stream-pending))
                                 (list nil))
                   :tail nil)
                  (setf stream-pending ""
-                       stream-open-p nil))))
+                       stream-open-p nil
+                       stream-renderer nil))))
       (callback-agent-observer-create
        :text-callback #'stream-text-delta
        :reasoning-callback

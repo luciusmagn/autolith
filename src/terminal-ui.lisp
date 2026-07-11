@@ -284,11 +284,14 @@
   (let* ((terminal (terminal-ui-terminal ui))
          (row-width (max 0 (1- (terminal-columns terminal))))
          (rows nil))
-    (when (terminal-ui-stream-tail ui)
-      (push (terminal--clip-spans
-             (list (terminal-span :plain (terminal-ui-stream-tail ui)))
-             row-width)
-            rows))
+    (let ((tail (terminal-ui-stream-tail ui)))
+      (when tail
+        (push (terminal--clip-spans
+               (if (stringp tail)
+                   (list (terminal-span :plain tail))
+                   tail)
+               row-width)
+              rows)))
     (when (terminal-ui-status ui)
       (push (terminal--clip-spans
              (list (terminal-span :brand "∙ ")
@@ -312,7 +315,7 @@
                 (min cursor-column row-width))))))
 
 (-> terminal-ui-stream-update
-    (terminal-ui &key (:rows list) (:tail (option string)))
+    (terminal-ui &key (:rows list) (:tail (or null string list)))
     terminal-ui)
 (defun terminal-ui-stream-update (ui &key rows tail)
   "Append streamed single-line ROWS to the transcript and show TAIL as unfinished.

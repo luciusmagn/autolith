@@ -178,8 +178,8 @@
    (stream-tail
     :initform nil
     :accessor terminal-ui-stream-tail
-    :type (option string)
-    :documentation "The unfinished streamed line continuing the transcript block above.")
+    :type (or null string list)
+    :documentation "The unfinished streamed row, as text or styled spans, continuing the transcript block above.")
    (finalized-identifiers
     :initform (make-hash-table :test #'equal)
     :reader terminal-ui-finalized-identifiers

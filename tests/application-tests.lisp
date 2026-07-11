@@ -43,6 +43,14 @@
     (let ((entry (response-item-entry
                   application
                   (json-decode
+                   "{\"type\":\"message\",\"role\":\"assistant\",
+                     \"content\":[{\"type\":\"output_text\",
+                                   \"text\":\"see **bold** move\"}]}"))))
+      (test-assert (find (terminal-span :strong "bold") entry :test #'equal)
+                   "assistant bodies render markdown emphasis"))
+    (let ((entry (response-item-entry
+                  application
+                  (json-decode
                    "{\"type\":\"function_call\",\"namespace\":\"self\",
                      \"name\":\"eval\",
                      \"arguments\":\"{\\\"form\\\":\\\"(+ 1 2)\\\"}\"}"))))
@@ -147,6 +155,12 @@
            (test-assert (search "plain answer"
                                 (recording-terminal-output terminal))
                         "unstreamed assistant messages render from records")
+           (recording-terminal-reset terminal)
+           (funcall send-text (format nil "```lisp~%(+ 1 2)~%"))
+           (test-assert (search "1 │ (+ 1 2)"
+                                (recording-terminal-output terminal))
+                        "streamed code blocks render numbered gutters")
+           (funcall send-status :provider-request-completed nil)
            (terminal-ui-stop (application-ui application)))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
