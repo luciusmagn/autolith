@@ -73,6 +73,11 @@
                  "long tool output is bounded with a truncation note"))
   (test-assert (null (application--bounded-tool-output ""))
                "empty tool output produces no transcript body")
+  (let ((application (application-tests--ui-application :columns 40)))
+    (test-assert (string= (application--indented-body application
+                                                      (format nil "3~%"))
+                          "  3")
+                 "trailing output newlines leave no blank body row"))
   (let ((help (application-help)))
     (test-assert (search "/rollback ID" help)
                  "help lists commands with their argument hints")
@@ -80,8 +85,75 @@
                  "help lists command descriptions"))
   nil)
 
+(-> test-streaming-presentation () null)
+(defun test-streaming-presentation ()
+  "Test progressive line commits, streamed record skipping, and live tool entries."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation (conversation-create configuration
+                                                   :identifier "stream-test"))
+                (terminal (make-instance 'recording-terminal :columns 30))
+                (application (make-instance 'application
+                                            :configuration configuration
+                                            :conversation conversation
+                                            :ui (terminal-ui-create
+                                                 :terminal terminal)))
+                (observer (application-agent-observer application))
+                (send-text (callback-agent-observer-text-callback observer))
+                (send-status (callback-agent-observer-status-callback observer))
+                (streamed-text "The quick brown fox jumps over the lazy dog"))
+           (terminal-ui-start (application-ui application))
+           (funcall send-status :provider-request-started nil)
+           (funcall send-text "The quick brown fox jumps ")
+           (funcall send-text "over the lazy dog")
+           (let ((streamed (recording-terminal-output terminal)))
+             (test-assert (search "● frob" streamed)
+                          "streaming opens a frob transcript block")
+             (test-assert (search "  The quick brown fox jumps" streamed)
+                          "completed wrapped lines commit while streaming"))
+           (conversation-append-provider-item
+            conversation
+            (json-object
+             "type" "message"
+             "role" "assistant"
+             "content" (json-array
+                        (json-object "type" "output_text"
+                                     "text" streamed-text))))
+           (recording-terminal-reset terminal)
+           (funcall send-status :provider-request-completed nil)
+           (let ((completion (recording-terminal-output terminal)))
+             (test-assert (search "over the lazy dog" completion)
+                          "completing a request commits the fluid tail")
+             (test-assert (not (search "● frob" completion))
+                          "streamed message records do not render again"))
+           (conversation-append-tool-result
+            conversation "call-1" "self.eval" "42" t)
+           (recording-terminal-reset terminal)
+           (funcall send-status :tool-call-completed (list :tool "self.eval"))
+           (test-assert (search "✓ self.eval"
+                                (recording-terminal-output terminal))
+                        "tool results render as soon as they complete")
+           (conversation-append-provider-item
+            conversation
+            (json-object
+             "type" "message"
+             "role" "assistant"
+             "content" (json-array
+                        (json-object "type" "output_text"
+                                     "text" "plain answer"))))
+           (recording-terminal-reset terminal)
+           (funcall send-status :provider-request-completed nil)
+           (test-assert (search "plain answer"
+                                (recording-terminal-output terminal))
+                        "unstreamed assistant messages render from records")
+           (terminal-ui-stop (application-ui application)))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> run-application-tests () boolean)
 (defun run-application-tests ()
   "Run focused application presentation tests and return true on success."
   (test-transcript-entries)
+  (test-streaming-presentation)
   t)

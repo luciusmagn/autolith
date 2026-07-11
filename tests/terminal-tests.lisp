@@ -350,6 +350,35 @@
                  "styling is omitted when the terminal does not permit it"))
   nil)
 
+(-> test-terminal-stream-update () null)
+(defun test-terminal-stream-update ()
+  "Test continuous streamed blocks, fluid tail repaint, and block completion."
+  (let* ((terminal (make-instance 'recording-terminal :columns 40))
+         (ui (terminal-ui-create :terminal terminal :placeholder "hint")))
+    (with-terminal-ui (active-ui ui)
+      (recording-terminal-reset terminal)
+      (terminal-ui-stream-update
+       active-ui
+       :rows (list (list (terminal-span :brand "● frob"))
+                   (list (terminal-span :plain "  first line")))
+       :tail "  partial")
+      (let ((output (recording-terminal-output terminal)))
+        (test-assert (search "● frob" output)
+                     "streamed rows append the block header")
+        (test-assert (search "  first line" output)
+                     "streamed rows append committed lines")
+        (test-assert (search "  partial" output)
+                     "the fluid tail is painted live")
+        (test-assert (not (terminal-tests--forbidden-control-p output))
+                     "streamed rows never erase the display"))
+      (recording-terminal-reset terminal)
+      (terminal-ui-stream-update active-ui :rows (list nil) :tail nil)
+      (test-assert (not (search "partial" (recording-terminal-output terminal)))
+                   "completing a block removes the fluid tail")
+      (test-assert (null (terminal-ui-stream-tail active-ui))
+                   "a completed block clears the stored tail")))
+  nil)
+
 (-> test-terminal-command-completion () null)
 (defun test-terminal-command-completion ()
   "Test suggestion filtering, selection movement, acceptance, and submission."
@@ -501,6 +530,7 @@
   (test-terminal-line-editor)
   (test-terminal-input-decoding)
   (test-terminal-live-region-layout)
+  (test-terminal-stream-update)
   (test-terminal-command-completion)
   (test-terminal-styling-primitives)
   (test-terminal-non-tty-fallback)

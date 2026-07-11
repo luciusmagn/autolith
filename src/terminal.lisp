@@ -175,6 +175,11 @@
     :accessor terminal-ui-status
     :type (option string)
     :documentation "The optional unfinished activity shown above the prompt.")
+   (stream-tail
+    :initform nil
+    :accessor terminal-ui-stream-tail
+    :type (option string)
+    :documentation "The unfinished streamed line continuing the transcript block above.")
    (finalized-identifiers
     :initform (make-hash-table :test #'equal)
     :reader terminal-ui-finalized-identifiers

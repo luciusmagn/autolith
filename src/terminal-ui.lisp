@@ -284,12 +284,18 @@
   (let* ((terminal (terminal-ui-terminal ui))
          (row-width (max 0 (1- (terminal-columns terminal))))
          (rows nil))
+    (when (terminal-ui-stream-tail ui)
+      (push (terminal--clip-spans
+             (list (terminal-span :plain (terminal-ui-stream-tail ui)))
+             row-width)
+            rows))
     (when (terminal-ui-status ui)
       (push (terminal--clip-spans
              (list (terminal-span :brand "∙ ")
                    (terminal-span :dim (terminal-ui-status ui)))
              row-width)
-            rows)
+            rows))
+    (when rows
       (push nil rows))
     (let ((prompt-row (length rows)))
       (multiple-value-bind (prompt-spans cursor-column)
@@ -304,6 +310,31 @@
         (values (nreverse rows)
                 prompt-row
                 (min cursor-column row-width))))))
+
+(-> terminal-ui-stream-update
+    (terminal-ui &key (:rows list) (:tail (option string)))
+    terminal-ui)
+(defun terminal-ui-stream-update (ui &key rows tail)
+  "Append streamed single-line ROWS to the transcript and show TAIL as unfinished.
+
+Each row is a styled span list appended once without a separating blank row, so
+consecutive updates build one continuous transcript block. TAIL replaces the
+live unfinished line continuing that block, or removes it when NIL."
+  (terminal-ui--clear-live ui)
+  (let ((terminal (terminal-ui-terminal ui)))
+    (dolist (row rows)
+      (terminal--write-row terminal
+                           (loop for span in row
+                                 collect (terminal-span
+                                          (terminal-span-style span)
+                                          (terminal-sanitize-text
+                                           (terminal-span-text span)
+                                           :single-line-p t))))
+      (terminal--write-newline terminal))
+    (setf (terminal-ui-stream-tail ui) tail)
+    (terminal-ui--paint-live ui)
+    (terminal-flush terminal))
+  ui)
 
 (-> terminal-ui--paint-live (terminal-ui) null)
 (defun terminal-ui--paint-live (ui)

@@ -236,7 +236,9 @@
 (defun application--indented-body (application text)
   "Return sanitized TEXT wrapped and indented under its transcript header."
   (format nil "~{  ~A~^~%~}"
-          (terminal--wrap-text (terminal-sanitize-text text)
+          (terminal--wrap-text (string-right-trim
+                                '(#\Space #\Tab #\Newline #\Return)
+                                (terminal-sanitize-text text))
                                (application--transcript-width application))))
 
 (-> application--transcript-entry
@@ -360,9 +362,26 @@
      (list :presentation identifier)
      entry)))
 
-(-> application-render-records (application) null)
-(defun application-render-records (application)
-  "Append APPLICATION's not-yet-rendered durable transcript records once."
+(-> application--assistant-message-record-p (list) boolean)
+(defun application--assistant-message-record-p (record)
+  "Return true when durable RECORD carries an assistant message item."
+  (and (eq (first record) :provider-item)
+       (let ((wire-json (getf (rest record) :wire-json)))
+         (and (stringp wire-json)
+              (let ((item (json-decode wire-json)))
+                (and (json-object-p item)
+                     (string= (or (json-get item "type") "") "message")
+                     (string= (or (json-get item "role") "") "assistant")))))))
+
+(-> application-render-records
+    (application &key (:skip-assistant-messages-p boolean))
+    null)
+(defun application-render-records (application &key skip-assistant-messages-p)
+  "Append APPLICATION's not-yet-rendered durable transcript records once.
+
+When SKIP-ASSISTANT-MESSAGES-P is true, new assistant message records advance
+the rendered sequence without emitting entries, because their text already
+streamed into the transcript."
   (let* ((conversation (application-conversation application))
          (conversation-id (conversation-identifier conversation)))
     (dolist (record (rest (conversation--read-records
@@ -370,12 +389,14 @@
       (let ((sequence (getf (rest record) :seq)))
         (when (and (integerp sequence)
                    (> sequence (application-rendered-sequence application)))
-          (let ((entry (conversation-record-entry application record)))
-            (when entry
-              (terminal-ui-append-finalized
-               (application-ui application)
-               (list :conversation conversation-id sequence)
-               entry)))
+          (unless (and skip-assistant-messages-p
+                       (application--assistant-message-record-p record))
+            (let ((entry (conversation-record-entry application record)))
+              (when entry
+                (terminal-ui-append-finalized
+                 (application-ui application)
+                 (list :conversation conversation-id sequence)
+                 entry))))
           (setf (application-rendered-sequence application) sequence)))))
   nil)
 
@@ -394,37 +415,74 @@
 
 (-> application-agent-observer (application) agent-observer)
 (defun application-agent-observer (application)
-  "Return a terminal observer for one APPLICATION user turn."
-  (let ((assistant-tail "")
-        (reasoning-tail ""))
-    (callback-agent-observer-create
-     :text-callback
-     (lambda (delta)
-       (setf assistant-tail
-             (bounded-string (concatenate 'string assistant-tail delta)
-                             :limit 500))
-       (application-stream-status application "frob" assistant-tail))
-     :reasoning-callback
-     (lambda (delta)
-       (setf reasoning-tail
-             (bounded-string (concatenate 'string reasoning-tail delta)
-                             :limit 500))
-       (application-stream-status application "thinking" reasoning-tail))
-     :status-callback
-     (lambda (status details)
-       (case status
-         (:provider-request-started
-          (terminal-ui-set-status (application-ui application) "thinking"))
-         (:tool-call-started
-          (terminal-ui-set-status
-           (application-ui application)
-           (format nil "running ~A" (getf details :tool))))
-         (:tool-call-completed
-          (terminal-ui-set-status
-           (application-ui application)
-           (format nil "completed ~A" (getf details :tool))))
-         (:turn-completed
-          (terminal-ui-set-status (application-ui application) nil)))))))
+  "Return a terminal observer streaming one APPLICATION turn as stable lines."
+  (let ((ui (application-ui application))
+        (reasoning-tail "")
+        (stream-pending "")
+        (stream-open-p nil))
+    (labels ((stream-body-row (line)
+               "Return committed streamed body LINE as one transcript row."
+               (list (terminal-span ':plain (format nil "  ~A" line))))
+
+             (stream-text-delta (delta)
+               "Commit DELTA's completed wrapped lines and repaint the fluid tail."
+               (setf stream-pending
+                     (concatenate 'string stream-pending delta))
+               (let* ((lines (terminal--wrap-text
+                              (terminal-sanitize-text stream-pending)
+                              (application--transcript-width application)))
+                      (rows (mapcar #'stream-body-row (butlast lines))))
+                 (unless stream-open-p
+                   (setf stream-open-p t
+                         reasoning-tail "")
+                   (terminal-ui-set-status ui nil)
+                   (push (list (terminal-span ':brand "● frob")) rows))
+                 (setf stream-pending (first (last lines)))
+                 (terminal-ui-stream-update
+                  ui
+                  :rows rows
+                  :tail (format nil "  ~A" stream-pending))))
+
+             (stream-flush ()
+               "Finish the streamed block with its remaining text and separator."
+               (when stream-open-p
+                 (terminal-ui-stream-update
+                  ui
+                  :rows (append (when (plusp (length stream-pending))
+                                  (list (stream-body-row stream-pending)))
+                                (list nil))
+                  :tail nil)
+                 (setf stream-pending ""
+                       stream-open-p nil))))
+      (callback-agent-observer-create
+       :text-callback #'stream-text-delta
+       :reasoning-callback
+       (lambda (delta)
+         (let ((combined (concatenate 'string reasoning-tail delta)))
+           (setf reasoning-tail
+                 (subseq combined (max 0 (- (length combined) 500)))))
+         (application-stream-status application "thinking" reasoning-tail))
+       :status-callback
+       (lambda (status details)
+         (case status
+           (:provider-request-started
+            (setf reasoning-tail "")
+            (terminal-ui-set-status ui "thinking"))
+           (:provider-request-completed
+            (let ((streamed-p stream-open-p))
+              (stream-flush)
+              (application-render-records
+               application
+               :skip-assistant-messages-p streamed-p)))
+           (:tool-call-started
+            (terminal-ui-set-status
+             ui
+             (format nil "running ~A" (getf details :tool))))
+           (:tool-call-completed
+            (application-render-records application)
+            (terminal-ui-set-status ui "thinking"))
+           (:turn-completed
+            (terminal-ui-set-status ui nil))))))))
 
 (-> application-run-message (application string) null)
 (defun application-run-message (application content)
@@ -450,5 +508,6 @@
             content
             :observer (application-agent-observer application)))
       (terminal-ui-set-status (application-ui application) nil)
+      (terminal-ui-stream-update (application-ui application) :tail nil)
       (application-render-records application)))
   nil)
