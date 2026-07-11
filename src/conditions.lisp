@@ -66,6 +66,10 @@
   ()
   (:documentation "A provider stream ended without a valid terminal event."))
 
+(define-condition provider-unauthorized (provider-error)
+  ()
+  (:documentation "A bounded provider attempt was rejected as unauthorized."))
+
 
 ;;;; -- Persistence and Tool Conditions --
 
@@ -81,6 +85,10 @@
     :type (option integer)
     :documentation "The nearest record sequence number, if known."))
   (:documentation "A conversation file is corrupt or cannot be persisted."))
+
+(define-condition conversation-invariant-error (conversation-error)
+  ()
+  (:documentation "Conversation persistence or replay violated a critical invariant."))
 
 (define-condition tool-error (frob-error)
   ((tool-name

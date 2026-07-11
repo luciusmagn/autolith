@@ -10,6 +10,10 @@
   "A Common Lisp universal-time timestamp."
   '(integer 0))
 
+(deftype turn-completion ()
+  "A provider's explicit continuation, completion, or unspecified turn state."
+  '(member :continue :end :unspecified))
+
 (-> non-empty-string-p (t) boolean)
 (defun non-empty-string-p (value)
   "Return true when VALUE is a string containing a non-whitespace character."

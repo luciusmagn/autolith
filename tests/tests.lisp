@@ -279,11 +279,38 @@
            (test-assert
             (string= (json-get (json-get request "reasoning") "effort") "max")
             "the provider request maps Ultra reasoning to Max")
+           (test-assert
+            (string= (json-get (json-get request "reasoning") "context")
+                     "all_turns")
+            "the provider request retains reasoning across the current context")
+           (test-assert (string= (json-get request "tool_choice") "auto")
+                        "the provider request permits automatic tool selection")
+           (test-assert (eq (json-get request "parallel_tool_calls") false)
+                        "the provider request disables parallel tool calls")
+           (test-assert (eq (json-get request "store") false)
+                        "the provider request disables server-side storage")
+           (test-assert (eq (json-get request "stream") t)
+                        "the provider request enables event streaming")
+           (test-assert
+            (equalp (json-get request "include")
+                    (json-array "reasoning.encrypted_content"))
+            "the provider request retains encrypted reasoning for replay")
+           (test-assert
+            (string= (json-get request "prompt_cache_key") "request-shape")
+            "the conversation identifier is the stable prompt cache key")
+           (test-assert
+            (string= (json-get (json-get request "text") "verbosity") "low")
+            "the provider request asks for restrained text verbosity")
            (multiple-value-bind (value present-p)
                (gethash "instructions" request)
              (declare (ignore value))
              (test-assert (not present-p)
-                          "Responses Lite omits top-level instructions")))
+                          "Responses Lite omits top-level instructions"))
+           (multiple-value-bind (value present-p)
+               (gethash "tools" request)
+             (declare (ignore value))
+             (test-assert (not present-p)
+                          "Responses Lite omits top-level tools")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -325,6 +352,11 @@
             "role" "assistant"
             "content" (json-array
                        (json-object "type" "output_text" "text" "hello"))))
+         (reasoning-item
+           (json-object
+            "id" "ephemeral-reasoning-id"
+            "type" "reasoning"
+            "encrypted_content" "opaque-test-ciphertext"))
          (source
            (concatenate
             'string
@@ -340,9 +372,14 @@
               "item" message-item))
             (test-sse-event-string
              (json-object
+              "type" "response.output_item.done"
+              "item" reasoning-item))
+            (test-sse-event-string
+             (json-object
               "type" "response.completed"
               "response" (json-object
                            "id" "response-1"
+                           "end_turn" false
                            "usage" (json-object "input_tokens" 5))))))
          (events nil)
          (result
@@ -351,17 +388,146 @@
             '(("x-codex-turn-state" . "turn-state-1"))
             (lambda (event)
               (push event events)))))
-    (test-assert (= (length (provider-result-output-items result)) 1)
-                 "the stream retains one authoritative completed item")
+    (test-assert (= (length (provider-result-output-items result)) 2)
+                 "the stream retains authoritative completed items in wire order")
     (test-assert (string= (provider-result-response-id result) "response-1")
                  "the stream retains its response identifier")
     (test-assert (string= (provider-result-turn-state result) "turn-state-1")
                  "the stream retains request-local turn state")
+    (test-assert (eq (provider-result-turn-completion result) :continue)
+                 "the stream retains an explicit provider continuation")
     (test-assert (not (gethash "id"
                                (first (provider-result-output-items result))))
                  "completed response items discard transient server identifiers")
-    (test-assert (= (length events) 3)
+    (test-assert
+     (string= (json-get (second (provider-result-output-items result))
+                        "encrypted_content")
+              "opaque-test-ciphertext")
+     "completed encrypted reasoning remains available for replay")
+    (test-assert (= (length events) 4)
                  "the stream emits delta, item, and completion events"))
+  nil)
+
+(-> test-provider-stream-failures () null)
+(defun test-provider-stream-failures ()
+  "Test failed and truncated streams become typed provider conditions."
+  (dolist (source
+           (list
+            (test-sse-event-string
+             (json-object "type" "response.failed"
+                          "response" (json-object "id" "failed-response")))
+            (test-sse-event-string
+             (json-object "type" "response.output_text.delta" "delta" "partial"))))
+    (test-assert
+     (handler-case
+         (progn
+           (provider--consume-stream
+            (make-instance 'test-character-input-stream :source source)
+            nil
+            (lambda (event)
+              (declare (ignore event))))
+           nil)
+       (provider-error ()
+         t))
+     "failed and unterminated SSE streams signal typed provider errors"))
+  nil)
+
+(defclass test-codex-provider (codex-subscription-provider)
+  ((outcomes
+    :initarg :outcomes
+    :accessor test-codex-provider-outcomes
+    :type list
+    :documentation "The attempt outcomes returned in order.")
+   (refresh-flags
+    :initform nil
+    :accessor test-codex-provider-refresh-flags
+    :type list
+    :documentation "The force-refresh values observed by attempts."))
+  (:documentation "A direct-provider test double for bounded authentication retries."))
+
+(defmethod provider-attempt-turn
+    ((provider test-codex-provider)
+     (conversation conversation)
+     (tool-namespaces vector)
+     (event-callback function)
+     force-refresh)
+  "Return the next scripted PROVIDER outcome and record FORCE-REFRESH."
+  (declare (ignore conversation tool-namespaces event-callback))
+  (push force-refresh (test-codex-provider-refresh-flags provider))
+  (let ((outcome (pop (test-codex-provider-outcomes provider))))
+    (cond
+      ((typep outcome 'provider-result)
+       outcome)
+      ((eq outcome :unauthorized)
+       (error 'provider-unauthorized
+              :message "Injected unauthorized response."
+              :status 401
+              :request-id nil
+              :response nil))
+      (t
+       (error "Invalid scripted provider outcome ~S." outcome)))))
+
+(-> test-codex-provider-create (configuration list) test-codex-provider)
+(defun test-codex-provider-create (configuration outcomes)
+  "Return a test direct provider yielding OUTCOMES."
+  (make-instance 'test-codex-provider
+                 :configuration configuration
+                 :credential-manager (credential-manager-create configuration)
+                 :session-id (make-identifier)
+                 :outcomes outcomes))
+
+(-> test-provider-authentication-retries () null)
+(defun test-provider-authentication-retries ()
+  "Test bounded credential reload, refresh, and final unauthorized normalization."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation (conversation-create configuration :identifier "provider-retry"))
+         (result
+           (make-instance 'provider-result
+                          :response-id "retry-success"
+                          :output-items nil
+                          :tool-calls nil
+                          :usage nil
+                          :turn-state nil)))
+    (unwind-protect
+         (progn
+           (let ((provider
+                   (test-codex-provider-create
+                    configuration
+                    (list :unauthorized result))))
+             (test-assert
+              (eq (provider-stream-turn provider conversation #() #'identity)
+                  result)
+              "a credential reload may satisfy the first unauthorized response")
+             (test-assert
+              (equal (nreverse (test-codex-provider-refresh-flags provider))
+                     '(nil nil))
+              "the reload retry does not rotate credentials"))
+           (let ((provider
+                   (test-codex-provider-create
+                    configuration
+                    (list :unauthorized :unauthorized result))))
+             (test-assert
+              (eq (provider-stream-turn provider conversation #() #'identity)
+                  result)
+              "one forced refresh may satisfy two unauthorized responses")
+             (test-assert
+              (equal (nreverse (test-codex-provider-refresh-flags provider))
+                     '(nil nil t))
+              "the third and final attempt forces credential refresh"))
+           (let ((provider
+                   (test-codex-provider-create
+                    configuration
+                    '(:unauthorized :unauthorized :unauthorized))))
+             (test-assert
+              (handler-case
+                  (progn
+                    (provider-stream-turn provider conversation #() #'identity)
+                    nil)
+                (authentication-error ()
+                  t))
+              "a third unauthorized response becomes a typed authentication failure")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
 (-> test-tool-registry () null)
@@ -763,6 +929,8 @@
     (test-authentication-bootstrap-and-refresh)
     (test-provider-request)
     (test-provider-stream-decoding)
+    (test-provider-stream-failures)
+    (test-provider-authentication-retries)
     (test-tool-registry)
     (test-lisp-worker-protocol)
     (test-self-tools)

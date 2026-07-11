@@ -40,7 +40,13 @@
     :initarg :usage
     :reader provider-completed-event-usage
     :type t
-    :documentation "Portable provider usage metadata, if supplied."))
+    :documentation "Portable provider usage metadata, if supplied.")
+   (turn-completion
+    :initarg :turn-completion
+    :initform :unspecified
+    :reader provider-completed-event-turn-completion
+    :type turn-completion
+    :documentation "Whether the provider explicitly ended or continued the turn."))
   (:documentation "The successful terminal event for one provider request."))
 
 (defclass provider-result ()
@@ -68,7 +74,13 @@
     :initarg :turn-state
     :reader provider-result-turn-state
     :type (option string)
-    :documentation "The routing token to replay within the current user turn."))
+    :documentation "The routing token to replay within the current user turn.")
+   (turn-completion
+    :initarg :turn-completion
+    :initform :unspecified
+    :reader provider-result-turn-completion
+    :type turn-completion
+    :documentation "Whether the provider explicitly ended or continued the turn."))
   (:documentation "The complete semantic result of one streamed provider request."))
 
 
@@ -299,6 +311,7 @@
   (let ((output-items nil)
         (response-id nil)
         (usage nil)
+        (turn-completion :unspecified)
         (completed-p nil))
     (loop until completed-p
           for data = (read-sse-data stream)
@@ -340,12 +353,18 @@
                     (let ((response (json-get event "response")))
                       (when (json-object-p response)
                         (setf response-id (or (json-get response "id") response-id)
-                              usage (json-get response "usage")))
+                              usage (json-get response "usage"))
+                        (multiple-value-bind (end-turn present-p)
+                            (gethash "end_turn" response)
+                          (when present-p
+                            (setf turn-completion
+                                  (if end-turn :end :continue)))))
                       (setf completed-p t)
                       (funcall event-callback
                                (make-instance 'provider-completed-event
                                               :response-id response-id
-                                              :usage usage))))
+                                              :usage usage
+                                              :turn-completion turn-completion))))
                    ((and type
                          (member type
                                  '("response.failed" "response.incomplete" "error")
@@ -362,47 +381,60 @@
                      :output-items ordered-items
                      :tool-calls tool-calls
                      :usage usage
-                     :turn-state (response-header headers "x-codex-turn-state")))))
+                     :turn-state (response-header headers "x-codex-turn-state")
+                     :turn-completion turn-completion))))
 
-(-> provider--attempt-turn
-    (codex-subscription-provider conversation vector function boolean)
+(-> provider-attempt-turn
+    (model-provider conversation vector function boolean)
     provider-result)
-(defun provider--attempt-turn
+(defgeneric provider-attempt-turn
     (provider conversation tool-namespaces event-callback force-refresh)
-  "Perform one provider attempt, optionally forcing credential refresh."
-  (with-credentials (credentials (provider-credential-manager provider)
-                                 :force-refresh force-refresh)
-    (multiple-value-bind (stream status headers)
-        (provider-open-response-stream
-         provider
-         (provider-request-object provider conversation tool-namespaces)
-         credentials
-         conversation)
-      (unless (= status 200)
-        (when (open-stream-p stream)
-          (close stream))
-        (error 'provider-error
-               :message (format nil "The provider returned HTTP ~D." status)
-               :status status
-               :request-id nil
-               :response nil))
-      (unwind-protect
-           (provider--consume-stream stream headers event-callback)
-        (when (open-stream-p stream)
-          (close stream))))))
+  (:documentation
+   "Perform one normalized provider attempt, optionally forcing credential refresh."))
 
-(defmethod provider-stream-turn
+(defmethod provider-attempt-turn
     ((provider codex-subscription-provider)
      (conversation conversation)
      (tool-namespaces vector)
-     (event-callback function))
-  "Stream one direct Sol turn, retrying a single unauthorized response after refresh."
+     (event-callback function)
+     force-refresh)
+  "Perform one direct request and normalize every HTTP boundary condition."
+  (declare (type boolean force-refresh))
   (handler-case
-      (provider--attempt-turn
-       provider conversation tool-namespaces event-callback nil)
-    (dexador.error:http-request-unauthorized ()
-      (provider--attempt-turn
-       provider conversation tool-namespaces event-callback t))
+      (with-credentials (credentials (provider-credential-manager provider)
+                                     :force-refresh force-refresh)
+        (multiple-value-bind (stream status headers)
+            (provider-open-response-stream
+             provider
+             (provider-request-object provider conversation tool-namespaces)
+             credentials
+             conversation)
+          (unless (= status 200)
+            (when (open-stream-p stream)
+              (close stream))
+            (if (= status 401)
+                (error 'provider-unauthorized
+                       :message "The provider rejected the current ChatGPT credentials."
+                       :status status
+                       :request-id nil
+                       :response nil)
+                (error 'provider-error
+                       :message (format nil "The provider returned HTTP ~D." status)
+                       :status status
+                       :request-id nil
+                       :response nil)))
+          (unwind-protect
+               (provider--consume-stream stream headers event-callback)
+            (when (open-stream-p stream)
+              (close stream)))))
+    (dexador.error:http-request-unauthorized (condition)
+      (error 'provider-unauthorized
+             :message "The provider rejected the current ChatGPT credentials."
+             :status (response-status condition)
+             :request-id (response-header
+                          (response-headers condition)
+                          "x-request-id")
+             :response nil))
     (http-request-failed (condition)
       (error 'provider-error
              :message (format nil "The provider returned HTTP ~D."
@@ -412,3 +444,26 @@
                           (response-headers condition)
                           "x-request-id")
              :response (bounded-string (response-body condition) :limit 2000)))))
+
+(defmethod provider-stream-turn
+    ((provider codex-subscription-provider)
+     (conversation conversation)
+     (tool-namespaces vector)
+     (event-callback function))
+  "Stream one Sol turn with one credential reload and one bounded refresh attempt."
+  (loop for attempt-number from 1 to 3
+        for force-refresh = (= attempt-number 3)
+        do (handler-case
+               (return-from provider-stream-turn
+                 (provider-attempt-turn provider
+                                        conversation
+                                        tool-namespaces
+                                        event-callback
+                                        force-refresh))
+             (provider-unauthorized ()
+               (when (= attempt-number 3)
+                 (error 'authentication-error
+                        :message
+                        "ChatGPT rejected Frob's credentials after a bounded refresh.")))))
+  (error 'authentication-error
+         :message "ChatGPT authentication retry ended unexpectedly."))

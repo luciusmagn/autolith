@@ -5,6 +5,9 @@
 (define-constant +default-maximum-tool-rounds+ 8
   :documentation "The maximum number of model-requested tool batches in one user turn.")
 
+(define-constant +default-maximum-provider-requests+ 16
+  :documentation "The maximum number of provider requests in one user turn.")
+
 (defclass agent-observer ()
   ()
   (:documentation "A presentation sink for incremental agent output and lifecycle status."))
@@ -61,6 +64,11 @@
     :reader agent-maximum-tool-rounds
     :type (integer 1)
     :documentation "The maximum number of tool batches executed for one user message.")
+   (maximum-provider-requests
+    :initarg :maximum-provider-requests
+    :reader agent-maximum-provider-requests
+    :type (integer 1)
+    :documentation "The maximum provider requests executed for one user message.")
    (turn-lock
     :initform (make-lock "Frob agent turn")
     :reader agent-turn-lock
@@ -95,6 +103,14 @@
     :type (integer 1)
     :documentation "The first rejected tool round."))
   (:documentation "The model requested another tool batch after the safe turn limit."))
+
+(define-condition agent-provider-request-limit-exceeded (agent-loop-error)
+  ((maximum
+    :initarg :maximum
+    :reader agent-provider-request-limit-exceeded-maximum
+    :type (integer 1)
+    :documentation "The configured maximum provider requests per user turn."))
+  (:documentation "The provider repeatedly continued beyond the safe request limit."))
 
 
 ;;;; -- Observer Protocol --
@@ -178,7 +194,8 @@
      (:conversation (option conversation))
      (:tool-registry (option tool-registry))
      (:worker t)
-     (:maximum-tool-rounds integer))
+     (:maximum-tool-rounds integer)
+     (:maximum-provider-requests integer))
     agent)
 (defun agent-create
     (&key
@@ -187,7 +204,8 @@
        conversation
        tool-registry
        worker
-       (maximum-tool-rounds +default-maximum-tool-rounds+))
+       (maximum-tool-rounds +default-maximum-tool-rounds+)
+       (maximum-provider-requests +default-maximum-provider-requests+))
   "Create an agent, filling unspecified provider, conversation, registry, and worker roles."
   (unless (typep configuration 'configuration)
     (error 'configuration-error
@@ -195,6 +213,9 @@
   (unless (typep maximum-tool-rounds '(integer 1))
     (error 'configuration-error
            :message "The maximum tool rounds must be a positive integer."))
+  (unless (typep maximum-provider-requests '(integer 1))
+    (error 'configuration-error
+           :message "The maximum provider requests must be a positive integer."))
   (make-instance 'agent
                  :configuration configuration
                  :provider (or provider (provider-create configuration))
@@ -203,7 +224,8 @@
                  :tool-registry (or tool-registry
                                     (make-default-tool-registry))
                  :worker (or worker (lisp-worker-create configuration))
-                 :maximum-tool-rounds maximum-tool-rounds))
+                 :maximum-tool-rounds maximum-tool-rounds
+                 :maximum-provider-requests maximum-provider-requests))
 
 (-> agent-run-user-turn
     (agent string &key (:observer agent-observer))
@@ -393,11 +415,20 @@
 
 (-> agent--run-provider-loop (agent agent-observer) provider-result)
 (defun agent--run-provider-loop (agent observer)
-  "Run repeated provider and tool rounds until AGENT receives a tool-free result."
+  "Run bounded provider and tool rounds until AGENT's turn completes."
   (let ((seen-call-identifiers (make-hash-table :test #'equal))
         (request-number 0)
         (tool-rounds 0))
     (loop
+      (when (>= request-number (agent-maximum-provider-requests agent))
+        (error 'agent-provider-request-limit-exceeded
+               :message (format nil
+                                "The provider exceeded the ~:D-request turn limit."
+                                (agent-maximum-provider-requests agent))
+               :conversation-id
+               (conversation-identifier (agent-conversation agent))
+               :request-number request-number
+               :maximum (agent-maximum-provider-requests agent)))
       (incf request-number)
       (agent-observer-status
        observer
@@ -412,6 +443,8 @@
                 (tool-registry-provider-schemas (agent-tool-registry agent))
                 (agent--provider-event-callback observer)))
              (calls (provider-result-tool-calls result)))
+        (agent--validate-tool-call-identifiers
+         agent calls seen-call-identifiers request-number)
         (agent--persist-provider-result agent result request-number)
         (setf (conversation-turn-state conversation)
               (provider-result-turn-state result))
@@ -422,8 +455,10 @@
                :response-id (provider-result-response-id result)
                :usage (agent--portable-value (provider-result-usage result))
                :output-item-count (length (provider-result-output-items result))
-               :tool-call-count (length calls)))
-        (unless calls
+               :tool-call-count (length calls)
+               :turn-completion (provider-result-turn-completion result)))
+        (when (and (null calls)
+                   (not (eq (provider-result-turn-completion result) :continue)))
           (agent-observer-status
            observer
            :turn-completed
@@ -431,19 +466,23 @@
                  :tool-rounds tool-rounds
                  :response-id (provider-result-response-id result)))
           (return result))
-        (agent--validate-tool-call-identifiers
-         agent calls seen-call-identifiers request-number)
-        (when (>= tool-rounds (agent-maximum-tool-rounds agent))
-          (let ((rejected-round (1+ tool-rounds)))
-            (agent--reject-tool-calls-at-limit
-             agent calls observer rejected-round)
-            (error 'agent-tool-round-limit-exceeded
-                   :message (format nil
-                                    "The model exceeded the ~:D-round tool limit."
-                                    (agent-maximum-tool-rounds agent))
-                   :conversation-id (conversation-identifier conversation)
-                   :request-number request-number
-                   :maximum (agent-maximum-tool-rounds agent)
-                   :tool-round rejected-round)))
-        (incf tool-rounds)
-        (agent--execute-tool-calls agent calls observer tool-rounds)))))
+        (if (null calls)
+            (agent-observer-status
+             observer
+             :provider-follow-up
+             (list :request-number request-number))
+            (progn
+              (when (>= tool-rounds (agent-maximum-tool-rounds agent))
+                (let ((rejected-round (1+ tool-rounds)))
+                  (agent--reject-tool-calls-at-limit
+                   agent calls observer rejected-round)
+                  (error 'agent-tool-round-limit-exceeded
+                         :message (format nil
+                                          "The model exceeded the ~:D-round tool limit."
+                                          (agent-maximum-tool-rounds agent))
+                         :conversation-id (conversation-identifier conversation)
+                         :request-number request-number
+                         :maximum (agent-maximum-tool-rounds agent)
+                         :tool-round rejected-round)))
+              (incf tool-rounds)
+              (agent--execute-tool-calls agent calls observer tool-rounds)))))))
