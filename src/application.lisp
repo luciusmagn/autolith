@@ -351,6 +351,24 @@
       (t
        ""))))
 
+(-> response-item-assistant-text (json-object) (option string))
+(defun response-item-assistant-text (item)
+  "Return the joined visible text of assistant message ITEM, when applicable."
+  (when (and (string= (or (json-get item "type") "") "message")
+             (string= (or (json-get item "role") "") "assistant"))
+    (let ((content (json-get item "content")))
+      (when (vectorp content)
+        (let ((parts
+                (loop for part across content
+                      when (and (json-object-p part)
+                                (member (json-get part "type")
+                                        '("output_text" "text")
+                                        :test #'string=)
+                                (stringp (json-get part "text")))
+                        collect (json-get part "text"))))
+          (when parts
+            (format nil "~{~A~^~%~}" parts)))))))
+
 (-> response-item-entry (application json-object) (option list))
 (defun response-item-entry (application item)
   "Return a styled transcript entry for completed provider ITEM."
@@ -358,22 +376,11 @@
     (cond
       ((and (string= (or type "") "message")
             (string= (or (json-get item "role") "") "assistant"))
-       (let ((content (json-get item "content")))
-         (when (vectorp content)
-           (let ((parts
-                   (loop for part across content
-                         when (and (json-object-p part)
-                                   (member (json-get part "type")
-                                           '("output_text" "text")
-                                           :test #'string=)
-                                   (stringp (json-get part "text")))
-                           collect (json-get part "text"))))
-             (when parts
-               (append (list (terminal-span ':brand "● frob")
-                             (terminal-span ':plain (string #\Newline)))
-                       (application--markdown-body
-                        application
-                        (format nil "~{~A~^~%~}" parts))))))))
+       (let ((text (response-item-assistant-text item)))
+         (when text
+           (append (list (terminal-span ':brand "● frob")
+                         (terminal-span ':plain (string #\Newline)))
+                   (application--markdown-body application text)))))
       ((string= (or type "") "function_call")
        (application--transcript-entry
         application
@@ -431,42 +438,59 @@
      (list :presentation identifier)
      entry)))
 
-(-> application--assistant-message-record-p (list) boolean)
-(defun application--assistant-message-record-p (record)
-  "Return true when durable RECORD carries an assistant message item."
-  (and (eq (first record) :provider-item)
-       (let ((wire-json (getf (rest record) :wire-json)))
-         (and (stringp wire-json)
-              (let ((item (json-decode wire-json)))
-                (and (json-object-p item)
-                     (string= (or (json-get item "type") "") "message")
-                     (string= (or (json-get item "role") "") "assistant")))))))
+(-> application--assistant-message-record-text (list) (option string))
+(defun application--assistant-message-record-text (record)
+  "Return the visible assistant text carried by durable RECORD, when present."
+  (when (eq (first record) :provider-item)
+    (let ((wire-json (getf (rest record) :wire-json)))
+      (when (stringp wire-json)
+        (let ((item (json-decode wire-json)))
+          (and (json-object-p item)
+               (response-item-assistant-text item)))))))
 
 (-> application-render-records
-    (application &key (:skip-assistant-messages-p boolean))
+    (application &key (:streamed-assistant-text (option string)))
     null)
-(defun application-render-records (application &key skip-assistant-messages-p)
+(defun application-render-records (application &key streamed-assistant-text)
   "Append APPLICATION's not-yet-rendered durable transcript records once.
 
-When SKIP-ASSISTANT-MESSAGES-P is true, new assistant message records advance
-the rendered sequence without emitting entries, because their text already
-streamed into the transcript."
+Assistant records are suppressed only when their joined durable text exactly
+matches STREAMED-ASSISTANT-TEXT. Suppressed identifiers remain finalized so a
+later conversation replay cannot duplicate their streamed transcript rows."
   (let* ((conversation (application-conversation application))
-         (conversation-id (conversation-identifier conversation)))
-    (dolist (record (rest (conversation--read-records
-                           (conversation-pathname conversation))))
+         (conversation-id (conversation-identifier conversation))
+         (records
+           (loop for record in (rest (conversation--read-records
+                                      (conversation-pathname conversation)))
+                 for sequence = (getf (rest record) :seq)
+                 when (and (integerp sequence)
+                           (> sequence
+                              (application-rendered-sequence application)))
+                   collect record))
+         (assistant-texts
+           (loop for record in records
+                 for text = (application--assistant-message-record-text record)
+                 when text
+                   collect text))
+         (stream-match-p
+           (and streamed-assistant-text
+                assistant-texts
+                (string= streamed-assistant-text
+                         (format nil "~{~A~^~%~}" assistant-texts)))))
+    (dolist (record records)
       (let ((sequence (getf (rest record) :seq)))
-        (when (and (integerp sequence)
-                   (> sequence (application-rendered-sequence application)))
-          (unless (and skip-assistant-messages-p
-                       (application--assistant-message-record-p record))
-            (let ((entry (conversation-record-entry application record)))
-              (when entry
-                (terminal-ui-append-finalized
-                 (application-ui application)
-                 (list :conversation conversation-id sequence)
-                 entry))))
-          (setf (application-rendered-sequence application) sequence)))))
+        (let ((identifier (list :conversation conversation-id sequence)))
+          (if (and stream-match-p
+                   (application--assistant-message-record-text record))
+              (terminal-ui-mark-finalized (application-ui application)
+                                          identifier)
+              (let ((entry (conversation-record-entry application record)))
+                (when entry
+                  (terminal-ui-append-finalized
+                   (application-ui application)
+                   identifier
+                   entry)))))
+        (setf (application-rendered-sequence application) sequence))))
   nil)
 
 
@@ -500,37 +524,42 @@ streamed into the transcript."
   (let ((ui (application-ui application))
         (activity-label (application-thinking-label))
         (reasoning-tail "")
+        (stream-text "")
         (stream-pending "")
         (stream-open-p nil)
         (stream-renderer nil))
     (labels ((stream-text-delta (delta)
                "Commit DELTA's completed markdown rows and repaint the fluid tail."
-               (setf stream-pending
-                     (terminal-sanitize-text
-                      (concatenate 'string stream-pending delta)))
-               (let ((rows nil))
-                 (unless stream-open-p
-                   (setf stream-open-p t
-                         reasoning-tail ""
-                         stream-renderer (application--markdown-renderer
-                                          application))
-                   (terminal-ui-set-status ui nil)
-                   (push (list (terminal-span ':brand "● frob")) rows))
-                 (loop for newline = (position #\Newline stream-pending)
-                       while newline
-                       do (setf rows
-                                (append rows
-                                        (markdown-render-line
-                                         stream-renderer
-                                         (subseq stream-pending 0 newline)))
-                                stream-pending
-                                (subseq stream-pending (1+ newline))))
-                 (multiple-value-bind (overflow-rows tail retained)
-                     (markdown-render-partial stream-renderer stream-pending)
-                   (setf stream-pending retained)
-                   (terminal-ui-stream-update ui
-                                              :rows (append rows overflow-rows)
-                                              :tail tail))))
+               (when (plusp (length delta))
+                 (setf stream-text
+                       (concatenate 'string stream-text delta)
+                       stream-pending
+                       (terminal-sanitize-text
+                        (concatenate 'string stream-pending delta)))
+                 (let ((rows nil))
+                   (unless stream-open-p
+                     (setf stream-open-p t
+                           reasoning-tail ""
+                           stream-renderer (application--markdown-renderer
+                                            application))
+                     (terminal-ui-set-status ui nil)
+                     (push (list (terminal-span ':brand "● frob")) rows))
+                   (loop for newline = (position #\Newline stream-pending)
+                         while newline
+                         do (setf rows
+                                  (append rows
+                                          (markdown-render-line
+                                           stream-renderer
+                                           (subseq stream-pending 0 newline)))
+                                  stream-pending
+                                  (subseq stream-pending (1+ newline))))
+                   (multiple-value-bind (overflow-rows tail retained)
+                       (markdown-render-partial stream-renderer stream-pending)
+                     (setf stream-pending retained)
+                     (terminal-ui-stream-update
+                      ui
+                      :rows (append rows overflow-rows)
+                      :tail tail)))))
 
              (stream-flush ()
                "Finish the streamed block with its remaining text and separator."
@@ -558,14 +587,15 @@ streamed into the transcript."
          (case status
            (:provider-request-started
             (setf reasoning-tail ""
+                  stream-text ""
                   activity-label (application-thinking-label))
             (terminal-ui-set-status ui activity-label))
            (:provider-request-completed
-            (let ((streamed-p stream-open-p))
+            (let ((completed-stream-text (and stream-open-p stream-text)))
               (stream-flush)
               (application-render-records
                application
-               :skip-assistant-messages-p streamed-p)))
+               :streamed-assistant-text completed-stream-text)))
            (:tool-call-started
             (terminal-ui-set-status
              ui

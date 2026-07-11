@@ -124,7 +124,7 @@
 
 (-> test-streaming-presentation () null)
 (defun test-streaming-presentation ()
-  "Test progressive line commits, streamed record skipping, and live tool entries."
+  "Test safe streaming, exact record reconciliation, and live tool entries."
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration)))
     (unwind-protect
@@ -166,6 +166,13 @@
                           "completing a request commits the fluid tail")
              (test-assert (not (search "● frob" completion))
                           "streamed message records do not render again"))
+           (setf (application-rendered-sequence application) 0)
+           (recording-terminal-reset terminal)
+           (application-render-records application)
+           (test-assert
+            (not (search "The quick brown fox"
+                         (recording-terminal-output terminal)))
+            "replaying a conversation does not duplicate streamed messages")
            (conversation-append-tool-result
             conversation "call-1" "self.eval" "42" t)
            (recording-terminal-reset terminal)
@@ -182,11 +189,29 @@
                         (json-object "type" "output_text"
                                      "text" "plain answer"))))
            (recording-terminal-reset terminal)
+           (funcall send-status :provider-request-started nil)
+           (funcall send-text "")
            (funcall send-status :provider-request-completed nil)
            (test-assert (search "plain answer"
                                 (recording-terminal-output terminal))
-                        "unstreamed assistant messages render from records")
+                        "empty deltas cannot suppress a durable assistant message")
+           (funcall send-status :provider-request-started nil)
+           (funcall send-text "provisional answer")
+           (conversation-append-provider-item
+            conversation
+            (json-object
+             "type" "message"
+             "role" "assistant"
+             "content" (json-array
+                        (json-object "type" "output_text"
+                                     "text" "corrected answer"))))
            (recording-terminal-reset terminal)
+           (funcall send-status :provider-request-completed nil)
+           (test-assert (search "corrected answer"
+                                (recording-terminal-output terminal))
+                        "mismatched stream text cannot hide the durable answer")
+           (recording-terminal-reset terminal)
+           (funcall send-status :provider-request-started nil)
            (funcall send-text (format nil "```lisp~%(+ 1 2)~%"))
            (test-assert (search "1 │ (+ 1 2)"
                                 (recording-terminal-output terminal))

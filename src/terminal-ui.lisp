@@ -496,13 +496,21 @@ immediately when ITEMS is empty or the terminal is not interactive."
               ,@body))
        (terminal-ui-stop ,variable))))
 
-(-> terminal-ui-append-finalized (terminal-ui t (or string list)) boolean)
-(defun terminal-ui-append-finalized (ui identifier entry)
-  "Append finalized transcript ENTRY once for IDENTIFIER and return true when emitted."
+(-> terminal-ui-mark-finalized (terminal-ui t) boolean)
+(defun terminal-ui-mark-finalized (ui identifier)
+  "Remember finalized IDENTIFIER and return true only on its first occurrence."
   (block nil
     (when (gethash identifier (terminal-ui-finalized-identifiers ui))
       (return nil))
     (setf (gethash identifier (terminal-ui-finalized-identifiers ui)) t)
+    t))
+
+(-> terminal-ui-append-finalized (terminal-ui t (or string list)) boolean)
+(defun terminal-ui-append-finalized (ui identifier entry)
+  "Append finalized transcript ENTRY once for IDENTIFIER and return true when emitted."
+  (block nil
+    (unless (terminal-ui-mark-finalized ui identifier)
+      (return nil))
     (terminal-ui--clear-live ui)
     (terminal-ui--write-finalized ui entry)
     (terminal-ui--paint-live ui)
