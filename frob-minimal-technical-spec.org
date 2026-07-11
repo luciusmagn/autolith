@@ -1,0 +1,526 @@
+#+TITLE: Frob — Minimal Technical Specification
+#+SUBTITLE: A live, self-modifying Common Lisp agent
+#+STARTUP: content
+#+OPTIONS: toc:2 num:nil
+
+* Status
+
+Initial implementation target:
+
+- Linux x86-64
+- SBCL
+- Terminal interface
+- Single primary agent
+- No hostile-code sandboxing
+
+macOS is the next platform target, followed by Windows, BSD systems, and
+additional Linux architectures.
+
+* 1. Purpose
+
+Frob is a small Common Lisp agent that can inspect and modify its own
+running image.
+
+Ordinary changes take effect immediately without restarting the agent.
+Frob saves working generations so that it can resume or roll back after
+a damaging change. A separate pristine recovery image remains available
+when the active agent can no longer repair itself.
+
+The source repository must remain sufficient to rebuild an image from
+scratch.
+
+* 2. Design Principles
+
+- Keep the initial codebase small.
+- Prefer Common Lisp over generated Python or shell scripts.
+- Treat the live Lisp image as the primary runtime environment.
+- Make self-modification explicit through a small set of tools.
+- Preserve source, conversations, and working generations.
+- Use process isolation for reliability, not as a security claim.
+- Keep platform-specific behavior behind narrow adapters.
+
+* 3. Runtime Layout
+
+Frob consists of four principal parts.
+
+** 3.1 Launcher
+
+The executable command is =frob=.
+
+The launcher is small, stable, and outside the mutable agent image. It:
+
+- Starts the current active image.
+- Recognizes =--recovery= itself.
+- Starts the pristine recovery image when =--recovery= is present.
+- Forwards all remaining command-line arguments.
+- Detects fatal exits from the active image.
+- Passes available crash context to the recovery image.
+- Restores terminal state after an abnormal exit.
+
+The launcher and pristine recovery artifacts are not writable through
+normal =self.*= tools.
+
+** 3.2 Active Agent
+
+The active SBCL image contains:
+
+- The model client and agent loop.
+- Conversation and working state.
+- Tool definitions and dispatch.
+- The terminal interface.
+- Self-inspection and self-modification facilities.
+- Loaded Lisp dependencies.
+
+This process is expected to evolve while it is running.
+
+** 3.3 Lisp Worker
+
+The =lisp.*= tools operate in a separate, disposable SBCL process.
+
+The worker may use the bundled Lisp systems, Quicklisp distribution,
+and installed external programs. It does not share heap state with the
+active agent and cannot modify it through ordinary object references.
+
+The worker is used for:
+
+- Fresh REPL evaluation.
+- Compiling experimental code.
+- Loading packages.
+- Running tests.
+- Inspecting behavior outside the active image.
+
+** 3.4 Recovery Image
+
+The pristine recovery image is a stable SBCL image containing only the
+facilities needed to diagnose, repair, rebuild, select, and boot agent
+generations.
+
+It is not the normal execution environment.
+
+* 4. Model Access
+
+Frob implements its own model client and agent loop.
+
+The initial provider supports Codex subscription access through the
+user's ChatGPT authentication without bundling or launching the Codex
+CLI.
+
+Frob owns:
+
+- System instructions.
+- Conversation state.
+- Context selection and compaction.
+- Tool schemas and dispatch.
+- Streaming presentation.
+- Retry and fallback policy.
+- Token and usage accounting available from the provider.
+
+Provider-specific authentication and transport behavior are isolated
+behind a replaceable interface.
+
+Credentials are stored outside:
+
+- Saved Lisp cores.
+- Conversation files.
+- The Git repository.
+
+An API-key provider may exist as an optional fallback, but is not the
+primary access path.
+
+* 5. Tool Model
+
+Tools are registered internally. MCP-compatible exposure may be added,
+but in-process tools do not require loopback MCP transport.
+
+** 5.1 =lisp.*=
+
+=lisp.*= tools operate only in a separate disposable Lisp worker.
+
+Initial operations should include:
+
+- =lisp.eval=
+- =lisp.compile=
+- =lisp.load-system=
+- =lisp.describe=
+- =lisp.run-tests=
+- =lisp.reset=
+
+** 5.2 =self.*=
+
+=self.*= tools operate on the active Frob image.
+
+Initial operations should include:
+
+- =self.inspect=
+- =self.eval=
+- =self.redefine=
+- =self.set=
+- =self.persist-definition=
+- =self.diff=
+- =self.commit=
+- =self.checkpoint=
+- =self.generations=
+- =self.rollback=
+
+The exact tool set may remain small. General operations should be
+composed from ordinary Lisp wherever practical.
+
+** 5.3 Future Sub-Agents
+
+Sub-agents are out of scope for the first version.
+
+When added, they use =lisp.*= workers by default and do not receive
+=self.*= tools unless explicitly granted.
+
+This is an accidental-damage boundary, not a hostile-code sandbox.
+
+* 6. Live Self-Modification
+
+Frob may redefine functions, methods, classes, macros, and mutable
+global state while running.
+
+A restart is not required for ordinary modification.
+
+There are two levels of change.
+
+** 6.1 Exploratory Change
+
+An exploratory change modifies the active image only.
+
+It may be tested, reverted, refined, or discarded without immediately
+changing source control.
+
+** 6.2 Durable Change
+
+A durable change normally follows this sequence:
+
+1. Record the intended mutation in the mutation journal.
+2. Compile and install the change in the active image.
+3. Run relevant checks.
+4. Write the corresponding source representation.
+5. Commit the source change to Git.
+6. Mark the journal entry as durable.
+
+Source edits should operate on Lisp forms rather than use blind regular
+expression replacement.
+
+The first version may replace complete top-level definitions. Exact
+comment- and whitespace-preserving CST editing is optional.
+
+Source remains authoritative for clean rebuilds. Saved cores preserve
+the exact live state of a working generation.
+
+* 7. Conditions and Restarts
+
+Frob uses the Common Lisp condition and restart system for recoverable
+failures.
+
+Operations should establish useful restarts where practical, such as:
+
+- Retry.
+- Supply a value.
+- Skip the operation.
+- Recompile.
+- Restore the previous definition.
+- Abort the current tool call.
+
+** 7.1 LLM-Assisted Handling
+
+When the general model path is healthy, Frob may present a condition to
+the LLM together with:
+
+- The condition type and report.
+- The failed operation.
+- A bounded backtrace.
+- Relevant recent events.
+- Available restarts.
+
+The LLM may inspect the system, make a repair, or select a restart.
+
+** 7.2 Deterministic Provider Handling
+
+Provider failures that the LLM cannot diagnose because the provider is
+unavailable are handled without invoking recovery when possible.
+
+Examples include:
+
+- Network timeouts.
+- Authentication expiry.
+- Rate limits.
+- Temporary service errors.
+- Unavailable models.
+
+Possible responses include refresh, retry, backoff, fallback, or a
+visible terminal error.
+
+** 7.3 Fatal Control-Path Failure
+
+Recovery is required when the general agent path is no longer
+trustworthy, including failures in:
+
+- The model client.
+- Response parsing.
+- The main agent loop.
+- Tool dispatch.
+- The condition broker.
+- Critical conversation state.
+
+LLM-assisted condition handling must have a recursion guard. A serious
+condition raised while another condition is already being handled by
+the LLM is fatal.
+
+Before exiting, Frob writes a best-effort crash capsule and terminates
+with a distinguished recovery status.
+
+* 8. Persistence
+
+Frob persists four kinds of state:
+
+- Source in Git.
+- Conversations as S-expression files.
+- Mutations in an append-only journal.
+- Working generations as saved Lisp cores.
+
+** 8.1 Conversation Files
+
+Each conversation is stored in a separate =.sexp= file.
+
+A conversation file is an append-only sequence of top-level
+S-expressions. It is not wrapped in one enclosing list.
+
+Example:
+
+#+BEGIN_SRC lisp
+(:conversation
+ :version 1
+ :id "2026-07-11-001"
+ :created-at 3992846378)
+
+(:message
+ :seq 1
+ :time 3992846378
+ :role :user
+ :content "Inspect the current provider implementation.")
+
+(:tool-call
+ :seq 2
+ :time 3992846380
+ :id 1
+ :tool self.inspect
+ :arguments (:symbol run-provider))
+
+(:tool-result
+ :seq 3
+ :time 3992846381
+ :call-id 1
+ :status :ok
+ :value (:lambda-list (request)
+         :source "src/provider.lisp"))
+
+(:summary
+ :seq 40
+ :time 3992847000
+ :through-seq 32
+ :content "The provider transport was inspected and simplified.")
+#+END_SRC
+
+Records may represent:
+
+- Conversation metadata.
+- User, assistant, and system messages.
+- Tool calls and results.
+- Condition and restart events.
+- Context summaries.
+- Provider metadata and usage.
+- References to external artifacts.
+
+Conversation records contain only portable readable data. Arbitrary
+functions, streams, packages, CLOS instances, and implementation
+objects are not serialized directly.
+
+Reading is performed with =*read-eval*= bound to =nil=.
+
+An incomplete final form caused by a crash is ignored or truncated.
+All complete preceding forms remain valid.
+
+Large or binary artifacts are stored separately and referenced from the
+conversation file.
+
+** 8.2 Mutation Journal
+
+The mutation journal is append-only and records enough information to
+understand recent changes after a crash.
+
+A journal entry should identify:
+
+- Time.
+- Target definition or state.
+- Previous source or recoverable reference.
+- Proposed change.
+- Result.
+- Related Git commit, if durable.
+- Related checkpoint, if saved.
+
+The journal is for recovery and diagnosis. It does not replace Git.
+
+* 9. Generations and Checkpoints
+
+A generation is a known working state consisting of:
+
+- A saved Lisp core.
+- A Git commit.
+- A small manifest.
+- The applicable mutation-journal position.
+
+The manifest identifies at least:
+
+- Generation identifier.
+- Core pathname.
+- Git commit.
+- SBCL build.
+- Operating system.
+- Architecture.
+- Creation time.
+
+Core files are not assumed to be portable across SBCL builds,
+operating systems, or architectures.
+
+** 9.1 Linux Checkpointing
+
+On Linux, Frob creates a checkpoint without stopping the active agent:
+
+1. Briefly block live mutation.
+2. Flush source, conversation, and journal output.
+3. Fork a child process.
+4. Resume the parent.
+5. Let the child detach inherited external resources.
+6. Let the child save the Lisp core and exit.
+7. Atomically publish the completed core and manifest.
+
+The parent remains the active agent.
+
+Checkpoint files are written under temporary names until complete.
+
+Checkpoint logic must account for SBCL thread and external-resource
+requirements before invoking =save-lisp-and-die=.
+
+** 9.2 Other Platforms
+
+Platforms without a validated fork-and-dump path may initially create a
+checkpoint through a controlled restart.
+
+This limitation must remain behind a checkpoint backend and must not
+affect the Linux design.
+
+** 9.3 Rollback
+
+Rollback selects a retained working generation and starts its matching
+core with its matching source revision.
+
+Rollback is intended for an agent that has damaged its own active
+image. It is not required for ordinary failed experiments that remain
+recoverable in the live image.
+
+* 10. Recovery
+
+Recovery may begin through:
+
+- =frob --recovery=
+- A fatal recovery exit status.
+- An unexpected process failure detected by the launcher.
+
+The launcher passes the recovery image whatever context is available.
+
+A crash capsule may contain:
+
+- Condition report.
+- Backtrace.
+- Exit status or signal.
+- Recent conversation events.
+- Recent tool calls.
+- Current Git revision.
+- Current generation.
+- Mutation-journal position.
+- Recently changed definitions.
+- Paths to pending source changes.
+
+The recovery image may:
+
+1. Inspect the crash capsule.
+2. Inspect the failed source and mutation history.
+3. Ask the model to diagnose the failure.
+4. Patch the source.
+5. Load and test it in a disposable Lisp worker.
+6. Build a repaired image.
+7. Select the repaired image as active.
+8. Fall back to a retained working generation when repair fails.
+
+Recovery must remain possible without loading the damaged active core.
+
+* 11. Dependencies and External Tools
+
+Frob should include or locate:
+
+- A pinned SBCL runtime.
+- A local, pinned Quicklisp distribution or equivalent dependency set.
+- Required Lisp source dependencies.
+- A documented set of useful external binaries.
+
+Available Lisp systems and external commands are exposed to the agent
+through a capability registry.
+
+Ordinary filesystem, process, networking, and build operations should
+prefer Common Lisp, ASDF, and UIOP.
+
+Frob should not generate ad hoc Python or shell files unless a
+non-Lisp dependency genuinely requires them.
+
+* 12. Terminal Interface
+
+The first interface is a restrained TUI optimized for dogfooding.
+
+It should show:
+
+- Conversation.
+- Streaming model output.
+- Tool calls and results.
+- Conditions and selected restarts.
+- Current model.
+- Current generation.
+- Background logs on demand.
+
+The interface should remain responsive during tool execution and model
+streaming.
+
+Decorative animations, excessive transitions, and visual spectacle are
+out of scope.
+
+* 13. Security Status
+
+Frob is not a security sandbox.
+
+It executes model-generated Lisp and external commands with the
+privileges of the user running it.
+
+Process separation, omitted tools, checkpoints, and recovery mechanisms
+are intended to reduce accidental permanent damage. They are not
+designed to contain malicious code.
+
+The program must display this limitation clearly in its documentation
+and initial setup.
+
+* 14. Initial Milestone
+
+The first dogfoodable version is complete when it can:
+
+1. Authenticate through the Codex subscription provider.
+2. Hold a streaming conversation in the TUI.
+3. Save and reload the conversation from a =.sexp= file.
+4. Execute =lisp.*= operations in a disposable SBCL process.
+5. Inspect and redefine a live function through =self.*=.
+6. Persist that definition to source and commit it to Git.
+7. Create a Linux checkpoint without stopping the active agent.
+8. Recover from an intentionally broken agent loop.
+9. Boot a retained generation through =frob --recovery=.
+10. Rebuild a working image from the tracked source and pinned
+    dependencies.
