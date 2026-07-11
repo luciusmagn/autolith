@@ -22,7 +22,8 @@
                              (:file "authentication")
                              (:file "conversation")
                              (:file "prompt")
-                             (:file "provider"))))
+                             (:file "provider")
+                             (:file "tools"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:frob/tests))))
 
 (asdf:defsystem #:frob/tests
