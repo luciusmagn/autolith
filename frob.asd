@@ -49,6 +49,7 @@
   :components ((:module "tests"
                 :serial t
                 :components ((:file "test-support")
+                             (:file "prompt-tests")
                              (:file "conversation-tests")
                              (:file "authentication-tests")
                              (:file "provider-tests")
