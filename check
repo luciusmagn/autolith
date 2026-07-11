@@ -1,0 +1,22 @@
+#!/usr/bin/env -S sbcl --script
+
+(require :asdf)
+
+(let* ((script-path (truename *load-truename*))
+       (source-root (uiop:pathname-directory-pathname script-path))
+       (quicklisp-setup (merge-pathnames "quicklisp/setup.lisp"
+                                         (user-homedir-pathname))))
+  (unless (probe-file quicklisp-setup)
+    (error "Frob needs Quicklisp at ~A" quicklisp-setup))
+  (load quicklisp-setup)
+  (uiop:symbol-call '#:ql '#:quickload :cffi :silent t)
+  (let ((profile-library-directory
+          (merge-pathnames ".guix-profile/lib/" (user-homedir-pathname)))
+        (library-directories
+          (find-symbol "*FOREIGN-LIBRARY-DIRECTORIES*" "CFFI")))
+    (when (probe-file profile-library-directory)
+      (pushnew profile-library-directory
+               (symbol-value library-directories)
+               :test #'equal)))
+  (asdf:load-asd (merge-pathnames "frob.asd" source-root))
+  (asdf:test-system :frob))

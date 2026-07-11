@@ -1,0 +1,4 @@
+*.fasl
+*.core
+.cache/
+var/
