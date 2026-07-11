@@ -103,7 +103,9 @@ name when it still needs an argument. The commands are:
 /resume         pick a saved conversation to resume
 /conversations  list saved conversations
 /auth           authenticate Frob with ChatGPT
+/model          pick the 5.6 model
 /effort         pick the reasoning effort
+/goal OBJECTIVE set or view the session goal
 /checkpoint     save a retained live generation
 /generations    list retained generations
 /rollback       start a retained generation through recovery
@@ -114,6 +116,17 @@ name when it still needs an argument. The commands are:
 =/resume=, =/rollback=, and =/effort= open an interactive picker listing
 choices newest first; each also accepts an explicit argument. Conversations
 remember the directory they were started in, and the picker shows it.
+
+=/goal OBJECTIVE= sets a session goal in the spirit of Codex goals. The goal
+rides along every provider request as transient context, and after each of
+your messages Frob automatically continues working toward it for up to eight
+extra turns before pausing. The model marks genuine completion with a literal
+=[GOAL-COMPLETE]= token. =/goal= alone shows the state, =/goal pause= and
+=/goal resume= control automatic continuation, and =/goal clear= removes the
+goal. Goals persist with their conversation across =/resume=.
+
+=/model= switches between the 5.6 family models (sol, luna, terra) for the
+current session; =FROB_MODEL= still selects any model at startup.
 
 =/status= reports the model, token usage, and subscription rate limit windows
 parsed from provider responses. Requests never ask for the provider's priority

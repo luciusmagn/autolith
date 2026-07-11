@@ -38,6 +38,11 @@
     :accessor application-ui
     :type (option terminal-ui)
     :documentation "The reconnectable primary-screen terminal UI.")
+   (goal
+    :initform nil
+    :accessor application-goal
+    :type list
+    :documentation "The session goal plist holding objective, status, and continuations.")
    (rendered-sequence
     :initform 0
     :accessor application-rendered-sequence
@@ -65,7 +70,9 @@
     (:name "/resume"        :argument nil :description "pick a saved conversation to resume")
     (:name "/conversations" :argument nil :description "list saved conversations")
     (:name "/auth"          :argument nil :description "authenticate Frob with ChatGPT")
+    (:name "/model"         :argument nil :description "pick the 5.6 model")
     (:name "/effort"        :argument nil :description "pick the reasoning effort")
+    (:name "/goal"          :argument "OBJECTIVE" :description "set or view the session goal")
     (:name "/checkpoint"    :argument nil :description "save a retained live generation")
     (:name "/generations"   :argument nil :description "list retained generations")
     (:name "/rollback"      :argument nil :description "pick a generation for recovery")
@@ -142,15 +149,17 @@
                               :conversation conversation
                               :tool-registry registry
                               :worker worker))
-         (ui (application-terminal-ui-create)))
-    (make-instance 'application
-                   :configuration configuration
-                   :conversation conversation
-                   :provider provider
-                   :tool-registry registry
-                   :worker worker
-                   :agent agent
-                   :ui ui)))
+         (ui (application-terminal-ui-create))
+         (application (make-instance 'application
+                                     :configuration configuration
+                                     :conversation conversation
+                                     :provider provider
+                                     :tool-registry registry
+                                     :worker worker
+                                     :agent agent
+                                     :ui ui)))
+    (application--load-goal application)
+    application))
 
 (-> application-reconnect
     (application &key (:conversation-id (option string)))
@@ -203,6 +212,7 @@
                             (or recovery-conversation-id "")))
               recovery-rendered-sequence
               0))
+    (application--load-goal application)
     application))
 
 (defmethod checkpoint-detach-state ((application application))
@@ -226,6 +236,7 @@
     (setf (application-conversation application) conversation
           (application-agent application) agent
           (application-rendered-sequence application) 0)
+    (application--load-goal application)
     application))
 
 
@@ -413,10 +424,13 @@
   (case (first record)
     (:message
      (when (eq (getf (rest record) :role) :user)
-       (application--transcript-entry application
-                                      :style ':user
-                                      :header "❯ you"
-                                      :body (getf (rest record) :content))))
+       (let ((content (getf (rest record) :content)))
+         (if (application--goal-continuation-message-p content)
+             (list (terminal-span ':hint "∙ goal continues"))
+             (application--transcript-entry application
+                                            :style ':user
+                                            :header "❯ you"
+                                            :body content)))))
     (:provider-item
      (let ((wire-json (getf (rest record) :wire-json)))
        (and (stringp wire-json)
@@ -499,6 +513,87 @@ later conversation replay cannot duplicate their streamed transcript rows."
                    entry)))))
         (setf (application-rendered-sequence application) sequence))))
   nil)
+
+
+;;;; -- Session Goal --
+
+(define-constant +application-goal-continuation-limit+ 8
+  :documentation "The automatic goal continuation turns allowed per user message.")
+
+(define-constant +application-goal-continuation-prompt+
+  "Continue working toward the session goal."
+  :test #'string=
+  :documentation "The synthetic user message driving one goal continuation turn.")
+
+(define-constant +application-goal-complete-marker+ "[GOAL-COMPLETE]"
+  :test #'string=
+  :documentation "The literal marker the model includes once the goal is met.")
+
+(-> application--record-goal (application) null)
+(defun application--record-goal (application)
+  "Append APPLICATION's current goal state to the durable conversation."
+  (let ((goal (application-goal application)))
+    (conversation-append-record
+     (application-conversation application)
+     (if goal
+         (list :goal
+               :objective (getf goal :objective)
+               :status (getf goal :status)
+               :continuations (getf goal :continuations)
+               :created-at (getf goal :created-at))
+         (list :goal
+               :objective nil
+               :status ':cleared
+               :continuations 0
+               :created-at nil))))
+  nil)
+
+(-> application--load-goal (application) null)
+(defun application--load-goal (application)
+  "Restore APPLICATION's goal from the newest durable goal record."
+  (let ((goal nil))
+    (dolist (record (rest (conversation--read-records
+                           (conversation-pathname
+                            (application-conversation application)))))
+      (when (eq (first record) :goal)
+        (let ((objective (getf (rest record) :objective))
+              (status (getf (rest record) :status)))
+          (setf goal
+                (and (non-empty-string-p objective)
+                     (member status '(:active :paused :complete))
+                     (list :objective objective
+                           :status status
+                           :continuations
+                           (let ((count (getf (rest record) :continuations)))
+                             (if (integerp count)
+                                 count
+                                 0))
+                           :created-at
+                           (let ((time (getf (rest record) :created-at)))
+                             (if (integerp time)
+                                 time
+                                 (getf (rest record) :time)))))))))
+    (setf (application-goal application) goal))
+  nil)
+
+(-> application-goal-context (application) (option string))
+(defun application-goal-context (application)
+  "Return the transient goal instructions for the next provider request."
+  (let ((goal (application-goal application)))
+    (when (and goal (eq (getf goal :status) ':active))
+      (format nil
+              "<goal_context>~%The session goal: ~A~%Work autonomously ~
+               toward this goal every turn. When the goal is genuinely ~
+               complete, include the literal marker ~A in your final ~
+               message. If you cannot continue without the user, state ~
+               plainly what you need and stop.~%</goal_context>"
+              (getf goal :objective)
+              +application-goal-complete-marker+))))
+
+(-> application--goal-continuation-message-p (string) boolean)
+(defun application--goal-continuation-message-p (content)
+  "Return true when CONTENT is the synthetic goal continuation prompt."
+  (string= content +application-goal-continuation-prompt+))
 
 
 ;;;; -- Agent Presentation --
@@ -613,8 +708,40 @@ later conversation replay cannot duplicate their streamed transcript rows."
            (:turn-completed
             (terminal-ui-set-status ui nil))))))))
 
-(-> application-run-message (application string) null)
-(defun application-run-message (application content)
+(-> application--turn-final-text (provider-result) (option string))
+(defun application--turn-final-text (result)
+  "Return the joined assistant text of RESULT's final provider step."
+  (let ((parts (loop for item in (provider-result-output-items result)
+                     for text = (and (json-object-p item)
+                                     (response-item-assistant-text item))
+                     when text
+                       collect text)))
+    (when parts
+      (format nil "~{~A~^~%~}" parts))))
+
+(-> application--note-goal-turn (application provider-result) null)
+(defun application--note-goal-turn (application result)
+  "Mark the goal complete when RESULT's final message carries the marker."
+  (let ((goal (application-goal application))
+        (text (application--turn-final-text result)))
+    (when (and goal
+               (eq (getf goal :status) ':active)
+               text
+               (search +application-goal-complete-marker+ text))
+      (setf (getf (application-goal application) :status) ':complete)
+      (application--record-goal application)
+      (application-present
+       application
+       (list (terminal-span ':success "✓ goal complete")
+             (terminal-span ':plain (string #\Newline))
+             (terminal-span ':dim
+                            (format nil "  ~A" (getf goal :objective)))))))
+  nil)
+
+(-> application--run-turn
+    (application string &key (:continuation-p boolean))
+    null)
+(defun application--run-turn (application content &key continuation-p)
   "Persist and run one model turn for CONTENT, presenting durable results once."
   (let* ((conversation (application-conversation application))
          (sequence (conversation-next-sequence conversation))
@@ -624,20 +751,59 @@ later conversation replay cannot duplicate their streamed transcript rows."
     (terminal-ui-append-finalized
      (application-ui application)
      identifier
-     (application--transcript-entry application
-                                    :style ':user
-                                    :header "❯ you"
-                                    :body content))
+     (if continuation-p
+         (list (terminal-span ':hint "∙ goal continues"))
+         (application--transcript-entry application
+                                        :style ':user
+                                        :header "❯ you"
+                                        :body content)))
     (setf (application-rendered-sequence application) sequence)
     (unwind-protect
          (progn
            (terminal-ui-set-status (application-ui application)
                                    (application-thinking-label))
-           (agent-run-user-turn
-            (application-agent application)
-            content
-            :observer (application-agent-observer application)))
+           (application--note-goal-turn
+            application
+            (agent-run-user-turn
+             (application-agent application)
+             content
+             :observer (application-agent-observer application)
+             :goal-context (application-goal-context application))))
       (terminal-ui-set-status (application-ui application) nil)
       (terminal-ui-stream-update (application-ui application) :tail nil)
       (application-render-records application)))
+  nil)
+
+(-> application--run-goal-continuations (application) null)
+(defun application--run-goal-continuations (application)
+  "Run bounded automatic continuation turns while the session goal is active."
+  (loop
+    (let ((goal (application-goal application)))
+      (unless (and goal (eq (getf goal :status) ':active))
+        (return))
+      (when (>= (getf goal :continuations)
+                +application-goal-continuation-limit+)
+        (setf (getf (application-goal application) :status) ':paused)
+        (application--record-goal application)
+        (application-present
+         application
+         (format nil
+                 "The goal paused after ~D automatic continuations. ~
+                  Use /goal resume or send a message to keep going."
+                 +application-goal-continuation-limit+))
+        (return))
+      (incf (getf (application-goal application) :continuations))
+      (application--run-turn application
+                             +application-goal-continuation-prompt+
+                             :continuation-p t)))
+  nil)
+
+(-> application-run-message (application string) null)
+(defun application-run-message (application content)
+  "Run one user turn for CONTENT plus any automatic goal continuation turns."
+  (let ((goal (application-goal application)))
+    (when (and goal (eq (getf goal :status) ':active))
+      (setf (getf (application-goal application) :continuations) 0)))
+  (application--run-turn application content)
+  (application--run-goal-continuations application)
   nil)

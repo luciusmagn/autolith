@@ -142,6 +142,13 @@
                                "standard (the fast path is never requested)")
      (application--field-spans "web search"
                                (configuration-web-search-mode configuration))
+     (application--field-spans "goal"
+                               (let ((goal (application-goal application)))
+                                 (if goal
+                                     (format nil "~(~A~): ~A"
+                                             (getf goal :status)
+                                             (getf goal :objective))
+                                     "none")))
      (application--field-spans "token usage"
                                (format nil "~A total (~A input + ~A output)"
                                        (application--token-count-description
@@ -216,14 +223,11 @@
                                          "current"
                                          "")))))
 
-(-> application-set-reasoning-effort (application string) null)
-(defun application-set-reasoning-effort (application effort)
-  "Switch APPLICATION to reasoning EFFORT for this session's next turns."
-  (let* ((previous (application-configuration application))
-         (previous-provider (application-provider application))
+(-> application--install-configuration (application configuration) null)
+(defun application--install-configuration (application configuration)
+  "Switch APPLICATION to CONFIGURATION, reconnecting its provider and agent."
+  (let* ((previous-provider (application-provider application))
          (previous-agent (application-agent application))
-         (configuration
-           (configuration-with-reasoning-effort previous effort))
          (provider
            (if previous-provider
                (provider-with-configuration previous-provider configuration)
@@ -251,6 +255,113 @@
           (application-provider application) provider
           (application-agent application) agent))
   nil)
+
+(-> application-set-reasoning-effort (application string) null)
+(defun application-set-reasoning-effort (application effort)
+  "Switch APPLICATION to reasoning EFFORT for this session's next turns."
+  (application--install-configuration
+   application
+   (configuration-with-reasoning-effort (application-configuration application)
+                                        effort)))
+
+(-> application--model-items (application) list)
+(defun application--model-items (application)
+  "Return picker items for the supported 5.6 model family."
+  (let ((current (configuration-model
+                  (application-configuration application))))
+    (loop for model in +supported-models+
+          collect (list :name model
+                        :argument nil
+                        :description (if (string= model current)
+                                         "current"
+                                         "")))))
+
+(-> application-set-model (application string) null)
+(defun application-set-model (application model)
+  "Switch APPLICATION to MODEL for this session's next turns."
+  (application--install-configuration
+   application
+   (configuration-with-model (application-configuration application) model)))
+
+;;;; -- Session Goal Command --
+
+(-> application--goal-remainder (string) string)
+(defun application--goal-remainder (input)
+  "Return INPUT's trimmed text after the /goal command word."
+  (let ((space (position-if (lambda (character)
+                              (find character '(#\Space #\Tab)))
+                            input)))
+    (if space
+        (string-trim '(#\Space #\Tab) (subseq input space))
+        "")))
+
+(-> application--goal-description (application) string)
+(defun application--goal-description (application)
+  "Return a one-line description of APPLICATION's session goal."
+  (let ((goal (application-goal application)))
+    (if goal
+        (format nil "Goal ~(~A~)~@[ since ~A~]: ~A"
+                (getf goal :status)
+                (let ((created (getf goal :created-at)))
+                  (and (integerp created)
+                       (application--calendar-description created)))
+                (getf goal :objective))
+        "No session goal is set. Use /goal OBJECTIVE to set one.")))
+
+(-> application-goal-command (application string) null)
+(defun application-goal-command (application remainder)
+  "Apply the /goal REMAINDER: show, set, clear, pause, or resume the goal."
+  (let ((goal (application-goal application))
+        (word (string-downcase remainder)))
+    (cond
+      ((zerop (length remainder))
+       (application-present application
+                            (application--goal-description application)))
+      ((string= word "clear")
+       (setf (application-goal application) nil)
+       (application--record-goal application)
+       (application-present application "The session goal was cleared."))
+      ((string= word "pause")
+       (if (and goal (eq (getf goal :status) ':active))
+           (progn
+             (setf (getf (application-goal application) :status) ':paused)
+             (application--record-goal application)
+             (application-present application "The session goal is paused."))
+           (application-present application "No active goal to pause.")))
+      ((string= word "resume")
+       (if (and goal (eq (getf goal :status) ':paused))
+           (progn
+             (setf (getf (application-goal application) :status) ':active
+                   (getf (application-goal application) :continuations) 0)
+             (application--record-goal application)
+             (application-present application
+                                  "The session goal is active again.")
+             (application--run-turn application
+                                    +application-goal-continuation-prompt+
+                                    :continuation-p t)
+             (application--run-goal-continuations application))
+           (application-present application "No paused goal to resume.")))
+      ((uiop:string-prefix-p "/" remainder)
+       (application-present
+        application
+        (format nil "~S looks like a command, not an objective. ~
+                     Usage: /goal [OBJECTIVE|clear|pause|resume]"
+                remainder)))
+      (t
+       (setf (application-goal application)
+             (list :objective remainder
+                   :status ':active
+                   :continuations 0
+                   :created-at (get-universal-time)))
+       (application--record-goal application)
+       (application-present
+        application
+        (format nil
+                "Goal set: ~A~%Frob keeps working toward it after every ~
+                 message. Use /goal to inspect it and /goal clear to stop."
+                remainder)))))
+  nil)
+
 
 (-> application--generation-items (application) list)
 (defun application--generation-items (application)
@@ -390,6 +501,27 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
             application
             (format nil "Reasoning effort is now ~A."
                     (configuration-reasoning-effort
+                     (application-configuration application))))))
+       :continue)
+      ((string= command "/goal")
+       (application-goal-command application
+                                 (application--goal-remainder input))
+       :continue)
+      ((string= command "/model")
+       (let ((model
+               (or argument
+                   (application--pick-identifier
+                    application
+                    :title "pick the model"
+                    :items (application--model-items application)
+                    :usage "Usage: /model NAME"
+                    :empty-notice "No supported models exist."))))
+         (when model
+           (application-set-model application model)
+           (application-present
+            application
+            (format nil "The model is now ~A."
+                    (configuration-model
                      (application-configuration application))))))
        :continue)
       ((string= command "/checkpoint")

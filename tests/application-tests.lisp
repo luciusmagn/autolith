@@ -368,7 +368,33 @@
            (test-assert (= (agent-maximum-provider-steps
                             (application-agent application))
                            7)
-                        "effort switching preserves the active turn budget"))
+                        "effort switching preserves the active turn budget")
+           (let ((items (application--model-items application)))
+             (test-assert (= (length items) (length +supported-models+))
+                          "every 5.6 family model is offered")
+             (test-assert (string= (getf (find "current" items
+                                               :key (lambda (item)
+                                                      (getf item :description))
+                                               :test #'string=)
+                                         :name)
+                                   "gpt-5.6-sol")
+                          "the active model is marked current"))
+           (application-set-model application "gpt-5.6-terra")
+           (test-assert (string= (configuration-model
+                                  (application-configuration application))
+                                 "gpt-5.6-terra")
+                        "switching the model replaces the configuration")
+           (test-assert (string= (configuration-reasoning-effort
+                                  (application-configuration application))
+                                 "low")
+                        "model switching preserves the reasoning effort")
+           (test-assert (handler-case
+                            (progn
+                              (application-set-model application "gpt-4")
+                              nil)
+                          (configuration-error ()
+                            t))
+                        "unsupported models are rejected with the choices"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -432,6 +458,120 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-session-goal () null)
+(defun test-session-goal ()
+  "Test goal persistence, context injection, continuation, and completion."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation (conversation-create configuration
+                                                   :identifier "goal"))
+                (terminal (make-instance 'recording-terminal :columns 60))
+                (application (make-instance 'application
+                                            :configuration configuration
+                                            :conversation conversation
+                                            :tool-registry
+                                            (make-default-tool-registry)
+                                            :worker nil
+                                            :ui (terminal-ui-create
+                                                 :terminal terminal))))
+           (terminal-ui-start (application-ui application))
+           (application-goal-command application "polish the terminal")
+           (test-assert (eq (getf (application-goal application) :status)
+                            ':active)
+                        "setting a goal activates it")
+           (let ((context (application-goal-context application)))
+             (test-assert (search "polish the terminal" context)
+                          "the goal context carries the objective")
+             (test-assert (search "[GOAL-COMPLETE]" context)
+                          "the goal context teaches the completion marker"))
+           (let ((sibling (make-instance
+                           'application
+                           :configuration configuration
+                           :conversation (conversation-load-by-id configuration
+                                                                  "goal")
+                           :ui (terminal-ui-create
+                                :terminal (make-instance 'recording-terminal
+                                                         :columns 60)))))
+             (application--load-goal sibling)
+             (test-assert (string= (getf (application-goal sibling) :objective)
+                                   "polish the terminal")
+                          "goals reload from durable conversation records"))
+           (application-goal-command application "pause")
+           (test-assert (null (application-goal-context application))
+                        "paused goals inject no context")
+           (let* ((completion-item
+                    (json-object
+                     "type" "message"
+                     "role" "assistant"
+                     "content" (json-array
+                                (json-object
+                                 "type" "output_text"
+                                 "text" "All polished. [GOAL-COMPLETE]"))))
+                  (working-item
+                    (json-object
+                     "type" "message"
+                     "role" "assistant"
+                     "content" (json-array
+                                (json-object "type" "output_text"
+                                             "text" "Still working."))))
+                  (provider
+                    (make-instance
+                     'scripted-provider
+                     :results (list (agent-test-result "goal-1"
+                                                       (list working-item)
+                                                       :turn-completion :end)
+                                    (agent-test-result "goal-2"
+                                                       (list completion-item)
+                                                       :turn-completion :end))))
+                  (agent (agent-create :configuration configuration
+                                       :provider provider
+                                       :conversation conversation
+                                       :tool-registry
+                                       (application-tool-registry application)
+                                       :worker nil)))
+             (setf (application-provider application) provider
+                   (application-agent application) agent)
+             (application-goal-command application "resume")
+             (test-assert (eq (getf (application-goal application) :status)
+                              ':complete)
+                          "the continuation loop stops at the marker")
+             (test-assert (every #'non-empty-string-p
+                                 (scripted-provider-goal-contexts provider))
+                          "active goals ride along every provider request")
+             (test-assert (search "✓ goal complete"
+                                  (recording-terminal-output terminal))
+                          "completing a goal presents a notice"))
+           (setf (application-goal application)
+                 (list :objective "endless"
+                       :status ':active
+                       :continuations +application-goal-continuation-limit+
+                       :created-at (get-universal-time)))
+           (recording-terminal-reset terminal)
+           (application--run-goal-continuations application)
+           (test-assert (eq (getf (application-goal application) :status)
+                            ':paused)
+                        "the continuation limit pauses the goal")
+           (test-assert (search "paused after"
+                                (recording-terminal-output terminal))
+                        "pausing explains the continuation budget")
+           (test-assert (equal (conversation-record-entry
+                                application
+                                (list :message :seq 99 :time 0 :role :user
+                                      :content
+                                      +application-goal-continuation-prompt+))
+                               (list (terminal-span :hint "∙ goal continues")))
+                        "continuation prompts render as dim notices")
+           (application-goal-command application "clear")
+           (test-assert (null (application-goal application))
+                        "clearing removes the goal")
+           (application-goal-command application "/status")
+           (test-assert (null (application-goal application))
+                        "command-shaped objectives are rejected")
+           (terminal-ui-stop (application-ui application)))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> run-application-tests () boolean)
 (defun run-application-tests ()
   "Run focused application presentation tests and return true on success."
@@ -441,4 +581,5 @@
   (test-conversation-picker)
   (test-effort-switch)
   (test-status-entry)
+  (test-session-goal)
   t)
