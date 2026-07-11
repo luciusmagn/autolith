@@ -2,7 +2,8 @@
 
 set -u
 
-source_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
+source_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
 sbcl_command=${FROB_SBCL:-sbcl}
 terminal_state=
 recovery_requested=false

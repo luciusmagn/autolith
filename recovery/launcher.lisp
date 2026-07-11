@@ -1,8 +1,10 @@
 #!/usr/bin/env -S sbcl --script
 
 (require :asdf)
-(require :sb-posix)
+(pushnew ".qlot" asdf::*default-source-registry-exclusions* :test #'string=)
+(asdf:initialize-source-registry)
 
+(require :sb-posix)
 (handler-case
     (let* ((arguments (uiop:command-line-arguments))
        (source-root (uiop:ensure-directory-pathname
