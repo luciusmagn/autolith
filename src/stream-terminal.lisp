@@ -112,7 +112,7 @@
     (4 :end-of-input)
     (5 :end)
     ((8 127) :backspace)
-    (9 (list :insert "    "))
+    (9 :complete)
     ((10 13) :submit)
     (t
      (if (>= (char-code character) 32)

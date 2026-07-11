@@ -154,6 +154,22 @@
     :reader terminal-ui-placeholder
     :type string
     :documentation "The dim hint shown on the prompt row while input is empty.")
+   (completions
+    :initarg :completions
+    :initform nil
+    :reader terminal-ui-completions
+    :type list
+    :documentation "Completion entries offered while typing an interactive command.")
+   (completion-selection
+    :initform 0
+    :accessor terminal-ui-completion-selection
+    :type (integer 0)
+    :documentation "The selected index within the currently matching completions.")
+   (completion-names
+    :initform nil
+    :accessor terminal-ui-completion-names
+    :type list
+    :documentation "The most recently matching completion names, detecting set changes.")
    (status
     :initform nil
     :accessor terminal-ui-status

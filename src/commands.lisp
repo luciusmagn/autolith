@@ -5,15 +5,15 @@
 (-> application-help () string)
 (defun application-help ()
   "Return the concise interactive command reference."
-  "/help                 show this reference
-/new                  start a new conversation
-/resume ID            load a saved conversation
-/conversations         list saved conversations
-/auth                  authenticate Frob with ChatGPT
-/checkpoint            save a retained live generation
-/generations           list retained generations
-/rollback ID           select a generation for recovery
-/quit                  leave Frob")
+  (let ((label-width
+          (loop for entry in +application-commands+
+                maximize (length (terminal-completion-label entry)))))
+    (format nil "~{~A~^~%~}"
+            (loop for entry in +application-commands+
+                  collect (format nil "~vA  ~A"
+                                  label-width
+                                  (terminal-completion-label entry)
+                                  (getf entry :description))))))
 
 (-> application-list-conversations (application) string)
 (defun application-list-conversations (application)

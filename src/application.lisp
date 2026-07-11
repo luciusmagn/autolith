@@ -57,6 +57,22 @@
   "True after SIGWINCH until the active UI recomputes its width.")
 
 
+;;;; -- Interactive Command Table --
+
+(define-constant +application-commands+
+  '((:name "/help"          :argument nil  :description "show this reference")
+    (:name "/new"           :argument nil  :description "start a new conversation")
+    (:name "/resume"        :argument "ID" :description "load a saved conversation")
+    (:name "/conversations" :argument nil  :description "list saved conversations")
+    (:name "/auth"          :argument nil  :description "authenticate Frob with ChatGPT")
+    (:name "/checkpoint"    :argument nil  :description "save a retained live generation")
+    (:name "/generations"   :argument nil  :description "list retained generations")
+    (:name "/rollback"      :argument "ID" :description "select a generation for recovery")
+    (:name "/quit"          :argument nil  :description "leave Frob"))
+  :test #'equal
+  :documentation "The interactive commands offered by completion and /help.")
+
+
 ;;;; -- Construction and Reconnection --
 
 (-> terminal-current-columns () integer)
@@ -96,7 +112,8 @@
   (terminal-ui-create
    :terminal (stream-terminal-create :columns (terminal-current-columns))
    :prompt +application-prompt+
-   :placeholder +application-placeholder+))
+   :placeholder +application-placeholder+
+   :completions +application-commands+))
 
 (-> application-create
     (configuration &key (:conversation-id (option string)))
