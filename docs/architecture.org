@@ -109,7 +109,8 @@ boot recovery.
 ** =generations.lisp=
 
 Owns compatible manifests and the Linux SBCL coordinator-and-saver checkpoint
-backend. Only completed temporary cores are published.
+backend. An unpublished core must boot and identify its exact generation and
+Git commit before its core, manifest, and selection become visible.
 
 ** =main.lisp=
 
@@ -120,11 +121,14 @@ projects durable records into the terminal, and wires interactive commands.
 
 Contain the stable launcher boundary and minimal recovery runtime. =bootstrap=
 builds that runtime into a read-only pristine core outside the repository. The
-launcher restores terminal state and invokes the core; the source launcher is a
-missing-core bootstrap only. Recovery reports sanitized crash and mutation
-context, creates exact-commit recovery worktrees, and boots retained cores
-without loading damaged active source. A failed retained core falls through to
-another compatible generation.
+builder records exact source provenance and boot-probes the temporary image.
+The launcher repeats the versioned probe before use and falls back to the source
+launcher when the installed image is missing or invalid. Recovery reports
+sanitized crash and mutation context, creates exact-commit recovery worktrees,
+and boots retained cores without loading damaged active source. A failed
+retained core restores terminal state, refreshes crash context, and falls through
+to another compatible generation. Rollback selection uses a dedicated process
+status to enter this path immediately.
 
 * Durable mutation
 

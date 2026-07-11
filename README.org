@@ -106,7 +106,7 @@ name when it still needs an argument. The commands are:
 /effort         pick the reasoning effort
 /checkpoint     save a retained live generation
 /generations    list retained generations
-/rollback       pick a generation for recovery
+/rollback       start a retained generation through recovery
 /status         show usage and rate limits
 /quit           leave Frob
 #+END_EXAMPLE
@@ -137,7 +137,7 @@ active agent.
 The initial =self.*= tools inspect bindings, read tracked definitions, evaluate,
 redefine, set, persist complete
 source definitions, show diffs, commit explicit paths, checkpoint, list
-generations, and select rollback generations. Durable source replacement parses
+generations, and request immediate rollback. Durable source replacement parses
 top-level Lisp forms and never uses blind regular-expression replacement.
 
 Frob keeps all project definitions in one =FROB= package. Files and CLOS
@@ -148,8 +148,13 @@ protocols express subsystem boundaries without scoped packages.
 =/checkpoint= first requires a clean Git worktree and a passing =./check=. It
 briefly excludes live mutation, revalidates the source revision, and forks a
 coordinator. The active parent resumes immediately. A saver child writes a
-temporary core, and the coordinator publishes the core and manifest only after a
-successful save.
+temporary core. Before publication, the coordinator boots that core through a
+private probe and requires its exact generation ID and Git commit. Only then does
+it publish the core, manifest, and selected-generation record.
+
+=/rollback ID= atomically selects a compatible generation and leaves the active
+process through a dedicated recovery status. The stable launcher then starts the
+matching core and source revision immediately.
 
 List or boot retained generations with:
 
@@ -159,14 +164,17 @@ frob --recovery --generation GENERATION-ID
 #+END_SRC
 
 Recovery normally runs from the separately built pristine core without loading
-the active source or damaged active core. The source launcher is only a
-missing-core bootstrap. Recovery sanitizes all terminal output, inspects pending
+the active source or damaged active core. Its manifest records exact build-input
+provenance, and both installation and startup require a versioned core handshake.
+An absent or invalid pristine image falls back to the source launcher. Recovery
+sanitizes all terminal output, inspects pending
 mutation identities, creates a detached clean Git worktree at the manifest's
 recorded commit, and points the resumed application at that source. A fatal
 active-path failure writes a private allowlisted crash capsule, publishes it to
 that launcher instance, exits with status 70, restores the terminal, and boots
 the selected generation. If that generation fails fatally, recovery tries other
-compatible retained generations newest first.
+compatible retained generations newest first, restoring terminal state and
+refreshing crash context between attempts.
 
 Automatic recovery forwards the original application arguments while marking
 the resumed process as recovered, restores the capsule's conversation, and
