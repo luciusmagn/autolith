@@ -397,6 +397,21 @@
          :manifest (namestring (generation-manifest-pathname generation))))
   generation)
 
+(-> generation-request-rollback (configuration string) null)
+(defun generation-request-rollback (configuration identifier)
+  "Select retained generation IDENTIFIER and request an immediate rollback."
+  (let ((generation (generation-find configuration identifier)))
+    (unless generation
+      (error 'checkpoint-error
+             :message (format nil "Unknown retained generation ~A." identifier)
+             :stage ':selection
+             :pathname nil))
+    (generation-select configuration generation)
+    (error 'rollback-requested
+           :message (format nil "Rollback requested for retained generation ~A."
+                            (generation-identifier generation))
+           :generation-id (generation-identifier generation))))
+
 (-> generation-selected (configuration) (option generation))
 (defun generation-selected (configuration)
   "Return CONFIGURATION's selected retained generation, if it remains valid."
@@ -737,17 +752,8 @@
 (defmethod tool-execute ((tool self-rollback-tool)
                          (context tool-context)
                          (arguments hash-table))
-  "Select a compatible retained generation for the stable recovery launcher."
+  "Select a compatible retained generation and request an immediate rollback."
   (declare (ignore tool))
-  (let* ((configuration (tool-context-configuration context))
-         (identifier (tool-argument arguments "generation" :required t))
-         (generation (generation-find configuration identifier)))
-    (unless generation
-      (error 'checkpoint-error
-             :message (format nil "Unknown retained generation ~A." identifier)
-             :stage ':selection
-             :pathname nil))
-    (generation-select configuration generation)
-    (tool-success
-     (format nil "Selected generation ~A. Start it with frob --recovery."
-             identifier))))
+  (generation-request-rollback
+   (tool-context-configuration context)
+   (tool-argument arguments "generation" :required t)))

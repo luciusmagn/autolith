@@ -16,6 +16,14 @@
   ()
   (:documentation "A failure caused by invalid or unavailable configuration."))
 
+(define-condition rollback-requested (frob-error)
+  ((generation-id
+    :initarg :generation-id
+    :reader rollback-requested-generation-id
+    :type non-empty-string
+    :documentation "The retained generation selected for the next process."))
+  (:documentation "A control condition requesting rollback to a retained generation."))
+
 
 ;;;; -- Authentication and Provider Conditions --
 

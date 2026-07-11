@@ -99,7 +99,7 @@
 
 (defclass self-rollback-tool (self-tool)
   ()
-  (:documentation "Select a retained generation for recovery startup."))
+  (:documentation "Select a retained generation and request immediate rollback."))
 
 (-> tool-canonical-name (tool) string)
 (defun tool-canonical-name (tool)
@@ -302,6 +302,8 @@
                                         canonical-name)
                        :tool-name canonical-name))
               (tool-execute tool context arguments))))
+      (rollback-requested (condition)
+        (error condition))
       (active-image-corruption (condition)
         (error condition))
       (error (condition)
@@ -433,7 +435,7 @@
                 empty-schema)
       (register 'self-rollback-tool
                 "self" "rollback"
-                "Select a compatible retained generation for recovery startup."
+                "Select a compatible retained generation and request immediate rollback."
                 (tool-object-schema
                  (json-object
                   "generation" (tool-string-property

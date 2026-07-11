@@ -46,6 +46,18 @@
     (write-byte 42 stream))
   (generation-temporary-core-pathname generation))
 
+(-> generation-tests--make-core-plausible (generation) pathname)
+(defun generation-tests--make-core-plausible (generation)
+  "Expand GENERATION's published core past the static compatibility threshold."
+  (with-open-file (stream (generation-core-pathname generation)
+                          :direction :output
+                          :if-exists :overwrite
+                          :if-does-not-exist :error
+                          :element-type '(unsigned-byte 8))
+    (file-position stream 1048576)
+    (write-byte 42 stream))
+  (generation-core-pathname generation))
+
 (-> generation-tests--unpublished-p (configuration generation) boolean)
 (defun generation-tests--unpublished-p (configuration generation)
   "Return true when failed GENERATION left no visible publication artifacts."
@@ -54,6 +66,67 @@
        (not (probe-file (generation-manifest-pathname generation)))
        (not (probe-file (generation-current-pathname configuration)))
        (eq (generation-status generation) ':pending)))
+
+(-> generation-tests--test-rollback-control-path () null)
+(defun generation-tests--test-rollback-control-path ()
+  "Test rollback selection and propagation through the tool registry."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (generation
+           (generation-tests--generation configuration
+                                         "rollback-generation"
+                                         "0123456789abcdef"))
+         (runner
+           (make-instance
+            'test-generation-core-probe-runner
+            :output (generation-core-probe-output
+                     (generation-core-probe-record generation)))))
+    (unwind-protect
+         (progn
+           (generation-tests--write-fake-core generation)
+           (generation-publish configuration generation :probe-runner runner)
+           (generation-tests--make-core-plausible generation)
+           (delete-file (generation-current-pathname configuration))
+           (let* ((conversation
+                    (conversation-create configuration
+                                         :identifier "rollback-control-path"))
+                  (context
+                    (make-instance 'tool-context
+                                   :configuration configuration
+                                   :worker nil
+                                   :conversation conversation))
+                  (call
+                    (json-object
+                     "namespace" "self"
+                     "name" "rollback"
+                     "arguments"
+                     (json-encode
+                      (json-object "generation" "rollback-generation"))))
+                  (condition
+                    (handler-case
+                        (progn
+                          (tool-registry-execute-call
+                           (make-default-tool-registry)
+                           call
+                           context)
+                          nil)
+                      (rollback-requested (condition)
+                        condition))))
+             (test-assert condition
+                          "self.rollback propagates its control condition")
+             (test-assert
+              (string= (rollback-requested-generation-id condition)
+                       "rollback-generation")
+              "the rollback condition carries the selected generation ID")
+             (let ((selected (generation-selected configuration)))
+               (test-assert selected
+                            "rollback selects the generation before signaling")
+               (test-assert
+                (string= (generation-identifier selected)
+                         "rollback-generation")
+                "the rollback selection names the requested generation"))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
 
 
 ;;;; -- Subsystem Tests --
@@ -148,6 +221,7 @@
             (generation-tests--unpublished-p configuration corrupt)
             "a corrupt core leaves every publication path untouched"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  (generation-tests--test-rollback-control-path)
   nil)
 
 (-> test-crash-capsule-correlation () null)
