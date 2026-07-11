@@ -390,6 +390,7 @@
     (test-tool-registry)
     (test-lisp-worker-protocol)
     (test-self-tools)
-    (test-generation-manifest))
+    (test-generation-manifest)
+    (run-terminal-tests))
   (format t "~&~:D Frob tests passed.~%" *test-count*)
   t)

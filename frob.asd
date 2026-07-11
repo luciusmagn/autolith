@@ -26,7 +26,8 @@
                              (:file "tools")
                              (:file "lisp-worker")
                              (:file "self-tools")
-                             (:file "generations"))))
+                             (:file "generations")
+                             (:file "terminal"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:frob/tests))))
 
 (asdf:defsystem #:frob/tests
@@ -35,7 +36,8 @@
   :serial t
   :components ((:module "tests"
                 :serial t
-                :components ((:file "tests"))))
+                :components ((:file "tests")
+                             (:file "terminal-tests"))))
   :perform (asdf:test-op (operation component)
              (declare (ignore operation component))
              (uiop:symbol-call '#:frob '#:run-tests)))
