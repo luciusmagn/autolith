@@ -14,7 +14,8 @@ Frob is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
 - runs =lisp.*= operations in a disposable SBCL process;
 - exposes documented =self.*= inspection and mutation operations;
 - saves live SBCL generations without stopping the active parent; and
-- can boot a retained generation against its exact Git revision.
+- keeps a separate pristine recovery core; and
+- can boot a retained generation against its exact Git revision with fallback.
 
 The implementation follows [[file:frob-minimal-technical-spec.org][the technical specification]]. The object and
 file boundaries are summarized in [[file:docs/architecture.org][the architecture note]].
@@ -22,7 +23,9 @@ file boundaries are summarized in [[file:docs/architecture.org][the architecture
 * Requirements and setup
 
 The supported target is Linux x86-64 with SBCL, Git, OpenSSL, and Quicklisp.
-The currently tested SBCL is 2.6.4.
+The tracked =sbcl.version= pins SBCL 2.6.4. The launcher honors =FROB_SBCL=;
+when selecting another executable, invoke setup as
+="$FROB_SBCL" --script bootstrap= so the same runtime performs validation.
 
 Dependencies are pinned by =qlfile= and =qlfile.lock=. With Quicklisp already
 installed at =~/quicklisp=, run:
@@ -32,9 +35,11 @@ installed at =~/quicklisp=, run:
 ./check
 #+END_SRC
 
-=bootstrap= installs Qlot through Quicklisp and materializes the locked project
-dependencies under the ignored =.qlot/= directory. The launcher and check script
-prefer that project-local environment, then fall back to the user's Quicklisp.
+=bootstrap= installs Qlot through Quicklisp, materializes the locked project
+dependencies under the ignored =.qlot/= directory, and builds a small pristine
+recovery core under =${XDG_DATA_HOME:-~/.local/share}/frob/recovery/=. The core
+and its manifest are installed read-only. The launcher and check script prefer
+the project-local dependency environment, then fall back to the user's Quicklisp.
 
 On systems where OpenSSL is outside the dynamic loader's normal search path,
 make its library directory visible to CFFI. Frob automatically adds
@@ -52,9 +57,12 @@ ln -sfn "$PWD/bin/frob" ~/.local/bin/frob
 Frob stores its own credentials in
 =${XDG_STATE_HOME:-~/.local/state}/frob/auth.sexp= with mode 0600.
 
-For the initial transition, Frob may read =~/.codex/auth.json= as a read-only
-bootstrap source. It never writes that file and never launches Codex. To perform
-Frob's proper device flow instead, run:
+For the initial transition, Frob may read =~/.codex/auth.json= once as a read-only
+bootstrap source when its private store is absent. It copies only the bounded
+access token and account ID into Frob state. It never imports or spends Codex's
+refresh token, never reads Codex again while its private store exists, never
+writes that file, and never launches Codex. The imported access token cannot be
+renewed. To perform Frob's proper device flow, run:
 
 #+BEGIN_SRC sh
 frob --auth
@@ -127,10 +135,21 @@ frob --recovery --list
 frob --recovery --generation GENERATION-ID
 #+END_SRC
 
-Recovery creates a detached, clean Git worktree at the manifest's recorded
-commit and points the resumed application at that source. A fatal active-path
-failure writes a bounded crash capsule, exits with status 70, restores the
-terminal, and lets the stable launcher boot the selected generation.
+Recovery normally runs from the separately built pristine core without loading
+the active source or damaged active core. The source launcher is only a
+missing-core bootstrap. Recovery sanitizes all terminal output, inspects pending
+mutation identities, creates a detached clean Git worktree at the manifest's
+recorded commit, and points the resumed application at that source. A fatal
+active-path failure writes a private allowlisted crash capsule, publishes it to
+that launcher instance, exits with status 70, restores the terminal, and boots
+the selected generation. If that generation fails fatally, recovery tries other
+compatible retained generations newest first.
+
+Automatic recovery forwards the original application arguments while marking
+the resumed process as recovered, restores the capsule's conversation, and
+retains the last rendered sequence so ordinary terminal scrollback is not
+duplicated. An explicit =--resume ID= overrides checkpoint-time conversation
+state.
 
 Saved cores are compatible only with the recorded SBCL version, operating system
 build, and architecture. Source remains authoritative for clean rebuilds.
@@ -157,7 +176,8 @@ Run the complete test suite from the repository root:
 
 The suite covers request shape, SSE framing, credential storage and device auth,
 append-only conversation recovery, tool dispatch, worker evaluation, active
-definition replacement, agent tool rounds, terminal control safety, and
-generation manifests. Live smoke tests additionally cover the subscription
-transport, the isolated worker, forked checkpoint publication, and retained-core
-boot.
+definition transactions, agent continuation and tool bounds, terminal control
+safety, crash correlation, generation manifests, a launched isolated worker,
+and startup of the installed pristine recovery core. Manual release smoke tests
+add the live subscription boundary, forked checkpoint publication, automatic
+fatal recovery, and retained-core boot.

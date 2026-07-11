@@ -42,7 +42,8 @@ locations, never credential values.
 
 Defines credential sources and OAuth refresh. Credentials enter memory only
 inside the dynamic scope of a provider request. The Codex credential file is
-an optional bootstrap source, not a runtime dependency on Codex.
+an optional one-time, access-token-only import, not a runtime dependency on
+Codex. Renewable credentials come only from Frob's own device flow.
 
 ** =device-authentication.lisp=
 
@@ -73,9 +74,16 @@ No =lisp.*= operation shares heap state with the active image.
 
 ** =self-tools.lisp=
 
-Owns active-image inspection, exploratory mutation, the mutation journal, and
-form-aware durable source editing. Normal self tools cannot edit the launcher
-or recovery artifacts.
+Owns active-image inspection, exploratory mutation, definition identity, and
+form-aware source primitives.
+
+** =durable-mutations.lisp=
+
+Owns checked mutation transactions, validated journal replay, and explicit Git
+publication. Durable mutation objects carry explicit phases and survive source
+restarts. Git and journal state reconcile across the narrow post-commit crash
+window. Normal self source and commit tools cannot edit the launcher or recovery
+artifacts.
 
 ** =terminal.lisp=
 
@@ -102,9 +110,13 @@ projects durable records into the terminal, and wires interactive commands.
 
 ** =bin/= and =recovery/=
 
-Contain the stable launcher boundary. They restore terminal state, load source
-mode, report crash context, create exact-commit recovery worktrees, and boot
-retained cores without loading damaged active source.
+Contain the stable launcher boundary and minimal recovery runtime. =bootstrap=
+builds that runtime into a read-only pristine core outside the repository. The
+launcher restores terminal state and invokes the core; the source launcher is a
+missing-core bootstrap only. Recovery reports sanitized crash and mutation
+context, creates exact-commit recovery worktrees, and boots retained cores
+without loading damaged active source. A failed retained core falls through to
+another compatible generation.
 
 * Durable mutation
 

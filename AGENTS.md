@@ -229,6 +229,12 @@ Materialize the locked project dependencies with:
 ./bootstrap
 ```
 
+Rebuild only the installed pristine recovery image with:
+
+```sh
+./build-recovery
+```
+
 ## Commit Policy
 
 - Use primitive-style, imperative commit messages with a title line only,
