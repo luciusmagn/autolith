@@ -65,6 +65,7 @@
     (:name "/resume"        :argument nil :description "pick a saved conversation to resume")
     (:name "/conversations" :argument nil :description "list saved conversations")
     (:name "/auth"          :argument nil :description "authenticate Frob with ChatGPT")
+    (:name "/effort"        :argument nil :description "pick the reasoning effort")
     (:name "/checkpoint"    :argument nil :description "save a retained live generation")
     (:name "/generations"   :argument nil :description "list retained generations")
     (:name "/rollback"      :argument nil :description "pick a generation for recovery")

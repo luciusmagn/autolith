@@ -195,6 +195,12 @@
                                               :test #'string=)
                                         :description))
                           "the active conversation is marked current")
+             (test-assert (search (application--abbreviated-directory
+                                   (namestring
+                                    (configuration-working-directory
+                                     configuration)))
+                                  (getf (first items) :description))
+                          "picker items show the conversation origin directory")
              (terminal-ui-start (application-ui application))
              (setf (scripted-terminal-events terminal) (list :submit))
              (test-assert (string= (application--pick-identifier
@@ -222,10 +228,50 @@
                  "non-interactive pickers demand an explicit identifier"))
   nil)
 
+(-> test-effort-switch () null)
+(defun test-effort-switch ()
+  "Test reasoning effort picker items and in-place configuration switching."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation (conversation-create configuration
+                                                   :identifier "effort"))
+                (application
+                  (make-instance 'application
+                                 :configuration configuration
+                                 :conversation conversation
+                                 :provider nil
+                                 :tool-registry (make-default-tool-registry)
+                                 :worker (lisp-worker-create configuration)
+                                 :agent nil
+                                 :ui (terminal-ui-create
+                                      :terminal (make-instance
+                                                 'recording-terminal
+                                                 :columns 60)))))
+           (let ((items (application--effort-items application)))
+             (test-assert (= (length items)
+                             (length +supported-reasoning-efforts+))
+                          "every supported effort is offered")
+             (test-assert (find "current" items
+                                :key (lambda (item)
+                                       (getf item :description))
+                                :test #'string=)
+                          "the active effort is marked current"))
+           (application-set-reasoning-effort application "low")
+           (test-assert (string= (configuration-reasoning-effort
+                                  (application-configuration application))
+                                 "low")
+                        "switching effort replaces the configuration")
+           (test-assert (typep (application-agent application) 'agent)
+                        "switching effort reconnects the agent"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> run-application-tests () boolean)
 (defun run-application-tests ()
   "Run focused application presentation tests and return true on success."
   (test-transcript-entries)
   (test-streaming-presentation)
   (test-conversation-picker)
+  (test-effort-switch)
   t)

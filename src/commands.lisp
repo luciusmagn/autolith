@@ -17,11 +17,14 @@
 
 (-> application-list-conversations (application) string)
 (defun application-list-conversations (application)
-  "Return known conversation identifiers newest first."
-  (let ((pathnames (conversation-list (application-configuration application))))
-    (if pathnames
+  "Return saved conversations newest first with their times and origins."
+  (let ((items (application--conversation-items application)))
+    (if items
         (format nil "conversations~%~{~A~%~}"
-                (mapcar #'pathname-name pathnames))
+                (loop for item in items
+                      collect (format nil "~A  ~A"
+                                      (getf item :name)
+                                      (getf item :description))))
         "No saved conversations exist.")))
 
 
@@ -36,6 +39,16 @@
     (format nil "~4,'0D-~2,'0D-~2,'0D ~2,'0D:~2,'0D"
             year month date hour minute)))
 
+(-> application--abbreviated-directory ((option string)) (option string))
+(defun application--abbreviated-directory (namestring)
+  "Return NAMESTRING with the user home directory abbreviated to a tilde."
+  (when (non-empty-string-p namestring)
+    (let ((home (namestring (user-homedir-pathname))))
+      (if (and (uiop:string-prefix-p home namestring)
+               (> (length namestring) (length home)))
+          (concatenate 'string "~/" (subseq namestring (length home)))
+          namestring))))
+
 (-> application--conversation-items (application) list)
 (defun application--conversation-items (application)
   "Return picker items for saved conversations, newest first."
@@ -44,13 +57,50 @@
     (loop for pathname in (conversation-list
                            (application-configuration application))
           for identifier = (pathname-name pathname)
+          for header = (conversation-peek-header pathname)
           collect (list :name identifier
                         :argument nil
                         :description
-                        (format nil "~A~:[~;, current~]"
+                        (format nil "~A~@[, ~A~]~:[~;, current~]"
                                 (application--calendar-description
                                  (or (file-write-date pathname) 0))
+                                (application--abbreviated-directory
+                                 (getf (rest header) :directory))
                                 (string= identifier current))))))
+
+(-> application--effort-items (application) list)
+(defun application--effort-items (application)
+  "Return picker items for the supported reasoning efforts."
+  (let ((current (configuration-reasoning-effort
+                  (application-configuration application))))
+    (loop for effort in +supported-reasoning-efforts+
+          collect (list :name effort
+                        :argument nil
+                        :description (if (string= effort current)
+                                         "current"
+                                         "")))))
+
+(-> application-set-reasoning-effort (application string) null)
+(defun application-set-reasoning-effort (application effort)
+  "Switch APPLICATION to reasoning EFFORT for this session's next turns."
+  (let* ((previous (application-configuration application))
+         (configuration (configuration-create
+                         :working-directory (configuration-working-directory
+                                             previous)
+                         :model (configuration-model previous)
+                         :reasoning-effort effort))
+         (provider (provider-create configuration))
+         (agent (agent-create :configuration configuration
+                              :provider provider
+                              :conversation (application-conversation
+                                             application)
+                              :tool-registry (application-tool-registry
+                                              application)
+                              :worker (application-worker application))))
+    (setf (application-configuration application) configuration
+          (application-provider application) provider
+          (application-agent application) agent))
+  nil)
 
 (-> application--generation-items (application) list)
 (defun application--generation-items (application)
@@ -167,6 +217,23 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        :continue)
       ((string= command "/auth")
        (application-authenticate application)
+       :continue)
+      ((string= command "/effort")
+       (let ((effort
+               (or argument
+                   (application--pick-identifier
+                    application
+                    :title "pick the reasoning effort"
+                    :items (application--effort-items application)
+                    :usage "Usage: /effort LEVEL"
+                    :empty-notice "No supported reasoning efforts exist."))))
+         (when effort
+           (application-set-reasoning-effort application effort)
+           (application-present
+            application
+            (format nil "Reasoning effort is now ~A."
+                    (configuration-reasoning-effort
+                     (application-configuration application))))))
        :continue)
       ((string= command "/checkpoint")
        (application-checkpoint application)

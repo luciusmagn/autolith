@@ -97,14 +97,16 @@ name when it still needs an argument. The commands are:
 /resume         pick a saved conversation to resume
 /conversations  list saved conversations
 /auth           authenticate Frob with ChatGPT
+/effort         pick the reasoning effort
 /checkpoint     save a retained live generation
 /generations    list retained generations
 /rollback       pick a generation for recovery
 /quit           leave Frob
 #+END_EXAMPLE
 
-=/resume= and =/rollback= open an interactive picker listing saved items
-newest first; both also accept an explicit identifier argument.
+=/resume=, =/rollback=, and =/effort= open an interactive picker listing
+choices newest first; each also accepts an explicit argument. Conversations
+remember the directory they were started in, and the picker shows it.
 
 Use a double slash to send a user message that begins with a literal slash.
 
