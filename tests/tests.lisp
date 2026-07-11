@@ -101,6 +101,100 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-provider-request () null)
+(defun test-provider-request ()
+  "Test the Sol Responses Lite request shape without network access."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation (conversation-create configuration
+                                                   :identifier "request-shape"))
+                (provider (provider-create configuration))
+                (schemas (json-array
+                          (json-object
+                           "type" "namespace"
+                           "name" "test"
+                           "description" "Test tools."
+                           "tools" (json-array))))
+                (request nil))
+           (conversation-append-user-message conversation "hello")
+           (setf request (provider-request-object provider conversation schemas))
+           (let ((input (json-get request "input")))
+             (test-assert (= (length input) 3)
+                          "the provider request prefixes two developer items")
+             (test-assert
+              (string= (json-get (aref input 0) "type") "additional_tools")
+              "additional tools are the first input item")
+             (test-assert
+              (string= (json-get (aref input 1) "role") "developer")
+              "the Frob system prompt is the second input item")
+             (test-assert (string= (json-get (aref input 2) "role") "user")
+                          "conversation history follows the developer prefix"))
+           (test-assert
+            (string= (json-get (json-get request "reasoning") "effort") "max")
+            "the provider request maps Ultra reasoning to Max")
+           (multiple-value-bind (value present-p)
+               (gethash "instructions" request)
+             (declare (ignore value))
+             (test-assert (not present-p)
+                          "Responses Lite omits top-level instructions")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-sse-event-string (json-object) string)
+(defun test-sse-event-string (event)
+  "Encode EVENT as one complete server-sent event."
+  (format nil "data: ~A~%~%" (json-encode event)))
+
+(-> test-provider-stream-decoding () null)
+(defun test-provider-stream-decoding ()
+  "Test semantic stream decoding from a deterministic SSE fixture."
+  (let* ((message-item
+           (json-object
+            "id" "ephemeral-item-id"
+            "type" "message"
+            "role" "assistant"
+            "content" (json-array
+                       (json-object "type" "output_text" "text" "hello"))))
+         (source
+           (concatenate
+            'string
+            (test-sse-event-string
+             (json-object
+              "type" "response.created"
+              "response" (json-object "id" "response-1")))
+            (test-sse-event-string
+             (json-object "type" "response.output_text.delta" "delta" "hello"))
+            (test-sse-event-string
+             (json-object
+              "type" "response.output_item.done"
+              "item" message-item))
+            (test-sse-event-string
+             (json-object
+              "type" "response.completed"
+              "response" (json-object
+                           "id" "response-1"
+                           "usage" (json-object "input_tokens" 5))))))
+         (events nil)
+         (result
+           (provider--consume-stream
+            (make-string-input-stream source)
+            '(("x-codex-turn-state" . "turn-state-1"))
+            (lambda (event)
+              (push event events)))))
+    (test-assert (= (length (provider-result-output-items result)) 1)
+                 "the stream retains one authoritative completed item")
+    (test-assert (string= (provider-result-response-id result) "response-1")
+                 "the stream retains its response identifier")
+    (test-assert (string= (provider-result-turn-state result) "turn-state-1")
+                 "the stream retains request-local turn state")
+    (test-assert (not (gethash "id"
+                               (first (provider-result-output-items result))))
+                 "completed response items discard transient server identifiers")
+    (test-assert (= (length events) 3)
+                 "the stream emits delta, item, and completion events"))
+  nil)
+
 (-> run-tests () boolean)
 (defun run-tests ()
   "Run Frob's dependency-free unit tests and return true on success."
@@ -117,6 +211,8 @@
     (test-assert (= (json-get (json-object "answer" 42) "answer") 42)
                  "JSON object access preserves values")
     (test-conversation-persistence)
-    (test-authentication-store))
+    (test-authentication-store)
+    (test-provider-request)
+    (test-provider-stream-decoding))
   (format t "~&~:D Frob tests passed.~%" *test-count*)
   t)
