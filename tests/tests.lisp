@@ -251,6 +251,53 @@
                  "worker protocol errors carry a readable condition report"))
   nil)
 
+(-> test-self-target () integer)
+(defun test-self-target ()
+  "Return the baseline value used by active-image mutation tests."
+  0)
+
+(-> test-self-tools () null)
+(defun test-self-tools ()
+  "Test active definition installation, inspection, and form-aware persistence."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (pathname (merge-pathnames "definitions.lisp" root))
+         (previous-function (symbol-function 'test-self-target)))
+    (unwind-protect
+         (progn
+           (self-install-definition
+            configuration
+            "(defun test-self-target () \"Return the installed test value.\" 42)")
+           (test-assert (= (test-self-target) 42)
+                        "self definition installation mutates the active image")
+           (test-assert
+            (search "Return the installed test value."
+                    (self-inspect-symbol 'test-self-target))
+            "active-image inspection exposes function documentation")
+           (ensure-directories-exist pathname)
+           (with-open-file (stream pathname
+                                   :direction :output
+                                   :if-exists :supersede
+                                   :if-does-not-exist :create
+                                   :external-format :utf-8)
+             (format stream
+                     "; preserve this comment~%~%(defun first-definition () 1)~%~%(defun test-self-target () 0)~%"))
+           (source-replace-definition
+            pathname
+            "(defun test-self-target () \"Persisted documentation.\" 84)")
+           (let ((updated (uiop:read-file-string pathname)))
+             (test-assert (search "; preserve this comment" updated)
+                          "form-aware replacement preserves preceding comments")
+             (test-assert (search "Persisted documentation." updated)
+                          "form-aware replacement writes the complete definition")
+             (test-assert (search "(defun first-definition () 1)" updated)
+                          "form-aware replacement preserves neighboring forms")))
+      (setf (symbol-function 'test-self-target) previous-function)
+      (remhash (definition-key '(defun test-self-target () 0))
+               *exploratory-definitions*)
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> run-tests () boolean)
 (defun run-tests ()
   "Run Frob's dependency-free unit tests and return true on success."
@@ -271,6 +318,7 @@
     (test-provider-request)
     (test-provider-stream-decoding)
     (test-tool-registry)
-    (test-lisp-worker-protocol))
+    (test-lisp-worker-protocol)
+    (test-self-tools))
   (format t "~&~:D Frob tests passed.~%" *test-count*)
   t)

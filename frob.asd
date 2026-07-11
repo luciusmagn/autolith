@@ -24,7 +24,8 @@
                              (:file "prompt")
                              (:file "provider")
                              (:file "tools")
-                             (:file "lisp-worker"))))
+                             (:file "lisp-worker")
+                             (:file "self-tools"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:frob/tests))))
 
 (asdf:defsystem #:frob/tests
