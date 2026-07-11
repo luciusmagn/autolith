@@ -46,10 +46,18 @@
   :serial t
   :components ((:module "tests"
                 :serial t
-                :components ((:file "tests")
+                :components ((:file "test-support")
+                             (:file "conversation-tests")
+                             (:file "authentication-tests")
+                             (:file "provider-tests")
+                             (:file "tool-tests")
+                             (:file "generation-tests")
+                             (:file "lisp-worker-tests")
+                             (:file "self-tool-tests")
                              (:file "device-authentication-tests")
                              (:file "agent-tests")
-                             (:file "terminal-tests"))))
+                             (:file "terminal-tests")
+                             (:file "tests"))))
   :perform (asdf:test-op (operation component)
              (declare (ignore operation component))
              (uiop:symbol-call '#:frob '#:run-tests)))
