@@ -409,18 +409,7 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
                     :usage "Usage: /rollback ID"
                     :empty-notice "No retained generations exist."))))
          (when identifier
-           (let ((generation (generation-find configuration identifier)))
-             (unless generation
-               (error 'checkpoint-error
-                      :message (format nil "Unknown retained generation ~A."
-                                       identifier)
-                      :stage ':selection
-                      :pathname nil))
-             (generation-select configuration generation)
-             (application-present
-              application
-              (format nil "Selected ~A. Run frob --recovery to boot it."
-                      identifier)))))
+           (generation-request-rollback configuration identifier)))
        :continue)
       (t
        (application-present application

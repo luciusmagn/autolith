@@ -84,6 +84,8 @@
                             (when (eq (application-handle-input application payload)
                                       :quit)
                               (return))
+                          (rollback-requested (condition)
+                            (error condition))
                           ((or agent-loop-error
                                conversation-invariant-error
                                response-stream-error
@@ -107,6 +109,12 @@
 
 
 ;;;; -- Command-Line Entry --
+
+(defconstant +main-fatal-recovery-status+ 70
+  "The process status asking the stable launcher to recover after a fatal error.")
+
+(defconstant +main-rollback-recovery-status+ 75
+  "The process status asking the stable launcher to start a selected rollback.")
 
 (-> main-usage () string)
 (defun main-usage ()
@@ -164,14 +172,19 @@
                                      :format-control "Intentional recovery test."
                                      :format-arguments nil))))
               (format *error-output* "Intentional crash capsule: ~A~%" capsule)
-              (uiop:quit 70)))
+              (uiop:quit +main-fatal-recovery-status+)))
           (handler-case
               (application-run *active-application*)
+            (rollback-requested (condition)
+              (format *error-output*
+                      "Frob is rolling back to retained generation ~A.~%"
+                      (rollback-requested-generation-id condition))
+              (uiop:quit +main-rollback-recovery-status+))
             (fatal-control-path-error (condition)
               (format *error-output*
                       "Frob entered recovery after a fatal error. Capsule: ~A~%"
                       (fatal-control-path-error-capsule-pathname condition))
-              (uiop:quit 70))))))))
+              (uiop:quit +main-fatal-recovery-status+))))))))
   nil)
 
 (-> main (list) null)

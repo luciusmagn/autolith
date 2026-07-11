@@ -124,7 +124,31 @@
                (test-assert
                 (string= (generation-identifier selected)
                          "rollback-generation")
-                "the rollback selection names the requested generation"))))
+                "the rollback selection names the requested generation"))
+             (let* ((application
+                      (make-instance 'application
+                                     :configuration configuration
+                                     :conversation conversation
+                                     :provider nil
+                                     :tool-registry (make-instance 'tool-registry)
+                                     :worker nil
+                                     :agent nil
+                                     :ui nil))
+                    (command-condition
+                      (handler-case
+                          (progn
+                            (application-command
+                             application
+                             "/rollback rollback-generation")
+                            nil)
+                        (rollback-requested (condition)
+                          condition))))
+               (test-assert command-condition
+                            "/rollback requests process recovery immediately")
+               (test-assert
+                (string= (rollback-requested-generation-id command-condition)
+                         "rollback-generation")
+                "/rollback carries the selected generation into recovery"))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
