@@ -161,6 +161,21 @@
   (setf (generation-status generation) ':ready)
   generation)
 
+(-> generation-record-failure (generation keyword t) pathname)
+(defun generation-record-failure (generation stage detail)
+  "Record a bounded non-secret checkpoint failure at STAGE for GENERATION."
+  (let ((pathname (merge-pathnames "failure.sexp"
+                                   (generation-directory generation))))
+    (generation--write-form-atomically
+     pathname
+     (list :checkpoint-failure
+           :version 1
+           :id (generation-identifier generation)
+           :time (get-universal-time)
+           :stage stage
+           :detail (bounded-string detail :limit 4000)))
+    pathname))
+
 
 ;;;; -- Manifest Loading --
 
@@ -447,7 +462,9 @@
          :executable nil
          :purify nil
          :compression nil))
-    (error ()
+    (error (condition)
+      (ignore-errors
+        (generation-record-failure generation ':save condition))
       (sb-posix:_exit 1)))
   nil)
 
@@ -468,8 +485,22 @@
                     (progn
                       (generation-publish configuration generation)
                       (sb-posix:_exit 0))
-                    (sb-posix:_exit 1))))))
-    (error ()
+                    (progn
+                      (unless (probe-file
+                               (merge-pathnames "failure.sexp"
+                                                (generation-directory generation)))
+                        (generation-record-failure
+                         generation
+                         ':saver-exit
+                         (if (sb-posix:wifexited status)
+                             (format nil "Saver exited with status ~D."
+                                     (sb-posix:wexitstatus status))
+                             (format nil "Saver terminated with status word ~D."
+                                     status))))
+                      (sb-posix:_exit 1)))))))
+    (error (condition)
+      (ignore-errors
+        (generation-record-failure generation ':coordinator condition))
       (sb-posix:_exit 1)))
   nil)
 
