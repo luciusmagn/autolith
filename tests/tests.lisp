@@ -72,6 +72,35 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-authentication-store () null)
+(defun test-authentication-store ()
+  "Test private credential storage without exposing real authentication data."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (source (make-instance 'frob-credential-source
+                                :pathname (configuration-auth-path configuration)))
+         (credentials (make-instance 'oauth-credentials
+                                     :access-token "test-access-token"
+                                     :refresh-token "test-refresh-token"
+                                     :id-token nil
+                                     :account-id "test-account"
+                                     :expires-at nil
+                                     :source-path (configuration-auth-path configuration))))
+    (unwind-protect
+         (progn
+           (credential-source-save source credentials)
+           (let* ((loaded (credential-source-load source))
+                  (mode (sb-posix:stat-mode
+                         (sb-posix:stat
+                          (namestring (configuration-auth-path configuration))))))
+             (test-assert
+              (string= (oauth-credentials-account-id loaded) "test-account")
+              "the private credential store round-trips its account")
+             (test-assert (= (logand mode #o777) #o600)
+                          "the private credential store has mode 0600")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> run-tests () boolean)
 (defun run-tests ()
   "Run Frob's dependency-free unit tests and return true on success."
@@ -87,6 +116,7 @@
                  "ultra maps to the provider max effort")
     (test-assert (= (json-get (json-object "answer" 42) "answer") 42)
                  "JSON object access preserves values")
-    (test-conversation-persistence))
+    (test-conversation-persistence)
+    (test-authentication-store))
   (format t "~&~:D Frob tests passed.~%" *test-count*)
   t)
