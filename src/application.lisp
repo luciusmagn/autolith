@@ -222,9 +222,75 @@
 
 ;;;; -- Transcript Projection --
 
-(-> response-item-text (json-object) (option string))
-(defun response-item-text (item)
-  "Return a human-readable transcript entry for completed provider ITEM."
+(define-constant +application-tool-output-lines+ 12
+  :documentation "The maximum tool output lines shown in the terminal transcript.")
+
+(-> application--transcript-width (application) integer)
+(defun application--transcript-width (application)
+  "Return APPLICATION's terminal width available to wrapped transcript bodies."
+  (max 20
+       (- (terminal-columns (terminal-ui-terminal (application-ui application)))
+          3)))
+
+(-> application--indented-body (application string) string)
+(defun application--indented-body (application text)
+  "Return sanitized TEXT wrapped and indented under its transcript header."
+  (format nil "~{  ~A~^~%~}"
+          (terminal--wrap-text (terminal-sanitize-text text)
+                               (application--transcript-width application))))
+
+(-> application--transcript-entry
+    (application &key (:style terminal-style) (:header string)
+                 (:detail (option string)) (:body (option string))
+                 (:body-style terminal-style))
+    list)
+(defun application--transcript-entry
+    (application &key (style ':plain) (header "") detail body
+                 (body-style ':plain))
+  "Return one styled transcript entry with HEADER, optional DETAIL, and BODY rows."
+  (let ((spans (list (terminal-span style header))))
+    (when detail
+      (let ((available (- (terminal-columns
+                           (terminal-ui-terminal (application-ui application)))
+                          3
+                          (terminal--text-width header)))
+            (safe-detail (terminal-sanitize-text detail :single-line-p t)))
+        (when (> available 1)
+          (let ((visible (terminal--prefix-within-width safe-detail
+                                                        (1- available))))
+            (setf spans
+                  (append spans
+                          (list (terminal-span
+                                 :dim
+                                 (format nil "  ~A~:[~;…~]"
+                                         visible
+                                         (< (length visible)
+                                            (length safe-detail)))))))))))
+    (when body
+      (setf spans
+            (append spans
+                    (list (terminal-span ':plain (string #\Newline))
+                          (terminal-span body-style
+                                         (application--indented-body
+                                          application
+                                          body))))))
+    spans))
+
+(-> application--bounded-tool-output (t) (option string))
+(defun application--bounded-tool-output (output)
+  "Return displayable tool OUTPUT bounded to a readable number of lines."
+  (let ((text (bounded-string output :limit 2000)))
+    (when (non-empty-string-p text)
+      (let ((lines (uiop:split-string text :separator '(#\Newline))))
+        (if (<= (length lines) +application-tool-output-lines+)
+            text
+            (format nil "~{~A~^~%~}~%… +~D more lines"
+                    (subseq lines 0 +application-tool-output-lines+)
+                    (- (length lines) +application-tool-output-lines+)))))))
+
+(-> response-item-entry (application json-object) (option list))
+(defun response-item-entry (application item)
+  "Return a styled transcript entry for completed provider ITEM."
   (let ((type (json-get item "type")))
     (cond
       ((and (string= (or type "") "message")
@@ -240,43 +306,59 @@
                                    (stringp (json-get part "text")))
                            collect (json-get part "text"))))
              (when parts
-               (format nil "assistant~%~{~A~^~%~}" parts))))))
+               (application--transcript-entry
+                application
+                :style ':brand
+                :header "● frob"
+                :body (format nil "~{~A~^~%~}" parts)))))))
       ((string= (or type "") "function_call")
-       (format nil "tool request~%~A~@[~%~A~]"
-               (function-call-canonical-name item)
-               (let ((arguments (json-get item "arguments")))
-                 (and (non-empty-string-p arguments)
-                      (bounded-string arguments :limit 2000)))))
+       (application--transcript-entry
+        application
+        :style ':tool
+        :header (format nil "▸ ~A" (function-call-canonical-name item))
+        :detail (let ((arguments (json-get item "arguments")))
+                  (and (non-empty-string-p arguments)
+                       arguments))))
       (t
        nil))))
 
-(-> conversation-record-text (list) (option string))
-(defun conversation-record-text (record)
-  "Return the terminal transcript text represented by durable RECORD."
+(-> conversation-record-entry (application list) (option list))
+(defun conversation-record-entry (application record)
+  "Return the styled transcript entry represented by durable RECORD."
   (case (first record)
     (:message
      (when (eq (getf (rest record) :role) :user)
-       (format nil "you~%~A" (getf (rest record) :content))))
+       (application--transcript-entry application
+                                      :style ':user
+                                      :header "❯ you"
+                                      :body (getf (rest record) :content))))
     (:provider-item
      (let ((wire-json (getf (rest record) :wire-json)))
        (and (stringp wire-json)
-            (response-item-text (json-decode wire-json)))))
+            (response-item-entry application (json-decode wire-json)))))
     (:tool-result
-     (format nil "tool result: ~A (~(~A~))~%~A"
-             (getf (rest record) :tool)
-             (getf (rest record) :status)
-             (getf (rest record) :output)))
+     (let ((success-p (eq (getf (rest record) :status) ':ok)))
+       (application--transcript-entry
+        application
+        :style (if success-p
+                   ':success
+                   ':failure)
+        :header (format nil "~:[✗ ~A failed~;✓ ~A~]"
+                        success-p
+                        (getf (rest record) :tool))
+        :body (application--bounded-tool-output (getf (rest record) :output))
+        :body-style ':dim)))
     (otherwise
      nil)))
 
-(-> application-present (application string) boolean)
-(defun application-present (application text)
-  "Append non-conversation TEXT once to APPLICATION's normal scrollback."
+(-> application-present (application (or string list)) boolean)
+(defun application-present (application entry)
+  "Append non-conversation ENTRY once to APPLICATION's normal scrollback."
   (let ((identifier (incf (application-presentation-counter application))))
     (terminal-ui-append-finalized
      (application-ui application)
      (list :presentation identifier)
-     text)))
+     entry)))
 
 (-> application-render-records (application) null)
 (defun application-render-records (application)
@@ -288,12 +370,12 @@
       (let ((sequence (getf (rest record) :seq)))
         (when (and (integerp sequence)
                    (> sequence (application-rendered-sequence application)))
-          (let ((text (conversation-record-text record)))
-            (when text
+          (let ((entry (conversation-record-entry application record)))
+            (when entry
               (terminal-ui-append-finalized
                (application-ui application)
                (list :conversation conversation-id sequence)
-               text)))
+               entry)))
           (setf (application-rendered-sequence application) sequence)))))
   nil)
 
@@ -321,7 +403,7 @@
        (setf assistant-tail
              (bounded-string (concatenate 'string assistant-tail delta)
                              :limit 500))
-       (application-stream-status application "assistant" assistant-tail))
+       (application-stream-status application "frob" assistant-tail))
      :reasoning-callback
      (lambda (delta)
        (setf reasoning-tail
@@ -355,7 +437,10 @@
     (terminal-ui-append-finalized
      (application-ui application)
      identifier
-     (format nil "you~%~A" content))
+     (application--transcript-entry application
+                                    :style ':user
+                                    :header "❯ you"
+                                    :body content))
     (setf (application-rendered-sequence application) sequence)
     (unwind-protect
          (progn

@@ -21,10 +21,14 @@
   (application-render-records application)
   (application-present
    application
-   (if (typep condition 'credentials-unavailable)
-       (format nil "error~%~A~%Use /auth to authenticate Frob directly."
-               condition)
-       (format nil "error~%~A" condition)))
+   (application--transcript-entry
+    application
+    :style ':failure
+    :header "✗ error"
+    :body (if (typep condition 'credentials-unavailable)
+              (format nil "~A~%Use /auth to authenticate Frob directly."
+                      condition)
+              (format nil "~A" condition))))
   nil)
 
 (-> application-update-size (application) null)

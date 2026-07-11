@@ -58,6 +58,7 @@
                              (:file "device-authentication-tests")
                              (:file "agent-tests")
                              (:file "terminal-tests")
+                             (:file "application-tests")
                              (:file "tests"))))
   :perform (asdf:test-op (operation component)
              (declare (ignore operation component))

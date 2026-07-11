@@ -34,6 +34,7 @@
     (test-crash-capsule-correlation)
     (run-device-authentication-tests)
     (run-agent-tests)
-    (run-terminal-tests))
+    (run-terminal-tests)
+    (run-application-tests))
   (format t "~&~:D Frob tests passed.~%" *test-count*)
   t)
