@@ -18,6 +18,12 @@
     :reader conversation-created-at
     :type timestamp
     :documentation "The creation time as Common Lisp universal time.")
+   (origin-directory
+    :initarg :origin-directory
+    :initform nil
+    :reader conversation-origin-directory
+    :type (option string)
+    :documentation "The workspace directory in which this conversation began.")
    (next-sequence
     :initarg :next-sequence
     :accessor conversation-next-sequence
@@ -58,6 +64,8 @@
   (let* ((created-at (get-universal-time))
          (conversation-id (or identifier (make-identifier)))
          (root (configuration-conversation-root configuration))
+         (origin-directory (namestring
+                            (configuration-working-directory configuration)))
          (pathname (merge-pathnames
                     (make-pathname :name conversation-id :type "sexp")
                     root))
@@ -66,6 +74,7 @@
                           :identifier conversation-id
                           :pathname pathname
                           :created-at created-at
+                          :origin-directory origin-directory
                           :next-sequence 1
                           :input-items nil)))
     (when (probe-file pathname)
@@ -78,7 +87,8 @@
      (list :conversation
            :version 1
            :id conversation-id
-           :created-at created-at))
+           :created-at created-at
+           :directory origin-directory))
     conversation))
 
 (-> conversation-append-record (conversation list) list)
@@ -227,6 +237,24 @@
         (conversation--append-input-item conversation item))))
   nil)
 
+(-> conversation-peek-header (pathname) (option list))
+(defun conversation-peek-header (pathname)
+  "Return PATHNAME's leading conversation header form, or NIL when unreadable.
+
+Only the first top-level form is read, so peeking stays cheap for large
+conversation files."
+  (handler-case
+      (with-open-file (stream pathname :direction :input :external-format :utf-8)
+        (let* ((*read-eval* nil)
+               (end-marker (cons nil nil))
+               (form (read stream nil end-marker)))
+          (if (and (listp form)
+                   (eq (first form) :conversation))
+              form
+              nil)))
+    (error ()
+      nil)))
+
 (-> conversation-load (pathname) conversation)
 (defun conversation-load (pathname)
   "Load a conversation from PATHNAME and rebuild its provider input projection."
@@ -240,13 +268,16 @@
              :message "The conversation header is missing or unsupported."
              :pathname pathname
              :sequence nil))
-    (let ((conversation
-            (make-instance 'conversation
-                           :identifier (getf (rest header) :id)
-                           :pathname pathname
-                           :created-at (getf (rest header) :created-at)
-                           :next-sequence 1
-                           :input-items nil)))
+    (let* ((directory (getf (rest header) :directory))
+           (conversation
+             (make-instance 'conversation
+                            :identifier (getf (rest header) :id)
+                            :pathname pathname
+                            :created-at (getf (rest header) :created-at)
+                            :origin-directory (and (stringp directory)
+                                                   directory)
+                            :next-sequence 1
+                            :input-items nil)))
       (dolist (record (rest records))
         (conversation--apply-record conversation record))
       conversation)))

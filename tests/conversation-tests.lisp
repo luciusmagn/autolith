@@ -2,6 +2,41 @@
 
 ;;;; -- Subsystem Tests --
 
+(-> test-conversation-origin-directory () null)
+(defun test-conversation-origin-directory ()
+  "Test origin directory persistence, peeking, and legacy header tolerance."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation (conversation-create configuration
+                                                   :identifier "origin"))
+                (expected (namestring
+                           (configuration-working-directory configuration))))
+           (test-assert (string= (conversation-origin-directory conversation)
+                                 expected)
+                        "a new conversation records its origin directory")
+           (test-assert (string= (conversation-origin-directory
+                                  (conversation-load-by-id configuration
+                                                           "origin"))
+                                 expected)
+                        "a reloaded conversation preserves its origin directory")
+           (test-assert (string= (getf (rest (conversation-peek-header
+                                              (conversation-pathname
+                                               conversation)))
+                                       :directory)
+                                 expected)
+                        "peeking reads the origin directory cheaply")
+           (let ((legacy (conversation-pathname-for-id configuration "legacy")))
+             (conversation--write-form
+              legacy
+              (list :conversation :version 1 :id "legacy" :created-at 1))
+             (test-assert (null (conversation-origin-directory
+                                 (conversation-load-by-id configuration
+                                                          "legacy")))
+                          "legacy conversations without an origin still load")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-conversation-persistence () null)
 (defun test-conversation-persistence ()
   "Test append-only conversation projection and incomplete-tail recovery."

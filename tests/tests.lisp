@@ -23,6 +23,7 @@
                          (system-prompt configuration))
                  "the system prompt carries the current date")
     (test-conversation-persistence)
+    (test-conversation-origin-directory)
     (test-authentication-store)
     (test-authentication-bootstrap-and-refresh)
     (test-provider-request)
