@@ -19,6 +19,7 @@
                              (:file "conditions")
                              (:file "json")
                              (:file "configuration")
+                             (:file "conversation")
                              (:file "prompt"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:frob/tests))))
 
