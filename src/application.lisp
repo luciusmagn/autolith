@@ -99,6 +99,13 @@
                  nil)))
         +terminal-default-columns+)))
 
+(-> application-pending-terminal-columns () (option integer))
+(defun application-pending-terminal-columns ()
+  "Consume a pending SIGWINCH and return the refreshed terminal width."
+  (when *terminal-resize-pending-p*
+    (setf *terminal-resize-pending-p* nil)
+    (terminal-current-columns)))
+
 (define-constant +application-prompt+ "❯ "
   :test #'string=
   :documentation "The styled input prompt shown on the live editor row.")

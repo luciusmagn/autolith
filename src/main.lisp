@@ -45,14 +45,12 @@
               (format nil "~A" condition))))
   nil)
 
-(-> application-update-size (application) null)
-(defun application-update-size (application)
-  "Apply a pending terminal resize to APPLICATION's unfinished rows."
-  (when *terminal-resize-pending-p*
-    (setf *terminal-resize-pending-p* nil)
-    (terminal-ui-resize (application-ui application)
-                        (terminal-current-columns)))
-  nil)
+(-> application-read-terminal-event (terminal-ui) t)
+(defun application-read-terminal-event (ui)
+  "Read one UI event, applying pending resizes before and after the blocking read."
+  (terminal-ui-refresh-size ui #'application-pending-terminal-columns)
+  (prog1 (terminal-ui-read-event ui)
+    (terminal-ui-refresh-size ui #'application-pending-terminal-columns)))
 
 (-> application-run (application) null)
 (defun application-run (application)
@@ -70,8 +68,7 @@
            (application-present application (application-banner application))
            (application-render-records application)
            (loop
-             (application-update-size application)
-             (let ((event (terminal-ui-read-event ui)))
+             (let ((event (application-read-terminal-event ui)))
                (multiple-value-bind (action payload)
                    (terminal-ui-process-event ui event)
                  (case action

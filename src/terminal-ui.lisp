@@ -426,15 +426,38 @@ live unfinished line continuing that block, or removes it when NIL."
   nil)
 
 
+(-> terminal-ui-refresh-size
+    (terminal-ui (option function))
+    boolean)
+(defun terminal-ui-refresh-size (ui callback)
+  "Apply CALLBACK's pending terminal width to UI and report whether it repainted."
+  (let ((columns (and callback (funcall callback))))
+    (cond
+      ((null columns)
+       nil)
+      ((typep columns '(integer 1))
+       (terminal-ui-resize ui columns)
+       t)
+      (t
+       (error 'terminal-error
+              :message "A terminal resize callback returned an invalid width."
+              :operation ':resize
+              :cause nil)))))
+
 (-> terminal-ui-select
-    (terminal-ui &key (:title string) (:items list))
+    (terminal-ui &key (:title string) (:items list)
+                 (:resize-callback (option function)))
     (option string))
-(defun terminal-ui-select (ui &key (title "select") items)
+(defun terminal-ui-select (ui &key (title "select") items resize-callback)
   "Run a modal picker over ITEMS and return the selected name, or NIL on cancel.
 
 Items follow the completion entry shape. Up and Down move the selection,
 Enter accepts it, and Escape, Ctrl-C, or end of input cancels. Returns NIL
-immediately when ITEMS is empty or the terminal is not interactive."
+immediately when ITEMS is empty or the terminal is not interactive.
+
+RESIZE-CALLBACK is queried before each blocking read and immediately after the
+read returns. It returns a positive pending width, or NIL when no resize needs
+to be applied."
   (block nil
     (unless (and items
                  (every #'terminal-completion-p items)
@@ -444,22 +467,24 @@ immediately when ITEMS is empty or the terminal is not interactive."
           (list :title title :items items :selection 0))
     (unwind-protect
          (loop
-           (terminal-ui--repaint-live ui)
-           (let ((event (terminal-read-event (terminal-ui-terminal ui)))
-                 (selection (getf (terminal-ui-selector ui) :selection)))
-             (cond
-               ((eq event :history-previous)
-                (setf (getf (terminal-ui-selector ui) :selection)
-                      (mod (1- selection) (length items))))
-               ((eq event :history-next)
-                (setf (getf (terminal-ui-selector ui) :selection)
-                      (mod (1+ selection) (length items))))
-               ((eq event :submit)
-                (return (getf (nth selection items) :name)))
-               ((member event '(:escape :interrupt :end-of-input))
-                (return nil))
-               (t
-                nil))))
+           (unless (terminal-ui-refresh-size ui resize-callback)
+             (terminal-ui--repaint-live ui))
+           (let ((event (terminal-read-event (terminal-ui-terminal ui))))
+             (terminal-ui-refresh-size ui resize-callback)
+             (let ((selection (getf (terminal-ui-selector ui) :selection)))
+               (cond
+                 ((eq event :history-previous)
+                  (setf (getf (terminal-ui-selector ui) :selection)
+                        (mod (1- selection) (length items))))
+                 ((eq event :history-next)
+                  (setf (getf (terminal-ui-selector ui) :selection)
+                        (mod (1+ selection) (length items))))
+                 ((eq event :submit)
+                  (return (getf (nth selection items) :name)))
+                 ((member event '(:escape :interrupt :end-of-input))
+                  (return nil))
+                 (t
+                  nil)))))
       (setf (terminal-ui-selector ui) nil)
       (terminal-ui--repaint-live ui))))
 
@@ -531,10 +556,9 @@ immediately when ITEMS is empty or the terminal is not interactive."
 (defun terminal-ui-resize (ui columns)
   "Set UI terminal width to positive COLUMNS and repaint only unfinished rows."
   (let ((new-columns (max 1 columns)))
-    (unless (= new-columns (terminal-columns (terminal-ui-terminal ui)))
-      (terminal-ui--clear-live ui)
-      (setf (terminal-columns (terminal-ui-terminal ui)) new-columns)
-      (terminal-ui--paint-live ui)))
+    (terminal-ui--clear-live ui)
+    (setf (terminal-columns (terminal-ui-terminal ui)) new-columns)
+    (terminal-ui--paint-live ui))
   ui)
 
 (-> terminal-ui-read-event (terminal-ui) t)

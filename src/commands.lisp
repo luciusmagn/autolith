@@ -282,7 +282,11 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
       (unless items
         (application-present application empty-notice)
         (return nil))
-      (terminal-ui-select ui :title title :items items))))
+      (terminal-ui-select
+       ui
+       :title title
+       :items items
+       :resize-callback #'application-pending-terminal-columns))))
 
 (-> application-authenticate (application) null)
 (defun application-authenticate (application)

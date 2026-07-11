@@ -50,11 +50,20 @@
     :initform nil
     :accessor scripted-terminal-events
     :type list
-    :documentation "Queued semantic input events served to the reader in order."))
+    :documentation "Queued semantic input events served to the reader in order.")
+   (read-callback
+    :initarg :read-callback
+    :initform nil
+    :reader scripted-terminal-read-callback
+    :type (option function)
+    :documentation "The optional callback invoked immediately before returning an event."))
   (:documentation "A recording terminal replaying scripted input events."))
 
 (defmethod terminal-read-event ((terminal scripted-terminal))
   "Serve the next scripted event, or end of input when exhausted."
+  (let ((callback (scripted-terminal-read-callback terminal)))
+    (when callback
+      (funcall callback)))
   (or (pop (scripted-terminal-events terminal)) :end-of-input))
 
 
@@ -514,6 +523,78 @@
                  "non-interactive terminals never open the picker"))
   nil)
 
+(-> test-terminal-modal-resize () null)
+(defun test-terminal-modal-resize ()
+  "Test that a resize raised during modal input repaints before event dispatch."
+  (let* ((previous-columns (uiop:getenv "COLUMNS"))
+         (*terminal-resize-pending-p* nil)
+         (terminal
+           (make-instance
+            'scripted-terminal
+            :columns 60
+            :events (list :submit)
+            :read-callback
+            (lambda ()
+              (sb-posix:setenv "COLUMNS" "18" 1)
+              (setf *terminal-resize-pending-p* t))))
+         (ui (terminal-ui-create :terminal terminal))
+         (items '((:name "alpha" :argument nil :description "first entry"))))
+    (unwind-protect
+         (with-terminal-ui (active-ui ui)
+           (recording-terminal-reset terminal)
+           (test-assert
+            (string= (terminal-ui-select
+                      active-ui
+                      :title "pick"
+                      :items items
+                      :resize-callback
+                      #'application-pending-terminal-columns)
+                     "alpha")
+            "submit still accepts the picker event received during resize")
+           (test-assert (= (terminal-columns terminal) 18)
+                        "a pending picker resize refreshes terminal columns")
+           (test-assert (null *terminal-resize-pending-p*)
+                        "the picker consumes the pending resize flag")
+           (test-assert
+            (= (terminal-tests--substring-count
+                "pick"
+                (recording-terminal-output terminal))
+               2)
+            "the picker repaints at the new width before submit exits"))
+      (if previous-columns
+          (sb-posix:setenv "COLUMNS" previous-columns 1)
+          (sb-posix:unsetenv "COLUMNS"))))
+  nil)
+
+(-> test-terminal-application-read-resize () null)
+(defun test-terminal-application-read-resize ()
+  "Test that the outer application refreshes size before dispatching a read event."
+  (let* ((previous-columns (uiop:getenv "COLUMNS"))
+         (*terminal-resize-pending-p* nil)
+         (terminal
+           (make-instance
+            'scripted-terminal
+            :columns 60
+            :events (list :submit)
+            :read-callback
+            (lambda ()
+              (sb-posix:setenv "COLUMNS" "19" 1)
+              (setf *terminal-resize-pending-p* t))))
+         (ui (terminal-ui-create :terminal terminal)))
+    (unwind-protect
+         (with-terminal-ui (active-ui ui)
+           (test-assert (eq (application-read-terminal-event active-ui)
+                            :submit)
+                        "the application preserves the event read during resize")
+           (test-assert (= (terminal-columns terminal) 19)
+                        "the application refreshes width before event dispatch")
+           (test-assert (null *terminal-resize-pending-p*)
+                        "the application consumes a resize raised during read"))
+      (if previous-columns
+          (sb-posix:setenv "COLUMNS" previous-columns 1)
+          (sb-posix:unsetenv "COLUMNS"))))
+  nil)
+
 (-> test-terminal-styling-primitives () null)
 (defun test-terminal-styling-primitives ()
   "Test semantic style resolution, span safety, clipping, and word wrapping."
@@ -621,6 +702,8 @@
   (test-terminal-stream-update)
   (test-terminal-command-completion)
   (test-terminal-modal-selection)
+  (test-terminal-modal-resize)
+  (test-terminal-application-read-resize)
   (test-terminal-styling-primitives)
   (test-terminal-non-tty-fallback)
   t)
