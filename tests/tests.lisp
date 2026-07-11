@@ -667,6 +667,41 @@
             (search "Return the installed test value."
                     (self-inspect-symbol 'test-self-target))
             "active-image inspection exposes function documentation")
+           (test-assert
+            (equal (definition-signature
+                    '(defmethod sample-operation ((left string) right) left))
+                   (definition-signature
+                    '(defmethod sample-operation ((value string) ignored) value)))
+            "method identity ignores parameter names while retaining specializers")
+           (test-assert
+            (definition-form-p '(defun (setf sample-value) (value object)
+                                  (declare (ignore object))
+                                  value))
+            "definition identity accepts SETF function names")
+           (test-assert (definition-form-p '(defparameter *sample-value* 42))
+                        "durable definitions include mutable global parameters")
+           (let ((original
+                   (make-condition 'simple-error
+                                   :format-control "original failure"
+                                   :format-arguments nil)))
+             (test-assert
+              (handler-case
+                  (progn
+                    (self-restore-definition
+                     "(defun test-self-target () 0)"
+                     original
+                     :installer
+                     (lambda (definition source)
+                       (declare (ignore definition source))
+                       (error "restoration failure")))
+                    nil)
+                (active-image-corruption (condition)
+                  (and (eq (active-image-corruption-original-condition condition)
+                           original)
+                       (typep
+                        (active-image-corruption-restoration-condition condition)
+                        'serious-condition))))
+              "a restoration failure preserves both conditions and escapes tool handling"))
            (ensure-directories-exist pathname)
            (with-open-file (stream pathname
                                    :direction :output
@@ -704,6 +739,7 @@
          (previous-function (symbol-function 'test-self-target))
          (active-check-count 0)
          (source-check-count 0)
+         (expected-source-fragment "Return the durable baseline.")
          (checker
            (make-instance
             'callback-mutation-checker
@@ -712,7 +748,7 @@
               (declare (ignore checked-configuration definition-source))
               (incf active-check-count)
               (test-assert
-               (search "Return the durable baseline."
+               (search expected-source-fragment
                        (uiop:read-file-string source-pathname))
                "active checks run before durable source replacement")
               "active checks passed")
@@ -891,7 +927,83 @@
                          (string-trim
                           '(#\Space #\Tab #\Newline #\Return)
                           (self-git-command configuration '("rev-parse" "HEAD"))))
-                "the durable journal records the exact Git commit"))))
+                "the durable journal records the exact Git commit")
+               (setf expected-source-fragment "Return the durable value.")
+               (tool-execute
+                persist-tool
+                context
+                (json-object
+                 "definition"
+                 "(defun test-self-target () \"Return the reconciled value.\" 85)"
+                 "pathname" "src/definitions.lisp"))
+               (let* ((pending
+                        (loop for value being the hash-values of *durable-mutations*
+                              when (and
+                                    (eq (durable-mutation-phase value)
+                                        :source-written)
+                                    (search "reconciled"
+                                            (durable-mutation-proposed-source value)))
+                                return value))
+                      (identifier (durable-mutation-identifier pending)))
+                 (self-git-command
+                  configuration
+                  '("commit" "--quiet" "-m" "Commit before journal"
+                    "--only" "--" "src/definitions.lisp"))
+                 (clrhash *durable-mutations*)
+                 (durable-mutations-load configuration)
+                 (let ((reconciled (gethash identifier *durable-mutations*)))
+                   (test-assert
+                    (and reconciled
+                         (eq (durable-mutation-phase reconciled) :durable)
+                         (non-empty-string-p
+                          (durable-mutation-git-commit reconciled)))
+                    "journal replay reconciles a crash after Git commit")))
+               (setf expected-source-fragment "Return the reconciled value.")
+               (tool-execute
+                persist-tool
+                context
+                (json-object
+                 "definition"
+                 "(defun test-self-target () \"Return a drifting value.\" 86)"
+                 "pathname" "src/definitions.lisp"))
+               (let ((drifting
+                       (loop for value being the hash-values of *durable-mutations*
+                             when (and
+                                   (eq (durable-mutation-phase value)
+                                       :source-written)
+                                   (search "drifting"
+                                           (durable-mutation-proposed-source value)))
+                               return value)))
+                 (source-replace-definition
+                  source-pathname
+                  "(defun test-self-target () \"Return the reconciled value.\" 85)")
+                 (durable-mutation-mark-paths
+                  configuration
+                  '("src/definitions.lisp")
+                  (string-trim
+                   '(#\Space #\Tab #\Newline #\Return)
+                   (self-git-command configuration '("rev-parse" "HEAD"))))
+                 (test-assert (eq (durable-mutation-phase drifting) :superseded)
+                              "a committed path cannot bless a drifted definition")
+                 (mutation-journal-append
+                  configuration
+                  (list :mutation
+                        :kind :durable-definition
+                        :id (durable-mutation-identifier drifting)
+                        :target (durable-mutation-target drifting)
+                        :pathname (durable-mutation-pathname drifting)
+                        :previous (durable-mutation-previous-source drifting)
+                        :proposed (durable-mutation-proposed-source drifting)
+                        :base-commit (durable-mutation-base-commit drifting)
+                        :result :installed))
+                 (test-assert
+                  (handler-case
+                      (progn
+                        (durable-mutations-load configuration)
+                        nil)
+                    (source-mutation-error ()
+                      t))
+                  "journal replay rejects an illegal durable transition")))))
       (setf (symbol-function 'test-self-target) previous-function)
       (let ((test-identifiers nil))
         (maphash

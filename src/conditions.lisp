@@ -110,6 +110,19 @@
     :documentation "The source file involved in the failed mutation."))
   (:documentation "An active-image or durable source mutation failed."))
 
+(define-condition active-image-corruption (frob-error)
+  ((original-condition
+    :initarg :original-condition
+    :reader active-image-corruption-original-condition
+    :type serious-condition
+    :documentation "The mutation failure that initiated restoration.")
+   (restoration-condition
+    :initarg :restoration-condition
+    :reader active-image-corruption-restoration-condition
+    :type serious-condition
+    :documentation "The second failure that prevented image restoration."))
+  (:documentation "A failed mutation could not restore the preceding active definition."))
+
 (define-condition checkpoint-error (frob-error)
   ((stage
     :initarg :stage

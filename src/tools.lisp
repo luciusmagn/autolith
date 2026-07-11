@@ -298,6 +298,8 @@
                                         canonical-name)
                        :tool-name canonical-name))
               (tool-execute tool context arguments))))
+      (active-image-corruption (condition)
+        (error condition))
       (error (condition)
         (tool-failure
          (format nil "~A failed: ~A" canonical-name condition))))))

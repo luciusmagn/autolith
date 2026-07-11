@@ -239,6 +239,12 @@
     :reader durable-mutation-proposed-source
     :type string
     :documentation "The complete proposed source definition.")
+   (base-commit
+    :initarg :base-commit
+    :initform nil
+    :reader durable-mutation-base-commit
+    :type (option string)
+    :documentation "The Git revision preceding the source mutation.")
    (phase
     :initarg :phase
     :accessor durable-mutation-phase
@@ -269,11 +275,26 @@
           :pathname (durable-mutation-pathname mutation)
           :previous (durable-mutation-previous-source mutation)
           :proposed (durable-mutation-proposed-source mutation)
+          :base-commit (durable-mutation-base-commit mutation)
           :result (durable-mutation-phase mutation))
     (when (durable-mutation-git-commit mutation)
       (list :git-commit (durable-mutation-git-commit mutation)))
     (when detail
       (list :detail (bounded-string detail :limit 2000))))))
+
+(-> durable-mutation-transition-allowed-p (keyword keyword) boolean)
+(defun durable-mutation-transition-allowed-p (from-phase to-phase)
+  "Return true when FROM-PHASE may legally advance to TO-PHASE."
+  (and (member
+        to-phase
+        (case from-phase
+          (:pending '(:installed :failed :superseded))
+          (:installed '(:checked :failed :superseded))
+          (:checked '(:source-written :failed :superseded))
+          (:source-written '(:durable :failed :superseded))
+          (otherwise nil))
+        :test #'eq)
+       t))
 
 (-> durable-mutation-transition
     (configuration durable-mutation keyword &key (:detail t) (:git-commit (option string)))
@@ -281,25 +302,20 @@
 (defun durable-mutation-transition
     (configuration mutation phase &key detail git-commit)
   "Validate, apply, and journal MUTATION's transition to PHASE."
-  (let ((allowed
-          (case (durable-mutation-phase mutation)
-            (:pending '(:installed :failed :superseded))
-            (:installed '(:checked :failed :superseded))
-            (:checked '(:source-written :failed :superseded))
-            (:source-written '(:durable :failed :superseded))
-            (otherwise nil))))
-    (unless (member phase allowed :test #'eq)
+  (unless (durable-mutation-transition-allowed-p
+           (durable-mutation-phase mutation)
+           phase)
       (error 'source-mutation-error
              :message (format nil "Invalid durable mutation transition from ~S to ~S."
                               (durable-mutation-phase mutation)
                               phase)
              :tool-name "self.persist-definition"
              :pathname (durable-mutation-pathname mutation)))
-    (setf (durable-mutation-phase mutation) phase)
-    (when git-commit
-      (setf (durable-mutation-git-commit mutation) git-commit))
-    (durable-mutation-journal configuration mutation :detail detail)
-    mutation))
+  (setf (durable-mutation-phase mutation) phase)
+  (when git-commit
+    (setf (durable-mutation-git-commit mutation) git-commit))
+  (durable-mutation-journal configuration mutation :detail detail)
+  mutation)
 
 (-> durable-mutation-create
     (configuration list
@@ -320,6 +336,10 @@
                           :pathname relative-pathname
                           :previous-source previous-source
                           :proposed-source proposed-source
+                          :base-commit
+                          (string-trim
+                           '(#\Space #\Tab #\Newline #\Return)
+                           (self-git-command configuration '("rev-parse" "HEAD")))
                           :phase :pending)))
     (maphash
      (lambda (identifier existing)
@@ -341,6 +361,47 @@
     (durable-mutation-journal configuration mutation)
     mutation))
 
+(-> durable-mutation-source-current-p
+    (configuration durable-mutation)
+    boolean)
+(defun durable-mutation-source-current-p (configuration mutation)
+  "Return true when MUTATION's complete proposed form is authoritative source."
+  (handler-case
+      (let* ((pathname
+               (merge-pathnames (durable-mutation-pathname mutation)
+                                (configuration-source-root configuration)))
+             (proposed
+               (self-read-form (durable-mutation-proposed-source mutation)
+                               :read-eval nil)))
+        (multiple-value-bind (source-form source)
+            (source-find-definition pathname proposed)
+          (declare (ignore source))
+          (and (equal (source-form-form source-form) proposed) t)))
+    (error ()
+      nil)))
+
+(-> durable-mutation-committing-revision
+    (configuration durable-mutation)
+    (option string))
+(defun durable-mutation-committing-revision (configuration mutation)
+  "Return the first post-base commit touching MUTATION's source pathname."
+  (let ((base-commit (durable-mutation-base-commit mutation)))
+    (when (non-empty-string-p base-commit)
+      (let* ((output
+               (self-git-command
+                configuration
+                (list "log"
+                      "--format=%H"
+                      "--reverse"
+                      (format nil "~A..HEAD" base-commit)
+                      "--"
+                      (durable-mutation-pathname mutation))))
+             (commits
+               (remove-if-not
+                #'non-empty-string-p
+                (uiop:split-string output :separator '(#\Newline #\Return)))))
+        (first commits)))))
+
 (-> durable-mutation-mark-paths
     (configuration list string)
     list)
@@ -354,13 +415,54 @@
                   (member (durable-mutation-pathname mutation)
                           paths
                           :test #'string=))
-         (durable-mutation-transition configuration
-                                      mutation
-                                      :durable
-                                      :git-commit git-commit)
-         (push mutation marked)))
+         (if (durable-mutation-source-current-p configuration mutation)
+             (progn
+               (durable-mutation-transition configuration
+                                            mutation
+                                            :durable
+                                            :git-commit git-commit)
+               (push mutation marked))
+             (durable-mutation-transition
+              configuration
+              mutation
+              :superseded
+              :detail "Committed source no longer contains the proposed definition."))))
      *durable-mutations*)
     (nreverse marked)))
+
+(-> durable-mutations-reconcile (configuration) list)
+(defun durable-mutations-reconcile (configuration)
+  "Finish journal state for source-written mutations already committed to Git."
+  (let ((reconciled nil))
+    (maphash
+     (lambda (identifier mutation)
+       (declare (ignore identifier))
+       (when (eq (durable-mutation-phase mutation) :source-written)
+         (let* ((pathname (durable-mutation-pathname mutation))
+                (dirty
+                  (self-git-command configuration
+                                    (list "status" "--porcelain" "--" pathname)))
+                (commit
+                  (and (zerop (length dirty))
+                       (durable-mutation-committing-revision
+                        configuration mutation))))
+           (when commit
+             (if (durable-mutation-source-current-p configuration mutation)
+                 (progn
+                   (durable-mutation-transition configuration
+                                                mutation
+                                                :durable
+                                                :git-commit commit
+                                                :detail
+                                                "Reconciled after Git committed before journal publication.")
+                   (push mutation reconciled))
+                 (durable-mutation-transition
+                  configuration
+                  mutation
+                  :superseded
+                  :detail "Committed source superseded the proposed definition."))))))
+     *durable-mutations*)
+    (nreverse reconciled)))
 
 (-> mutation-journal-read-records (configuration) list)
 (defun mutation-journal-read-records (configuration)
@@ -387,18 +489,48 @@
             (nreverse records)))
         nil)))
 
-(-> durable-mutation-record-p (t) boolean)
-(defun durable-mutation-record-p (record)
-  "Return true when RECORD is a valid durable-definition journal state."
+(-> durable-mutation-journal-record-p (t) boolean)
+(defun durable-mutation-journal-record-p (record)
+  "Return true when RECORD claims to be a durable-definition journal state."
   (and (listp record)
        (eq (first record) :mutation)
        (eq (getf (rest record) :kind) :durable-definition)
+       t))
+
+(-> durable-mutation-record-p (configuration t) boolean)
+(defun durable-mutation-record-p (configuration record)
+  "Return true when RECORD is a valid durable-definition journal state."
+  (and (durable-mutation-journal-record-p record)
        (non-empty-string-p (getf (rest record) :id))
        (non-empty-string-p (getf (rest record) :target))
        (non-empty-string-p (getf (rest record) :pathname))
+       (uiop:subpathp
+        (merge-pathnames (getf (rest record) :pathname)
+                         (configuration-source-root configuration))
+        (merge-pathnames "src/" (configuration-source-root configuration)))
        (stringp (getf (rest record) :previous))
        (stringp (getf (rest record) :proposed))
-       (keywordp (getf (rest record) :result))
+       (or (null (getf (rest record) :base-commit))
+           (non-empty-string-p (getf (rest record) :base-commit)))
+       (member (getf (rest record) :result)
+               '(:pending :installed :checked :source-written
+                 :durable :failed :superseded)
+               :test #'eq)
+       t))
+
+(-> durable-mutation-record-matches-p (durable-mutation list) boolean)
+(defun durable-mutation-record-matches-p (mutation properties)
+  "Return true when PROPERTIES preserve MUTATION's immutable identity."
+  (and (string= (durable-mutation-target mutation)
+                (getf properties :target))
+       (string= (durable-mutation-pathname mutation)
+                (getf properties :pathname))
+       (string= (durable-mutation-previous-source mutation)
+                (getf properties :previous))
+       (string= (durable-mutation-proposed-source mutation)
+                (getf properties :proposed))
+       (equal (durable-mutation-base-commit mutation)
+              (getf properties :base-commit))
        t))
 
 (-> durable-mutations-load (configuration) hash-table)
@@ -406,21 +538,46 @@
   "Reconstruct durable mutation state from CONFIGURATION's append-only journal."
   (clrhash *durable-mutations*)
   (dolist (record (mutation-journal-read-records configuration))
-    (when (durable-mutation-record-p record)
+    (when (durable-mutation-journal-record-p record)
+      (unless (durable-mutation-record-p configuration record)
+        (error 'source-mutation-error
+               :message "A durable mutation journal record is invalid."
+               :tool-name "self.inspect"
+               :pathname (configuration-journal-path configuration)))
       (let* ((properties (rest record))
              (identifier (getf properties :id))
-             (mutation
-               (make-instance 'durable-mutation
-                              :identifier identifier
-                              :target (getf properties :target)
-                              :pathname (getf properties :pathname)
-                              :previous-source (getf properties :previous)
-                              :proposed-source (getf properties :proposed)
-                              :phase (getf properties :result))))
-        (setf (durable-mutation-git-commit mutation)
-              (getf properties :git-commit)
-              (gethash identifier *durable-mutations*)
-              mutation))))
+             (phase (getf properties :result))
+             (existing (gethash identifier *durable-mutations*)))
+        (if existing
+            (progn
+              (unless (and (durable-mutation-record-matches-p existing properties)
+                           (durable-mutation-transition-allowed-p
+                            (durable-mutation-phase existing)
+                            phase))
+                (error 'source-mutation-error
+                       :message "A durable mutation journal transition is invalid."
+                       :tool-name "self.inspect"
+                       :pathname (configuration-journal-path configuration)))
+              (setf (durable-mutation-phase existing) phase
+                    (durable-mutation-git-commit existing)
+                    (getf properties :git-commit)))
+            (progn
+              (unless (eq phase :pending)
+                (error 'source-mutation-error
+                       :message "A durable mutation journal begins after its pending state."
+                       :tool-name "self.inspect"
+                       :pathname (configuration-journal-path configuration)))
+              (let ((mutation
+                      (make-instance 'durable-mutation
+                                     :identifier identifier
+                                     :target (getf properties :target)
+                                     :pathname (getf properties :pathname)
+                                     :previous-source (getf properties :previous)
+                                     :proposed-source (getf properties :proposed)
+                                     :base-commit (getf properties :base-commit)
+                                     :phase phase)))
+                (setf (gethash identifier *durable-mutations*) mutation)))))))
+  (durable-mutations-reconcile configuration)
   *durable-mutations*)
 
 (-> self-capture-evaluation (function) (values list string))
@@ -480,8 +637,17 @@
 
 (defparameter +definition-operators+
   '(defun defgeneric defmethod defmacro defclass defstruct define-condition
-    deftype define-compiler-macro)
+    deftype define-compiler-macro defvar defparameter define-constant)
   "Top-level defining operators accepted by self.redefine and source persistence.")
+
+(-> definition-name-p (t) boolean)
+(defun definition-name-p (value)
+  "Return true when VALUE is a symbol or a two-part SETF function name."
+  (or (symbolp value)
+      (and (listp value)
+           (= (length value) 2)
+           (eq (first value) 'setf)
+           (symbolp (second value)))))
 
 (-> definition-form-p (t) boolean)
 (defun definition-form-p (form)
@@ -489,7 +655,16 @@
   (and (consp form)
        (symbolp (first form))
        (member (first form) +definition-operators+ :test #'eq)
-       (symbolp (second form))))
+       (definition-name-p (second form))))
+
+(-> method-specializers (list) list)
+(defun method-specializers (specialized-lambda-list)
+  "Return required SPECIALIZED-LAMBDA-LIST specializers without parameter names."
+  (loop for parameter in specialized-lambda-list
+        until (member parameter lambda-list-keywords :test #'eq)
+        collect (if (consp parameter)
+                    (second parameter)
+                    t)))
 
 (-> definition-signature (list) list)
 (defun definition-signature (definition)
@@ -499,9 +674,12 @@
              (lambda-position (position-if #'listp tail)))
         (unless lambda-position
           (error "DEFMETHOD has no lambda list."))
-        (list* (first definition)
-               (second definition)
-               (subseq tail 0 (1+ lambda-position))))
+        (let ((qualifiers (subseq tail 0 lambda-position))
+              (specialized-lambda-list (nth lambda-position tail)))
+          (list (first definition)
+                (second definition)
+                qualifiers
+                (method-specializers specialized-lambda-list))))
       (list (first definition) (second definition))))
 
 (-> definition-key (list) string)
@@ -521,7 +699,7 @@
                            :test #'eq)
                    (fboundp name))
           (multiple-value-bind (lambda-expression closure-p lexical-name)
-              (function-lambda-expression (symbol-function name))
+              (function-lambda-expression (fdefinition name))
             (declare (ignore closure-p lexical-name))
             (and lambda-expression
                  (write-to-string lambda-expression
@@ -535,6 +713,23 @@
   (let ((result (eval definition)))
     (setf (gethash (definition-key definition) *exploratory-definitions*) source)
     result))
+
+(-> self-restore-definition
+    (string serious-condition &key (:installer function))
+    t)
+(defun self-restore-definition
+    (previous-source original-condition &key (installer #'self--install-definition))
+  "Restore PREVIOUS-SOURCE or signal compound active-image corruption."
+  (handler-case
+      (funcall installer
+               (self-read-form previous-source :read-eval nil)
+               previous-source)
+    (error (restoration-condition)
+      (error 'active-image-corruption
+             :message
+             "A failed definition mutation could not restore the active image."
+             :original-condition original-condition
+             :restoration-condition restoration-condition))))
 
 (-> self-install-definition (configuration string) t)
 (defun self-install-definition (configuration source)
@@ -840,11 +1035,18 @@
                             '(:pending :installed :checked)
                             :test #'eq)
                 (handler-case
-                    (self--install-definition
-                     (self-read-form previous-source :read-eval nil)
-                     previous-source)
-                  (error ()
-                    nil)))
+                    (self-restore-definition previous-source condition)
+                  (active-image-corruption (corruption)
+                    (durable-mutation-transition
+                     configuration
+                     mutation
+                     :failed
+                     :detail
+                     (format nil "Mutation failed: ~A~%Restoration failed: ~A"
+                             condition
+                             (active-image-corruption-restoration-condition
+                              corruption)))
+                    (error corruption))))
               (unless (member (durable-mutation-phase mutation)
                               '(:failed :superseded)
                               :test #'eq)
