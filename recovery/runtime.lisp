@@ -489,24 +489,24 @@
                                             (recovery-context-state-root context)))
              (crash-root (merge-pathnames "crashes/"
                                           (recovery-context-state-root context))))
-        (unless (and (uiop:subpathp pointer-pathname pointer-root)
-                     (probe-file pointer-pathname))
-          (error "The crash pointer is absent or outside private Frob state."))
-        (with-open-file (stream pointer-pathname
-                                :direction :input
-                                :external-format :utf-8)
-          (let ((capsule (read-line stream nil nil))
-                (trailing-line (read-line stream nil nil)))
-            (unless (and (stringp capsule)
-                         (plusp (length capsule))
-                         (<= (length capsule) 4096)
-                         (null trailing-line))
-              (error "The crash pointer is not one bounded pathname line."))
-            (let ((capsule-pathname (pathname capsule)))
-              (unless (and (uiop:subpathp capsule-pathname crash-root)
-                           (probe-file capsule-pathname))
-                (error "The crash pointer names an invalid capsule."))
-              (namestring capsule-pathname))))))))
+        (unless (uiop:subpathp pointer-pathname pointer-root)
+          (error "The crash pointer is outside private Frob state."))
+        (when (probe-file pointer-pathname)
+          (with-open-file (stream pointer-pathname
+                                  :direction :input
+                                  :external-format :utf-8)
+            (let ((capsule (read-line stream nil nil))
+                  (trailing-line (read-line stream nil nil)))
+              (unless (and (stringp capsule)
+                           (plusp (length capsule))
+                           (<= (length capsule) 4096)
+                           (null trailing-line))
+                (error "The crash pointer is not one bounded pathname line."))
+              (let ((capsule-pathname (pathname capsule)))
+                (unless (and (uiop:subpathp capsule-pathname crash-root)
+                             (probe-file capsule-pathname))
+                  (error "The crash pointer names an invalid capsule."))
+                (namestring capsule-pathname)))))))))
 
 (serapeum:-> recovery-refresh-crash-context
     (recovery-context (or null string))
