@@ -383,6 +383,8 @@
                  "ultra maps to the provider max effort")
     (test-assert (= (json-get (json-object "answer" 42) "answer") 42)
                  "JSON object access preserves values")
+    (test-assert (vectorp (json-decode "[1,2,3]"))
+                 "JSON arrays have one consistent vector representation")
     (test-conversation-persistence)
     (test-authentication-store)
     (test-provider-request)

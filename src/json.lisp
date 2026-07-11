@@ -37,7 +37,8 @@
 (-> json-decode (string) json-value)
 (defun json-decode (source)
   "Decode one JSON value from SOURCE."
-  (yason:parse source))
+  (let ((yason:*parse-json-arrays-as-vectors* t))
+    (yason:parse source)))
 
 
 ;;;; -- Bounded Presentation --
