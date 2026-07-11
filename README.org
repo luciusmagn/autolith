@@ -134,7 +134,8 @@ The initial =lisp.*= tools are =eval=, =compile=, =load-system=, =describe=,
 with a small S-expression protocol. They do not share heap objects with the
 active agent.
 
-The initial =self.*= tools inspect, evaluate, redefine, set, persist complete
+The initial =self.*= tools inspect bindings, read tracked definitions, evaluate,
+redefine, set, persist complete
 source definitions, show diffs, commit explicit paths, checkpoint, list
 generations, and select rollback generations. Durable source replacement parses
 top-level Lisp forms and never uses blind regular-expression replacement.

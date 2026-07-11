@@ -472,6 +472,18 @@ streamed into the transcript."
 
 ;;;; -- Agent Presentation --
 
+(defparameter *application-thinking-words*
+  '("pondering" "exploring" "untangling" "crafting" "verifying" "connecting")
+  "One-word activity labels sampled while the model prepares its next action.")
+
+(-> application-thinking-label () string)
+(defun application-thinking-label ()
+  "Return one interesting activity word for the next provider step."
+  (if *application-thinking-words*
+      (nth (random (length *application-thinking-words*))
+           *application-thinking-words*)
+      "pondering"))
+
 (-> application-stream-status (application string string) null)
 (defun application-stream-status (application label text)
   "Show LABEL and the bounded single-line tail of streaming TEXT."
@@ -486,6 +498,7 @@ streamed into the transcript."
 (defun application-agent-observer (application)
   "Return a terminal observer streaming one APPLICATION turn as stable lines."
   (let ((ui (application-ui application))
+        (activity-label (application-thinking-label))
         (reasoning-tail "")
         (stream-pending "")
         (stream-open-p nil)
@@ -539,13 +552,14 @@ streamed into the transcript."
          (let ((combined (concatenate 'string reasoning-tail delta)))
            (setf reasoning-tail
                  (subseq combined (max 0 (- (length combined) 500)))))
-         (application-stream-status application "thinking" reasoning-tail))
+         (application-stream-status application activity-label reasoning-tail))
        :status-callback
        (lambda (status details)
          (case status
            (:provider-request-started
-            (setf reasoning-tail "")
-            (terminal-ui-set-status ui "thinking"))
+            (setf reasoning-tail ""
+                  activity-label (application-thinking-label))
+            (terminal-ui-set-status ui activity-label))
            (:provider-request-completed
             (let ((streamed-p stream-open-p))
               (stream-flush)
@@ -558,7 +572,7 @@ streamed into the transcript."
              (format nil "running ~A" (getf details :tool))))
            (:tool-call-completed
             (application-render-records application)
-            (terminal-ui-set-status ui "thinking"))
+            (terminal-ui-set-status ui activity-label))
            (:turn-completed
             (terminal-ui-set-status ui nil))))))))
 
@@ -580,7 +594,8 @@ streamed into the transcript."
     (setf (application-rendered-sequence application) sequence)
     (unwind-protect
          (progn
-           (terminal-ui-set-status (application-ui application) "thinking")
+           (terminal-ui-set-status (application-ui application)
+                                   (application-thinking-label))
            (agent-run-user-turn
             (application-agent application)
             content

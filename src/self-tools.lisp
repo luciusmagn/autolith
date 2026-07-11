@@ -375,6 +375,24 @@
     :documentation "The character offset immediately after the form."))
   (:documentation "One parsed top-level form and its exact source span."))
 
+(defclass tracked-definition ()
+  ((relative-pathname
+    :initarg :relative-pathname
+    :reader tracked-definition-relative-pathname
+    :type non-empty-string
+    :documentation "The definition file relative to Frob's source root.")
+   (source-form
+    :initarg :source-form
+    :reader tracked-definition-source-form
+    :type source-form
+    :documentation "The parsed definition form and its exact source span.")
+   (source
+    :initarg :source
+    :reader tracked-definition-source
+    :type string
+    :documentation "The complete tracked source text of the definition."))
+  (:documentation "One tracked top-level definition exposed for safe self inspection."))
+
 (-> source--skip-block-comment (string integer) integer)
 (defun source--skip-block-comment (source start)
   "Return the first offset after the nested block comment at START."
@@ -439,6 +457,60 @@
         (push (make-instance 'source-form :form form :start start :end end)
               forms)
         (setf position end)))))
+
+(-> self-tracked-definitions (configuration symbol) list)
+(defun self-tracked-definitions (configuration symbol)
+  "Return complete tracked top-level definitions whose name is SYMBOL."
+  (let* ((source-root (configuration-source-root configuration))
+         (editable-root (merge-pathnames "src/" source-root)))
+    (loop for pathname in (sort (uiop:directory-files editable-root "*.lisp")
+                                #'string<
+                                :key #'namestring)
+          for source = (uiop:read-file-string pathname)
+          append
+          (loop for source-form in (source-read-forms source)
+                for form = (source-form-form source-form)
+                when (and (definition-form-p form)
+                          (equal (second form) symbol))
+                  collect
+                  (make-instance
+                   'tracked-definition
+                   :relative-pathname (enough-namestring pathname source-root)
+                   :source-form source-form
+                   :source (subseq source
+                                   (source-form-start source-form)
+                                   (source-form-end source-form)))))))
+
+(-> self-render-tracked-definitions (list symbol) string)
+(defun self-render-tracked-definitions (definitions symbol)
+  "Render complete DEFINITIONS for model inspection of SYMBOL."
+  (unless definitions
+    (error 'source-mutation-error
+           :message (format nil "No tracked top-level definition names ~S." symbol)
+           :tool-name "self.source"
+           :pathname nil))
+  (with-output-to-string (stream)
+    (loop for definition in definitions
+          for first-p = t then nil
+          unless first-p
+            do (format stream "~%~%")
+          do (format stream
+                     "~A~%~A"
+                     (tracked-definition-relative-pathname definition)
+                     (tracked-definition-source definition)))))
+
+(defmethod tool-execute ((tool self-source-tool)
+                         (context tool-context)
+                         (arguments hash-table))
+  "Return tracked source definitions for one symbol in CONTEXT."
+  (declare (ignore tool))
+  (let* ((symbol (self-resolve-symbol
+                  (tool-argument arguments "symbol" :required t)))
+         (definitions
+           (self-tracked-definitions
+            (tool-context-configuration context)
+            symbol)))
+    (tool-success (self-render-tracked-definitions definitions symbol))))
 
 (-> source-definition-match-p (source-form list) boolean)
 (defun source-definition-match-p (source-form definition)

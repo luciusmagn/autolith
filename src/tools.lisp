@@ -61,6 +61,10 @@
   ()
   (:documentation "Inspect a documented symbol in the active image."))
 
+(defclass self-source-tool (self-tool)
+  ()
+  (:documentation "Read tracked top-level definitions for one active symbol."))
+
 (defclass self-eval-tool (self-tool)
   ()
   (:documentation "Evaluate one exploratory form in the active image."))
@@ -364,6 +368,14 @@
       (register 'self-inspect-tool
                 "self" "inspect"
                 "Inspect documentation, bindings, lambda list, and description for an active symbol."
+                (tool-object-schema
+                 (json-object
+                  "symbol" (tool-string-property
+                            "A symbol name, optionally package-qualified."))
+                 '("symbol")))
+      (register 'self-source-tool
+                "self" "source"
+                "Read complete tracked source definitions for an active symbol without general evaluation."
                 (tool-object-schema
                  (json-object
                   "symbol" (tool-string-property

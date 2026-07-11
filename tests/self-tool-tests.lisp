@@ -25,6 +25,31 @@
             (search "Return the installed test value."
                     (self-inspect-symbol 'test-self-target))
             "active-image inspection exposes function documentation")
+           (let* ((source-root (merge-pathnames "source/" root))
+                  (source-pathname (merge-pathnames "src/sample.lisp" source-root))
+                  (source-configuration
+                    (test-configuration-for-source-root source-root)))
+             (ensure-directories-exist source-pathname)
+             (with-open-file (stream source-pathname
+                                     :direction :output
+                                     :if-exists :supersede
+                                     :if-does-not-exist :create
+                                     :external-format :utf-8)
+               (format stream
+                       "(in-package #:frob)~%~%(defun test-self-target () ~
+                        \"Tracked source documentation.\" 0)~%"))
+             (let* ((definitions
+                      (self-tracked-definitions source-configuration
+                                                'test-self-target))
+                    (rendered
+                      (self-render-tracked-definitions definitions
+                                                       'test-self-target)))
+               (test-assert (= (length definitions) 1)
+                            "tracked source inspection finds the complete definition")
+               (test-assert (search "src/sample.lisp" rendered)
+                            "tracked source inspection reports its repository path")
+               (test-assert (search "Tracked source documentation." rendered)
+                            "tracked source inspection returns exact definition text")))
            (test-assert
             (equal (definition-signature
                     '(defmethod sample-operation ((left string) right) left))

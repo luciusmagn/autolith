@@ -13,6 +13,24 @@
 
 ;;;; -- Focused Presentation Tests --
 
+(-> test-thinking-label-selection () null)
+(defun test-thinking-label-selection ()
+  "Test provider activity uses one self-modifiable word from the configured set."
+  (loop repeat 20
+        for label = (application-thinking-label)
+        do (test-assert (member label *application-thinking-words*
+                                :test #'string=)
+                        "thinking labels come from the documented word set")
+           (test-assert (not (find #\Space label))
+                        "every thinking label is exactly one word"))
+  (let ((*application-thinking-words* '("musing")))
+    (test-assert (string= (application-thinking-label) "musing")
+                 "changing the active word set immediately changes presentation"))
+  (let ((*application-thinking-words* nil))
+    (test-assert (string= (application-thinking-label) "pondering")
+                 "an empty exploratory word set retains a safe fallback"))
+  nil)
+
 (-> test-transcript-entries () null)
 (defun test-transcript-entries ()
   "Test styled transcript entry construction, wrapping, and output bounds."
@@ -341,6 +359,7 @@
 (-> run-application-tests () boolean)
 (defun run-application-tests ()
   "Run focused application presentation tests and return true on success."
+  (test-thinking-label-selection)
   (test-transcript-entries)
   (test-streaming-presentation)
   (test-conversation-picker)
