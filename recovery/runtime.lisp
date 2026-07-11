@@ -2,6 +2,9 @@
 
 ;;;; -- Recovery State --
 
+(defconstant +recovery-image-protocol-version+ 2
+  "The launcher handshake version implemented by this pristine recovery image.")
+
 (defclass recovery-context ()
   ((source-root
     :initarg :source-root
@@ -722,35 +725,48 @@
 (serapeum:-> recovery-run (list) integer)
 (defun recovery-run (arguments)
   "Run pristine recovery using complete command-line ARGUMENTS."
-  (let* ((source-root
-           (uiop:ensure-directory-pathname
-            (or (first arguments)
-                (error "The recovery image needs the source root."))))
-         (context (recovery-context-create source-root)))
-    (multiple-value-bind
-        (generation list-p status capsule forwarded original-arguments)
-        (recovery-parse-arguments (rest arguments))
-      (if list-p
-          (progn
-            (recovery-print-generations context)
-            0)
-          (let ((reported-capsule
-                  (recovery-report-crash
-                   context
-                   :status status
-                   :capsule capsule
-                   :original-arguments original-arguments)))
-            (let ((selected
-                    (if generation
-                        (recovery-load-generation
+  (let ((source-root
+          (uiop:ensure-directory-pathname
+           (or (first arguments)
+               (error "The recovery image needs the source root.")))))
+    (if (equal (rest arguments) '("--probe"))
+        (progn
+          (let ((*print-readably* t))
+            (prin1 (list :recovery-probe
+                         :version +recovery-image-protocol-version+
+                         :sbcl-version (lisp-implementation-version)
+                         :operating-system (software-type)
+                         :operating-system-version (software-version)
+                         :architecture (machine-type)))
+            (terpri)
+            (finish-output))
+          0)
+        (let ((context (recovery-context-create source-root)))
+          (multiple-value-bind
+              (generation list-p status capsule forwarded original-arguments)
+              (recovery-parse-arguments (rest arguments))
+            (if list-p
+                (progn
+                  (recovery-print-generations context)
+                  0)
+                (let ((reported-capsule
+                        (recovery-report-crash
                          context
-                         (recovery-manifest-pathname context generation)
-                         :expected-identifier generation)
-                        (recovery-selected-generation-or-fallback context))))
-              (recovery-boot-with-fallback context
-                                           selected
-                                           forwarded
-                                           :capsule reported-capsule)))))))
+                         :status status
+                         :capsule capsule
+                         :original-arguments original-arguments)))
+                  (let ((selected
+                          (if generation
+                              (recovery-load-generation
+                               context
+                               (recovery-manifest-pathname context generation)
+                               :expected-identifier generation)
+                              (recovery-selected-generation-or-fallback
+                               context))))
+                    (recovery-boot-with-fallback context
+                                                 selected
+                                                 forwarded
+                                                 :capsule reported-capsule)))))))))
 
 (serapeum:-> recovery-main () null)
 (defun recovery-main ()

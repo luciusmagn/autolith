@@ -39,9 +39,45 @@
                 (merge-pathnames ".local/share/" home))))
          (recovery-core
            (merge-pathnames "frob/recovery/frob-recovery.core" data-home))
+         (recovery-manifest
+           (merge-pathnames "frob/recovery/manifest.sexp" data-home))
          (sbcl-command (or (uiop:getenv "FROB_SBCL") "sbcl")))
     (unless (probe-file recovery-core)
       (error "Frob's pristine recovery image is missing; run ./bootstrap."))
+    (unless (probe-file recovery-manifest)
+      (error "Frob's pristine recovery manifest is missing; run ./bootstrap."))
+    (let ((*read-eval* nil))
+      (with-open-file (stream recovery-manifest
+                              :direction :input
+                              :external-format :utf-8)
+        (let ((manifest (read stream t nil))
+              (end-marker (gensym "RECOVERY-MANIFEST-END-")))
+          (unless (and (listp manifest)
+                       (eq (first manifest) :recovery-image)
+                       (= (or (getf (rest manifest) :version) 0) 2)
+                       (equal (truename (getf (rest manifest) :core))
+                              (truename recovery-core))
+                       (eq (read stream nil end-marker) end-marker))
+            (error "Frob's pristine recovery manifest is invalid.")))))
+    (let* ((probe-output
+             (uiop:run-program
+              (list sbcl-command
+                    "--noinform"
+                    "--core" (namestring recovery-core)
+                    "--end-runtime-options"
+                    (namestring source-root)
+                    "--probe")
+              :output :string
+              :error-output :output))
+           (*read-eval* nil)
+           (stream (make-string-input-stream probe-output))
+           (end-marker (gensym "RECOVERY-PROBE-END-"))
+           (probe (read stream nil end-marker)))
+      (unless (and (listp probe)
+                   (eq (first probe) :recovery-probe)
+                   (= (or (getf (rest probe) :version) 0) 2)
+                   (eq (read stream nil end-marker) end-marker))
+        (error "Frob's pristine recovery probe is invalid: ~S" probe-output)))
     (uiop:run-program
      (list sbcl-command
            "--noinform"

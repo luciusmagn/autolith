@@ -11,6 +11,7 @@ remaining_arguments=()
 state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 data_home=${XDG_DATA_HOME:-$HOME/.local/share}
 recovery_core=${FROB_RECOVERY_CORE:-$data_home/frob/recovery/frob-recovery.core}
+recovery_manifest=$(dirname -- "$recovery_core")/manifest.sexp
 crash_pointer=
 
 for argument in "$@"; do
@@ -43,11 +44,14 @@ finish_launcher()
 
 run_recovery()
 {
-  if [[ -f "$recovery_core" ]]; then
+  if [[ -f "$recovery_core" && -f "$recovery_manifest" ]] &&
+     grep -Eq '^\(:RECOVERY-IMAGE :VERSION 2([[:space:]]|$)' "$recovery_manifest" &&
+     "$sbcl_command" --noinform --core "$recovery_core" \
+       --end-runtime-options "$source_root" --probe >/dev/null 2>&1; then
     "$sbcl_command" --noinform --core "$recovery_core" \
       --end-runtime-options "$source_root" "$@"
   else
-    printf 'Pristine recovery image is missing; using source bootstrap. Run ./bootstrap to install it.\n' >&2
+    printf 'Pristine recovery image is missing or invalid; using source bootstrap. Run ./build-recovery to replace it.\n' >&2
     "$sbcl_command" --script "$source_root/recovery/launcher.lisp" \
       "$source_root" "$@"
   fi
