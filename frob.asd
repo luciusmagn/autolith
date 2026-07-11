@@ -31,6 +31,9 @@
                              (:file "generations")
                              (:file "agent")
                              (:file "terminal")
+                             (:file "application")
+                             (:file "application-recovery")
+                             (:file "commands")
                              (:file "main"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:frob/tests))))
 
