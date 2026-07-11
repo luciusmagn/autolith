@@ -20,8 +20,11 @@ Current upstream source is available in shallow, read-only reference
 checkouts outside this Git worktree:
 
 - OpenAI Codex: `/home/mag/common-lisp/frob-reference-sources/codex`
+  at `5c19155cbd93bfa099016e7487259f61669823ff`
 - Pi Agent Harness: `/home/mag/common-lisp/frob-reference-sources/pi`
+  at `5416b1834a28b79800393b7bf792ab36065c49b2`
 - OpenCode: `/home/mag/common-lisp/frob-reference-sources/opencode`
+  at `9976269ab1accfc9f9dc98a4a688c516934de422`
 
 Use these checkouts to study established agent behavior and implementation
 details. They are references, not Frob dependencies. Do not edit them or copy
@@ -218,6 +221,12 @@ Run the complete repository check from the repository root with:
 
 ```sh
 ./check
+```
+
+Materialize the locked project dependencies with:
+
+```sh
+./bootstrap
 ```
 
 ## Commit Policy
