@@ -27,6 +27,37 @@
   (test-assert (null (provider-rate-limit-snapshot
                       '(("content-type" . "text/event-stream"))))
                "absent rate limit headers produce no snapshot")
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (provider (provider-create configuration))
+         (condition
+           (make-condition
+            'http-request-failed
+            :body "rate limited"
+            :status 429
+            :headers '(("x-request-id" . "request-429")
+                       ("x-codex-primary-used-percent" . "100")
+                       ("x-codex-primary-window-minutes" . "300"))
+            :uri nil
+            :method :post)))
+    (unwind-protect
+         (progn
+           (test-assert
+            (handler-case
+                (progn
+                  (provider-signal-http-failure provider condition)
+                  nil)
+              (provider-error (error)
+                (and (= (provider-error-status error) 429)
+                     (string= (provider-error-request-id error)
+                              "request-429"))))
+            "HTTP 429 remains a typed provider failure")
+           (test-assert
+            (= (getf (getf (provider-rate-limits provider) :primary)
+                       :used-percent)
+               100)
+            "HTTP error headers refresh the visible rate limit snapshot"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
 (-> test-provider-request () null)

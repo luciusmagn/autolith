@@ -444,6 +444,34 @@ The request never carries a service_tier, keeping Frob on the standard path."
             :primary primary
             :secondary secondary))))
 
+(-> provider-record-rate-limits (codex-subscription-provider t) (option list))
+(defun provider-record-rate-limits (provider headers)
+  "Record and return rate limit data from HEADERS when the provider sent it."
+  (let ((snapshot (provider-rate-limit-snapshot headers)))
+    (when snapshot
+      (setf (provider-rate-limits provider) snapshot))
+    snapshot))
+
+(-> provider-signal-http-failure
+    (codex-subscription-provider http-request-failed)
+    null)
+(defun provider-signal-http-failure (provider condition)
+  "Record CONDITION headers and signal a typed provider or authentication error."
+  (let ((status (response-status condition))
+        (headers (response-headers condition)))
+    (provider-record-rate-limits provider headers)
+    (if (= status 401)
+        (error 'provider-unauthorized
+               :message "The provider rejected the current ChatGPT credentials."
+               :status status
+               :request-id (response-header headers "x-request-id")
+               :response nil)
+        (error 'provider-error
+               :message (format nil "The provider returned HTTP ~D." status)
+               :status status
+               :request-id (response-header headers "x-request-id")
+               :response (bounded-string (response-body condition) :limit 2000)))))
+
 
 (-> normalize-response-item (json-object) json-object)
 (defun normalize-response-item (item)
@@ -569,9 +597,7 @@ The request never carries a service_tier, keeping Frob on the standard path."
               :turn-budget-state turn-budget-state)
              credentials
              conversation)
-          (let ((snapshot (provider-rate-limit-snapshot headers)))
-            (when snapshot
-              (setf (provider-rate-limits provider) snapshot)))
+          (provider-record-rate-limits provider headers)
           (unless (= status 200)
             (when (open-stream-p stream)
               (close stream))
@@ -591,22 +617,9 @@ The request never carries a service_tier, keeping Frob on the standard path."
             (when (open-stream-p stream)
               (close stream)))))
     (dexador.error:http-request-unauthorized (condition)
-      (error 'provider-unauthorized
-             :message "The provider rejected the current ChatGPT credentials."
-             :status (response-status condition)
-             :request-id (response-header
-                          (response-headers condition)
-                          "x-request-id")
-             :response nil))
+      (provider-signal-http-failure provider condition))
     (http-request-failed (condition)
-      (error 'provider-error
-             :message (format nil "The provider returned HTTP ~D."
-                              (response-status condition))
-             :status (response-status condition)
-             :request-id (response-header
-                          (response-headers condition)
-                          "x-request-id")
-             :response (bounded-string (response-body condition) :limit 2000)))))
+      (provider-signal-http-failure provider condition))))
 
 (defmethod provider-stream-turn
     ((provider codex-subscription-provider)
