@@ -220,19 +220,33 @@
 (defun application-set-reasoning-effort (application effort)
   "Switch APPLICATION to reasoning EFFORT for this session's next turns."
   (let* ((previous (application-configuration application))
-         (configuration (configuration-create
-                         :working-directory (configuration-working-directory
-                                             previous)
-                         :model (configuration-model previous)
-                         :reasoning-effort effort))
-         (provider (provider-create configuration))
+         (previous-provider (application-provider application))
+         (previous-agent (application-agent application))
+         (configuration
+           (configuration-with-reasoning-effort previous effort))
+         (provider
+           (if previous-provider
+               (provider-with-configuration previous-provider configuration)
+               (provider-create configuration)))
          (agent (agent-create :configuration configuration
                               :provider provider
                               :conversation (application-conversation
                                              application)
                               :tool-registry (application-tool-registry
                                               application)
-                              :worker (application-worker application))))
+                              :worker (application-worker application)
+                              :maximum-provider-steps
+                              (if previous-agent
+                                  (agent-maximum-provider-steps previous-agent)
+                                  +default-maximum-provider-steps+)
+                              :provider-step-warning
+                              (if previous-agent
+                                  (agent-provider-step-warning previous-agent)
+                                  +default-provider-step-warning+)
+                              :maximum-tool-calls
+                              (if previous-agent
+                                  (agent-maximum-tool-calls previous-agent)
+                                  +default-maximum-tool-calls+))))
     (setf (application-configuration application) configuration
           (application-provider application) provider
           (application-agent application) agent))

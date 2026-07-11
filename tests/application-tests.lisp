@@ -260,23 +260,48 @@
 (-> test-effort-switch () null)
 (defun test-effort-switch ()
   "Test reasoning effort picker items and in-place configuration switching."
-  (let* ((configuration (test-configuration))
+  (let* ((base (test-configuration))
+         (configuration
+           (make-instance
+            'configuration
+            :source-root (configuration-source-root base)
+            :working-directory (configuration-working-directory base)
+            :data-root (configuration-data-root base)
+            :state-root (configuration-state-root base)
+            :cache-root (configuration-cache-root base)
+            :codex-auth-path (configuration-codex-auth-path base)
+            :model (configuration-model base)
+            :reasoning-effort (configuration-reasoning-effort base)
+            :web-search-mode "live"
+            :provider-endpoint "https://provider.test/responses"))
          (root (test-configuration-root configuration)))
     (unwind-protect
          (let* ((conversation (conversation-create configuration
                                                    :identifier "effort"))
+                (provider (provider-create configuration))
+                (registry (make-default-tool-registry))
+                (worker (lisp-worker-create configuration))
+                (agent (agent-create :configuration configuration
+                                     :provider provider
+                                     :conversation conversation
+                                     :tool-registry registry
+                                     :worker worker
+                                     :maximum-provider-steps 7
+                                     :provider-step-warning 3
+                                     :maximum-tool-calls 9))
                 (application
                   (make-instance 'application
                                  :configuration configuration
                                  :conversation conversation
-                                 :provider nil
-                                 :tool-registry (make-default-tool-registry)
-                                 :worker (lisp-worker-create configuration)
-                                 :agent nil
+                                 :provider provider
+                                 :tool-registry registry
+                                 :worker worker
+                                 :agent agent
                                  :ui (terminal-ui-create
                                       :terminal (make-instance
                                                  'recording-terminal
                                                  :columns 60)))))
+           (setf (provider-rate-limits provider) '(:primary (:used-percent 25)))
            (let ((items (application--effort-items application)))
              (test-assert (= (length items)
                              (length +supported-reasoning-efforts+))
@@ -291,8 +316,32 @@
                                   (application-configuration application))
                                  "low")
                         "switching effort replaces the configuration")
+           (let ((updated (application-configuration application)))
+             (test-assert (equal (configuration-source-root updated)
+                                 (configuration-source-root configuration))
+                          "effort switching preserves the source root")
+             (test-assert (equal (configuration-state-root updated)
+                                 (configuration-state-root configuration))
+                          "effort switching preserves private state paths")
+             (test-assert (string= (configuration-provider-endpoint updated)
+                                   "https://provider.test/responses")
+                          "effort switching preserves the provider endpoint")
+             (test-assert (string= (configuration-web-search-mode updated) "live")
+                          "effort switching preserves hosted web search mode"))
+           (test-assert
+            (string= (provider-session-id (application-provider application))
+                     (provider-session-id provider))
+            "effort switching preserves the provider session identity")
+           (test-assert (equal (provider-rate-limits
+                                (application-provider application))
+                               '(:primary (:used-percent 25)))
+                        "effort switching preserves the latest rate snapshot")
            (test-assert (typep (application-agent application) 'agent)
-                        "switching effort reconnects the agent"))
+                        "switching effort reconnects the agent")
+           (test-assert (= (agent-maximum-provider-steps
+                            (application-agent application))
+                           7)
+                        "effort switching preserves the active turn budget"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 

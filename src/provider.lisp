@@ -126,6 +126,23 @@
                  :credential-manager (credential-manager-create configuration)
                  :session-id (make-identifier)))
 
+(-> provider-with-configuration (model-provider configuration) model-provider)
+(defgeneric provider-with-configuration (provider configuration)
+  (:documentation
+   "Return PROVIDER reconfigured for CONFIGURATION while preserving session state."))
+
+(defmethod provider-with-configuration
+    ((provider codex-subscription-provider) (configuration configuration))
+  "Copy PROVIDER with CONFIGURATION, retaining credentials, session, and limits."
+  (let ((copy
+          (make-instance 'codex-subscription-provider
+                         :configuration configuration
+                         :credential-manager
+                         (provider-credential-manager provider)
+                         :session-id (provider-session-id provider))))
+    (setf (provider-rate-limits copy) (copy-tree (provider-rate-limits provider)))
+    copy))
+
 (-> provider-stream-turn
     (model-provider conversation vector function
      &key (:turn-budget-state turn-budget-state))

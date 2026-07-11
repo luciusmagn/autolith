@@ -158,6 +158,27 @@
                    :provider-endpoint (or (uiop:getenv "FROB_PROVIDER_ENDPOINT")
                                           +codex-responses-endpoint+))))
 
+(-> configuration-with-reasoning-effort (configuration string) configuration)
+(defun configuration-with-reasoning-effort (configuration reasoning-effort)
+  "Copy CONFIGURATION with only its REASONING-EFFORT changed."
+  (unless (member reasoning-effort +supported-reasoning-efforts+ :test #'string=)
+    (error 'configuration-error
+           :message (format nil "Unsupported reasoning effort ~S."
+                            reasoning-effort)))
+  (make-instance 'configuration
+                 :source-root (configuration-source-root configuration)
+                 :working-directory
+                 (configuration-working-directory configuration)
+                 :data-root (configuration-data-root configuration)
+                 :state-root (configuration-state-root configuration)
+                 :cache-root (configuration-cache-root configuration)
+                 :codex-auth-path (configuration-codex-auth-path configuration)
+                 :model (configuration-model configuration)
+                 :reasoning-effort reasoning-effort
+                 :web-search-mode (configuration-web-search-mode configuration)
+                 :provider-endpoint
+                 (configuration-provider-endpoint configuration)))
+
 (-> configuration-ensure-directories (configuration) configuration)
 (defun configuration-ensure-directories (configuration)
   "Create CONFIGURATION's private data, state, and cache directories."
