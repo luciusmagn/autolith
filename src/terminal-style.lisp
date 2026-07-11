@@ -4,8 +4,11 @@
 
 (deftype terminal-style ()
   "A semantic terminal style resolved to color and emphasis by the renderer."
-  '(member :plain :brand :user :tool :success :failure :notice :dim :selected))
+  '(member :plain :brand :user :tool :success :failure :notice :dim :hint
+           :selected))
 
+;; Only basic ANSI palette entries and emphasis appear here, so Frob follows
+;; the user's terminal theme instead of imposing absolute colors.
 (define-constant +terminal-style-table+
   '((:brand    . "1;35")
     (:user     . "1;36")
@@ -14,6 +17,7 @@
     (:failure  . "1;31")
     (:notice   . "33")
     (:dim      . "2")
+    (:hint     . "2;3")
     (:selected . "7"))
   :test #'equal
   :documentation "Select-graphic-rendition parameters for each semantic style.")

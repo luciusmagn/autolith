@@ -81,6 +81,23 @@
                  nil)))
         +terminal-default-columns+)))
 
+(define-constant +application-prompt+ "❯ "
+  :test #'string=
+  :documentation "The styled input prompt shown on the live editor row.")
+
+(define-constant +application-placeholder+
+  "Ask Frob anything. Type /help for commands."
+  :test #'string=
+  :documentation "The dim hint shown on the prompt row while input is empty.")
+
+(-> application-terminal-ui-create () terminal-ui)
+(defun application-terminal-ui-create ()
+  "Create the standard interactive terminal UI at the current terminal width."
+  (terminal-ui-create
+   :terminal (stream-terminal-create :columns (terminal-current-columns))
+   :prompt +application-prompt+
+   :placeholder +application-placeholder+))
+
 (-> application-create
     (configuration &key (:conversation-id (option string)))
     application)
@@ -99,10 +116,7 @@
                               :conversation conversation
                               :tool-registry registry
                               :worker worker))
-         (ui (terminal-ui-create
-              :terminal (stream-terminal-create
-                         :columns (terminal-current-columns))
-              :prompt "frob> ")))
+         (ui (application-terminal-ui-create)))
     (make-instance 'application
                    :configuration configuration
                    :conversation conversation
@@ -143,10 +157,7 @@
                               :conversation conversation
                               :tool-registry registry
                               :worker worker))
-         (ui (terminal-ui-create
-              :terminal (stream-terminal-create
-                         :columns (terminal-current-columns))
-              :prompt "frob> "))
+         (ui (application-terminal-ui-create))
          (recovery-rendered-sequence
            (handler-case
                (let ((value (uiop:getenv "FROB_RECOVERY_RENDERED_SEQUENCE")))

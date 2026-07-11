@@ -299,6 +299,57 @@
          "bracketed paste terminal controls are neutralized before display"))))
   nil)
 
+(-> test-terminal-live-region-layout () null)
+(defun test-terminal-live-region-layout ()
+  "Test placeholder hints, styled span emission, and finalized entry separation."
+  (let* ((terminal (make-instance 'recording-terminal
+                                  :columns 40
+                                  :styled-p t))
+         (ui (terminal-ui-create :terminal terminal
+                                 :prompt "❯ "
+                                 :placeholder "hint text")))
+    (with-terminal-ui (active-ui ui)
+      (test-assert (search "hint text" (recording-terminal-output terminal))
+                   "an empty prompt row shows the placeholder hint")
+      (recording-terminal-reset terminal)
+      (terminal-ui-process-event active-ui '(:insert "a"))
+      (let ((typing (recording-terminal-output terminal)))
+        (test-assert (not (search "hint text" typing))
+                     "typed input replaces the placeholder hint")
+        (test-assert (search "a" typing)
+                     "typed input is painted on the prompt row"))
+      (recording-terminal-reset terminal)
+      (terminal-ui-set-status active-ui "working")
+      (test-assert (search "∙ " (recording-terminal-output terminal))
+                   "the status row carries its activity glyph")
+      (recording-terminal-reset terminal)
+      (terminal-ui-append-finalized
+       active-ui
+       :styled
+       (list (terminal-span :brand "frob")
+             (terminal-span :plain " ready")))
+      (let ((finalized (recording-terminal-output terminal)))
+        (test-assert
+         (search (format nil "~C[1;35mfrob" +terminal-escape-character+)
+                 finalized)
+         "styled finalized spans emit basic rendition controls")
+        (test-assert
+         (search (format nil " ready~C~C~C~C" #\Return #\Newline
+                         #\Return #\Newline)
+                 finalized)
+         "finalized entries end with one separating blank row")
+        (test-assert (not (terminal-tests--forbidden-control-p finalized))
+                     "styled transcript output never erases the display"))))
+  (let* ((plain-terminal (make-instance 'recording-terminal :columns 40))
+         (plain-ui (terminal-ui-create :terminal plain-terminal)))
+    (with-terminal-ui (active-ui plain-ui)
+      (terminal-ui-append-finalized active-ui
+                                    :styled
+                                    (list (terminal-span :brand "frob"))))
+    (test-assert (not (search "[1;35m" (recording-terminal-output plain-terminal)))
+                 "styling is omitted when the terminal does not permit it"))
+  nil)
+
 (-> test-terminal-styling-primitives () null)
 (defun test-terminal-styling-primitives ()
   "Test semantic style resolution, span safety, clipping, and word wrapping."
@@ -401,6 +452,7 @@
   (test-terminal-finalized-scrollback)
   (test-terminal-line-editor)
   (test-terminal-input-decoding)
+  (test-terminal-live-region-layout)
   (test-terminal-styling-primitives)
   (test-terminal-non-tty-fallback)
   t)

@@ -148,6 +148,12 @@
     :reader terminal-ui-prompt
     :type string
     :documentation "The untrusted-text-safe prompt prefix.")
+   (placeholder
+    :initarg :placeholder
+    :initform ""
+    :reader terminal-ui-placeholder
+    :type string
+    :documentation "The dim hint shown on the prompt row while input is empty.")
    (status
     :initform nil
     :accessor terminal-ui-status
@@ -158,23 +164,23 @@
     :reader terminal-ui-finalized-identifiers
     :type hash-table
     :documentation "Identifiers whose finalized transcript text was already emitted.")
-   (live-rendered-p
-    :initform nil
-    :accessor terminal-ui-live-rendered-p
-    :type boolean
-    :documentation "Whether live rows currently occupy the terminal bottom.")
-   (rendered-status-p
-    :initform nil
-    :accessor terminal-ui-rendered-status-p
-    :type boolean
-    :documentation "Whether the current live region includes a status row.")
+   (live-row-count
+    :initform 0
+    :accessor terminal-ui-live-row-count
+    :type (integer 0)
+    :documentation "The number of live rows currently painted at the terminal bottom.")
+   (live-cursor-row
+    :initform 0
+    :accessor terminal-ui-live-cursor-row
+    :type (integer 0)
+    :documentation "The zero-based painted live row index holding the input cursor.")
    (started-p
     :initform nil
     :accessor terminal-ui-started-p
     :type boolean
     :documentation "Whether the UI lifecycle has started."))
   (:documentation
-   "A scrollback-preserving UI with immutable transcript output and at most two live rows."))
+   "A scrollback-preserving UI with immutable transcript output and a bounded live region."))
 
 
 ;;;; -- Terminal Conditions --

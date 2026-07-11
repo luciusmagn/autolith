@@ -3,9 +3,10 @@
 ;;;; -- UI Construction --
 
 (-> terminal-ui-create
-    (&key (:terminal terminal) (:editor (option line-editor)) (:prompt string))
+    (&key (:terminal terminal) (:editor (option line-editor)) (:prompt string)
+          (:placeholder string))
     terminal-ui)
-(defun terminal-ui-create (&key terminal editor (prompt "> "))
+(defun terminal-ui-create (&key terminal editor (prompt "> ") (placeholder ""))
   "Create a scrollback-preserving UI for TERMINAL."
   (unless (typep terminal 'terminal)
     (error 'terminal-error
@@ -15,7 +16,8 @@
   (make-instance 'terminal-ui
                  :terminal terminal
                  :editor (or editor (line-editor-create))
-                 :prompt prompt))
+                 :prompt prompt
+                 :placeholder placeholder))
 
 
 ;;;; -- Live Region Mechanics --
@@ -26,6 +28,16 @@
   (when (plusp rows)
     (terminal--write terminal
                      (format nil "~C[~:DA"
+                             +terminal-escape-character+
+                             rows)))
+  nil)
+
+(-> terminal--cursor-down (terminal integer) null)
+(defun terminal--cursor-down (terminal rows)
+  "Move TERMINAL downward by ROWS within the bounded live region."
+  (when (plusp rows)
+    (terminal--write terminal
+                     (format nil "~C[~:DB"
                              +terminal-escape-character+
                              rows)))
   nil)
@@ -42,18 +54,20 @@
 
 (-> terminal-ui--clear-live (terminal-ui) null)
 (defun terminal-ui--clear-live (ui)
-  "Erase only UI's currently rendered status and prompt rows."
-  (when (and (terminal-interactive-p (terminal-ui-terminal ui))
-             (terminal-ui-live-rendered-p ui))
-    (let ((terminal (terminal-ui-terminal ui)))
-      (terminal--write terminal (string #\Return))
-      (terminal--write terminal +terminal-erase-line+)
-      (when (terminal-ui-rendered-status-p ui)
-        (terminal--cursor-up terminal 1)
-        (terminal--write terminal (string #\Return))
-        (terminal--write terminal +terminal-erase-line+)))
-    (setf (terminal-ui-live-rendered-p ui) nil
-          (terminal-ui-rendered-status-p ui) nil))
+  "Erase only UI's currently painted live rows, ending at the region's top row."
+  (let ((terminal (terminal-ui-terminal ui))
+        (total (terminal-ui-live-row-count ui)))
+    (when (and (terminal-interactive-p terminal)
+               (plusp total))
+      (terminal--cursor-down terminal
+                             (- total 1 (terminal-ui-live-cursor-row ui)))
+      (loop for row from (1- total) downto 0
+            do (terminal--write terminal (string #\Return))
+               (terminal--write terminal +terminal-erase-line+)
+               (when (plusp row)
+                 (terminal--cursor-up terminal 1)))
+      (setf (terminal-ui-live-row-count ui) 0
+            (terminal-ui-live-cursor-row ui) 0)))
   nil)
 
 (-> terminal--write-newline (terminal) null)
@@ -77,30 +91,88 @@
           finally (terminal--write terminal (subseq text line-start))))
   nil)
 
+(-> terminal--write-row (terminal list) null)
+(defun terminal--write-row (terminal spans)
+  "Write one live row of single-line SPANS already sanitized by their builder."
+  (dolist (span spans)
+    (let ((sequence (and (terminal-styled-p terminal)
+                         (terminal-style-sequence (terminal-span-style span)))))
+      (when sequence
+        (terminal--write terminal sequence))
+      (terminal--write terminal (terminal-span-text span))
+      (when sequence
+        (terminal--write terminal +terminal-style-reset+))))
+  nil)
+
+(-> terminal-ui--prompt-row (terminal-ui) (values list integer))
+(defun terminal-ui--prompt-row (ui)
+  "Return UI's prompt row spans and cursor column within the terminal width."
+  (let* ((terminal (terminal-ui-terminal ui))
+         (columns (terminal-columns terminal))
+         (row-width (max 0 (1- columns)))
+         (editor (terminal-ui-editor ui))
+         (safe-prompt (terminal-sanitize-text (terminal-ui-prompt ui)
+                                              :single-line-p t))
+         (visible-prompt (terminal--prefix-within-width safe-prompt row-width)))
+    (if (and (zerop (length (line-editor-text editor)))
+             (non-empty-string-p (terminal-ui-placeholder ui)))
+        (values (terminal--clip-spans
+                 (list (terminal-span :brand visible-prompt)
+                       (terminal-span :hint (terminal-ui-placeholder ui)))
+                 row-width)
+                (terminal--text-width visible-prompt))
+        (multiple-value-bind (row cursor-column)
+            (line-editor-render editor (terminal-ui-prompt ui) columns)
+          (let ((content-style (if (uiop:string-prefix-p
+                                    "/" (line-editor-text editor))
+                                   :user
+                                   :plain)))
+            (values (list (terminal-span :brand visible-prompt)
+                          (terminal-span content-style
+                                         (subseq row (length visible-prompt))))
+                    cursor-column))))))
+
+(-> terminal-ui--live-rows (terminal-ui) (values list integer integer))
+(defun terminal-ui--live-rows (ui)
+  "Return UI's live rows as span lists plus the cursor row index and column."
+  (let* ((terminal (terminal-ui-terminal ui))
+         (row-width (max 0 (1- (terminal-columns terminal))))
+         (rows nil))
+    (when (terminal-ui-status ui)
+      (push (terminal--clip-spans
+             (list (terminal-span :brand "∙ ")
+                   (terminal-span :dim (terminal-ui-status ui)))
+             row-width)
+            rows)
+      (push nil rows))
+    (let ((prompt-row (length rows)))
+      (multiple-value-bind (prompt-spans cursor-column)
+          (terminal-ui--prompt-row ui)
+        (push prompt-spans rows)
+        (push nil rows)
+        (values (nreverse rows)
+                prompt-row
+                (min cursor-column row-width))))))
+
 (-> terminal-ui--paint-live (terminal-ui) null)
 (defun terminal-ui--paint-live (ui)
-  "Render UI's optional status and one-row editor without touching scrollback."
+  "Paint UI's bounded live rows below the transcript without touching scrollback."
   (let ((terminal (terminal-ui-terminal ui)))
     (when (terminal-interactive-p terminal)
-      (let ((status (terminal-ui-status ui)))
-        (when status
-          (terminal--write terminal
-                           (terminal--prefix-within-width
-                            (terminal-sanitize-text status :single-line-p t)
-                            (terminal-columns terminal)))
-          (terminal--write-newline terminal)))
-      (multiple-value-bind (row cursor-column)
-          (line-editor-render (terminal-ui-editor ui)
-                              (terminal-ui-prompt ui)
-                              (terminal-columns terminal))
+      (multiple-value-bind (rows cursor-row cursor-column)
+          (terminal-ui--live-rows ui)
+        (loop for row in rows
+              for index from 0
+              do (terminal--write terminal (string #\Return))
+                 (terminal--write terminal +terminal-erase-line+)
+                 (terminal--write-row terminal row)
+                 (when (< (1+ index) (length rows))
+                   (terminal--write-newline terminal)))
+        (terminal--cursor-up terminal (- (length rows) 1 cursor-row))
         (terminal--write terminal (string #\Return))
-        (terminal--write terminal +terminal-erase-line+)
-        (terminal--write terminal row)
-        (terminal--write terminal (string #\Return))
-        (terminal--cursor-right terminal cursor-column))
-      (setf (terminal-ui-live-rendered-p ui) t
-            (terminal-ui-rendered-status-p ui)
-            (not (null (terminal-ui-status ui))))
+        (terminal--cursor-right terminal cursor-column)
+        (setf (terminal-ui-live-row-count ui) (length rows)
+              (terminal-ui-live-cursor-row ui) cursor-row))
       (terminal-flush terminal)))
   nil)
 
@@ -111,15 +183,33 @@
   (terminal-ui--paint-live ui)
   nil)
 
-(-> terminal-ui--write-finalized (terminal-ui string) null)
-(defun terminal-ui--write-finalized (ui text)
-  "Write sanitized finalized TEXT once at the live region's former position."
+(-> terminal-ui--write-finalized (terminal-ui (or string list)) null)
+(defun terminal-ui--write-finalized (ui entry)
+  "Write sanitized finalized ENTRY once, followed by one separating blank row."
   (let* ((terminal (terminal-ui-terminal ui))
-         (safe-text (terminal-sanitize-text text)))
-    (terminal--write-safe-text terminal safe-text)
-    (unless (and (plusp (length safe-text))
-                 (char= (char safe-text (1- (length safe-text))) #\Newline))
-      (terminal--write-newline terminal))
+         (spans (loop for span in (if (stringp entry)
+                                      (list (terminal-span :plain entry))
+                                      entry)
+                      collect (terminal-span
+                               (terminal-span-style span)
+                               (terminal-sanitize-text
+                                (terminal-span-text span))))))
+    (dolist (span spans)
+      (let ((sequence (and (terminal-styled-p terminal)
+                           (terminal-style-sequence
+                            (terminal-span-style span)))))
+        (when sequence
+          (terminal--write terminal sequence))
+        (terminal--write-safe-text terminal (terminal-span-text span))
+        (when sequence
+          (terminal--write terminal +terminal-style-reset+))))
+    (let ((last-text (if spans
+                         (terminal-span-text (first (last spans)))
+                         "")))
+      (unless (and (plusp (length last-text))
+                   (char= (char last-text (1- (length last-text))) #\Newline))
+        (terminal--write-newline terminal)))
+    (terminal--write-newline terminal)
     (terminal-flush terminal))
   nil)
 
@@ -156,15 +246,15 @@
               ,@body))
        (terminal-ui-stop ,variable))))
 
-(-> terminal-ui-append-finalized (terminal-ui t string) boolean)
-(defun terminal-ui-append-finalized (ui identifier text)
-  "Append finalized transcript TEXT once for IDENTIFIER and return true when emitted."
+(-> terminal-ui-append-finalized (terminal-ui t (or string list)) boolean)
+(defun terminal-ui-append-finalized (ui identifier entry)
+  "Append finalized transcript ENTRY once for IDENTIFIER and return true when emitted."
   (block nil
     (when (gethash identifier (terminal-ui-finalized-identifiers ui))
       (return nil))
     (setf (gethash identifier (terminal-ui-finalized-identifiers ui)) t)
     (terminal-ui--clear-live ui)
-    (terminal-ui--write-finalized ui text)
+    (terminal-ui--write-finalized ui entry)
     (terminal-ui--paint-live ui)
     t))
 
