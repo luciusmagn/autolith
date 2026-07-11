@@ -170,6 +170,11 @@
     :accessor terminal-ui-completion-names
     :type list
     :documentation "The most recently matching completion names, detecting set changes.")
+   (selector
+    :initform nil
+    :accessor terminal-ui-selector
+    :type list
+    :documentation "The modal picker title, items, and selection replacing the prompt row.")
    (status
     :initform nil
     :accessor terminal-ui-status

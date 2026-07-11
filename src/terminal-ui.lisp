@@ -187,22 +187,21 @@
         (format nil "~A ~A" (getf entry :name) argument)
         (getf entry :name))))
 
-(-> terminal-ui--completion-rows (terminal-ui list integer) list)
-(defun terminal-ui--completion-rows (ui matches row-width)
-  "Return suggestion rows for MATCHES windowed around UI's current selection."
-  (when matches
-    (let* ((selection (min (terminal-ui-completion-selection ui)
-                           (1- (length matches))))
+(-> terminal-ui--choice-rows (list integer integer) list)
+(defun terminal-ui--choice-rows (items selection row-width)
+  "Return selection rows for ITEMS windowed around SELECTION within ROW-WIDTH."
+  (when items
+    (let* ((selection (min selection (1- (length items))))
            (visible-count (min +terminal-ui-visible-completions+
-                               (length matches)))
+                               (length items)))
            (start (min (max 0 (- (1+ selection) visible-count))
-                       (- (length matches) visible-count)))
+                       (- (length items) visible-count)))
            (label-width
-             (loop for entry in matches
+             (loop for entry in items
                    maximize (terminal--text-width
                              (terminal-completion-label entry)))))
       (loop for index from start below (+ start visible-count)
-            for entry = (nth index matches)
+            for entry = (nth index items)
             for selected-p = (= index selection)
             collect (terminal--clip-spans
                      (list (terminal-span (if selected-p
@@ -221,6 +220,13 @@
                                               :dim)
                                           (getf entry :description)))
                      row-width)))))
+
+(-> terminal-ui--completion-rows (terminal-ui list integer) list)
+(defun terminal-ui--completion-rows (ui matches row-width)
+  "Return suggestion rows for MATCHES windowed around UI's current selection."
+  (terminal-ui--choice-rows matches
+                            (terminal-ui-completion-selection ui)
+                            row-width))
 
 (-> terminal-ui--accept-completion (terminal-ui list) null)
 (defun terminal-ui--accept-completion (ui entry)
@@ -300,19 +306,38 @@
             rows))
     (when rows
       (push nil rows))
-    (let ((prompt-row (length rows)))
-      (multiple-value-bind (prompt-spans cursor-column)
-          (terminal-ui--prompt-row ui)
-        (push prompt-spans rows)
-        (dolist (row (terminal-ui--completion-rows
-                      ui
-                      (terminal-ui--reconcile-completions ui)
-                      row-width))
-          (push row rows))
-        (push nil rows)
-        (values (nreverse rows)
-                prompt-row
-                (min cursor-column row-width))))))
+    (let ((selector (terminal-ui-selector ui))
+          (cursor-row (length rows)))
+      (cond
+        (selector
+         (let ((title-spans
+                 (terminal--clip-spans
+                  (list (terminal-span :brand "∙ ")
+                        (terminal-span :plain (getf selector :title))
+                        (terminal-span :hint "  enter selects, esc cancels"))
+                  row-width)))
+           (push title-spans rows)
+           (dolist (row (terminal-ui--choice-rows (getf selector :items)
+                                                  (getf selector :selection)
+                                                  row-width))
+             (push row rows))
+           (push nil rows)
+           (values (nreverse rows)
+                   cursor-row
+                   (terminal--spans-width title-spans))))
+        (t
+         (multiple-value-bind (prompt-spans cursor-column)
+             (terminal-ui--prompt-row ui)
+           (push prompt-spans rows)
+           (dolist (row (terminal-ui--completion-rows
+                         ui
+                         (terminal-ui--reconcile-completions ui)
+                         row-width))
+             (push row rows))
+           (push nil rows)
+           (values (nreverse rows)
+                   cursor-row
+                   (min cursor-column row-width))))))))
 
 (-> terminal-ui-stream-update
     (terminal-ui &key (:rows list) (:tail (or null string list)))
@@ -397,6 +422,44 @@ live unfinished line continuing that block, or removes it when NIL."
     (terminal--write-newline terminal)
     (terminal-flush terminal))
   nil)
+
+
+(-> terminal-ui-select
+    (terminal-ui &key (:title string) (:items list))
+    (option string))
+(defun terminal-ui-select (ui &key (title "select") items)
+  "Run a modal picker over ITEMS and return the selected name, or NIL on cancel.
+
+Items follow the completion entry shape. Up and Down move the selection,
+Enter accepts it, and Escape, Ctrl-C, or end of input cancels. Returns NIL
+immediately when ITEMS is empty or the terminal is not interactive."
+  (block nil
+    (unless (and items
+                 (every #'terminal-completion-p items)
+                 (terminal-interactive-p (terminal-ui-terminal ui)))
+      (return nil))
+    (setf (terminal-ui-selector ui)
+          (list :title title :items items :selection 0))
+    (unwind-protect
+         (loop
+           (terminal-ui--repaint-live ui)
+           (let ((event (terminal-read-event (terminal-ui-terminal ui)))
+                 (selection (getf (terminal-ui-selector ui) :selection)))
+             (cond
+               ((eq event :history-previous)
+                (setf (getf (terminal-ui-selector ui) :selection)
+                      (mod (1- selection) (length items))))
+               ((eq event :history-next)
+                (setf (getf (terminal-ui-selector ui) :selection)
+                      (mod (1+ selection) (length items))))
+               ((eq event :submit)
+                (return (getf (nth selection items) :name)))
+               ((member event '(:escape :interrupt :end-of-input))
+                (return nil))
+               (t
+                nil))))
+      (setf (terminal-ui-selector ui) nil)
+      (terminal-ui--repaint-live ui))))
 
 
 ;;;; -- Public UI Lifecycle and Events --

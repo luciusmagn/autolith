@@ -42,6 +42,22 @@
   :end-of-input)
 
 
+;;;; -- Scripted Terminal --
+
+(defclass scripted-terminal (recording-terminal)
+  ((events
+    :initarg :events
+    :initform nil
+    :accessor scripted-terminal-events
+    :type list
+    :documentation "Queued semantic input events served to the reader in order."))
+  (:documentation "A recording terminal replaying scripted input events."))
+
+(defmethod terminal-read-event ((terminal scripted-terminal))
+  "Serve the next scripted event, or end of input when exhausted."
+  (or (pop (scripted-terminal-events terminal)) :end-of-input))
+
+
 ;;;; -- Test Helpers --
 
 (-> recording-terminal-output (recording-terminal) string)
@@ -427,6 +443,46 @@
         (terminal-ui-process-event active-ui :interrupt))))
   nil)
 
+(-> test-terminal-modal-selection () null)
+(defun test-terminal-modal-selection ()
+  "Test modal picker navigation, acceptance, cancellation, and cleanup."
+  (let* ((items '((:name "alpha" :argument nil :description "first entry")
+                  (:name "beta" :argument nil :description "second entry")
+                  (:name "gamma" :argument nil :description "third entry")))
+         (terminal (make-instance 'scripted-terminal
+                                  :columns 60
+                                  :events (list :history-next :submit)))
+         (ui (terminal-ui-create :terminal terminal)))
+    (with-terminal-ui (active-ui ui)
+      (recording-terminal-reset terminal)
+      (test-assert (string= (terminal-ui-select active-ui
+                                                :title "pick one"
+                                                :items items)
+                            "beta")
+                   "arrow keys move the modal selection before enter")
+      (let ((painted (recording-terminal-output terminal)))
+        (test-assert (search "pick one" painted)
+                     "the picker paints its title")
+        (test-assert (search "alpha" painted)
+                     "the picker paints its items")
+        (test-assert (not (terminal-tests--forbidden-control-p painted))
+                     "the picker never erases the display"))
+      (test-assert (null (terminal-ui-selector active-ui))
+                   "the selector state clears after selection")
+      (setf (scripted-terminal-events terminal) (list :escape))
+      (test-assert (null (terminal-ui-select active-ui
+                                             :title "pick one"
+                                             :items items))
+                   "escape cancels the picker")))
+  (let* ((terminal (make-instance 'scripted-terminal :columns 60))
+         (ui (terminal-ui-create :terminal terminal)))
+    (test-assert (null (terminal-ui-select
+                        ui
+                        :title "pick"
+                        :items '((:name "a" :argument nil :description "d"))))
+                 "non-interactive terminals never open the picker"))
+  nil)
+
 (-> test-terminal-styling-primitives () null)
 (defun test-terminal-styling-primitives ()
   "Test semantic style resolution, span safety, clipping, and word wrapping."
@@ -532,6 +588,7 @@
   (test-terminal-live-region-layout)
   (test-terminal-stream-update)
   (test-terminal-command-completion)
+  (test-terminal-modal-selection)
   (test-terminal-styling-primitives)
   (test-terminal-non-tty-fallback)
   t)
