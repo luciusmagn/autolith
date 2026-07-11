@@ -69,8 +69,10 @@
   (merge-pathnames "current-generation.sexp"
                    (configuration-state-root configuration)))
 
-(-> generation-create-record (configuration) generation)
-(defun generation-create-record (configuration)
+(-> generation-create-record
+    (configuration &key (:git-commit (option string)))
+    generation)
+(defun generation-create-record (configuration &key git-commit)
   "Create a pending generation record with immutable artifact paths."
   (let* ((identifier (make-identifier))
          (directory (merge-pathnames
@@ -82,11 +84,12 @@
                    :core-pathname (merge-pathnames "frob.core" directory)
                    :temporary-core-pathname (merge-pathnames ".frob.core.tmp" directory)
                    :manifest-pathname (merge-pathnames "manifest.sexp" directory)
-                   :git-commit (string-trim
-                                '(#\Space #\Tab #\Newline #\Return)
-                                (self-git-command
-                                 configuration
-                                 '("rev-parse" "HEAD")))
+                   :git-commit (or git-commit
+                                   (string-trim
+                                    '(#\Space #\Tab #\Newline #\Return)
+                                    (self-git-command
+                                     configuration
+                                     '("rev-parse" "HEAD"))))
                    :journal-position
                    (let ((journal (configuration-journal-path configuration)))
                      (if (probe-file journal)
@@ -178,6 +181,11 @@
              :pathname pathname))
     (let* ((directory (uiop:pathname-directory-pathname pathname))
            (core-pathname (pathname (getf (rest form) :core))))
+      (unless (uiop:subpathp core-pathname directory)
+        (error 'checkpoint-error
+               :message "A generation core is outside its artifact directory."
+               :stage ':manifest
+               :pathname pathname))
       (make-instance 'generation
                      :identifier (getf (rest form) :id)
                      :directory directory
@@ -202,6 +210,8 @@
                       (lisp-implementation-version))
              (string= (or (getf (rest manifest) :operating-system) "")
                       (software-type))
+             (string= (or (getf (rest manifest) :operating-system-version) "")
+                      (software-version))
              (string= (or (getf (rest manifest) :architecture) "")
                       (machine-type))
              t))
@@ -216,8 +226,13 @@
         (sort
          (loop for directory in (uiop:subdirectories root)
                for manifest = (merge-pathnames "manifest.sexp" directory)
-               when (probe-file manifest)
-                 collect (generation-load-manifest manifest))
+               for generation = (and (probe-file manifest)
+                                     (handler-case
+                                         (generation-load-manifest manifest)
+                                       (error ()
+                                         nil)))
+               when generation
+                 collect generation)
          #'>
          :key #'generation-created-at)
         nil)))
@@ -251,13 +266,24 @@
   "Return CONFIGURATION's selected retained generation, if it remains valid."
   (let ((pathname (generation-current-pathname configuration)))
     (when (probe-file pathname)
-      (let* ((record (read-portable-form pathname))
-             (manifest (and (listp record)
-                            (getf (rest record) :manifest))))
-        (when (and (eq (first record) :current-generation)
-                   (non-empty-string-p manifest)
-                   (probe-file manifest))
-          (generation-load-manifest manifest))))))
+      (handler-case
+          (let* ((record (read-portable-form pathname))
+                 (identifier (and (listp record)
+                                  (getf (rest record) :id)))
+                 (manifest (and (listp record)
+                                (getf (rest record) :manifest))))
+            (when (and (listp record)
+                       (eq (first record) :current-generation)
+                       (non-empty-string-p identifier)
+                       (non-empty-string-p manifest)
+                       (uiop:subpathp (pathname manifest)
+                                      (generation-root configuration))
+                       (probe-file manifest))
+              (let ((generation (generation-load-manifest manifest)))
+                (and (string= identifier (generation-identifier generation))
+                     generation))))
+        (error ()
+          nil)))))
 
 (-> generation-render-list (configuration) string)
 (defun generation-render-list (configuration)
@@ -298,6 +324,14 @@
 (defgeneric checkpoint-create (backend)
   (:documentation "Begin a validated checkpoint and return its pending generation."))
 
+(-> checkpoint-detach-state (t) t)
+(defgeneric checkpoint-detach-state (state)
+  (:documentation "Detach ephemeral resources from globally rooted checkpoint STATE."))
+
+(defmethod checkpoint-detach-state ((state t))
+  "Leave unrecognized checkpoint STATE unchanged."
+  state)
+
 (-> checkpoint-backend-create (configuration t) checkpoint-backend)
 (defun checkpoint-backend-create (configuration worker)
   "Return the checkpoint backend supported by this runtime."
@@ -311,22 +345,66 @@
              :stage ':backend
              :pathname nil)))
 
-(-> checkpoint--validate-source (configuration) null)
-(defun checkpoint--validate-source (configuration)
-  "Require a clean, checked source revision before saving a generation."
-  (let ((status (self-git-command configuration '("status" "--porcelain"))))
-    (when (non-empty-string-p status)
+(-> checkpoint--source-snapshot (configuration) string)
+(defun checkpoint--source-snapshot (configuration)
+  "Return the clean checked commit from CONFIGURATION's source tree."
+  (labels ((clean-commit ()
+             "Return HEAD when the source is clean, otherwise signal a checkpoint error."
+             (let ((status (self-git-command
+                            configuration
+                            '("status" "--porcelain"))))
+               (when (non-empty-string-p status)
+                 (error 'checkpoint-error
+                        :message "A checkpoint requires a clean source revision."
+                        :stage ':validation
+                        :pathname (configuration-source-root configuration))))
+             (string-trim
+              '(#\Space #\Tab #\Newline #\Return)
+              (self-git-command configuration '("rev-parse" "HEAD")))))
+    (let ((before (clean-commit)))
+      (handler-case
+          (uiop:run-program
+           (list (namestring
+                  (merge-pathnames "check"
+                                   (configuration-source-root configuration))))
+           :directory (configuration-source-root configuration)
+           :output :string
+           :error-output :output)
+        (error (condition)
+          (error 'checkpoint-error
+                 :message (format nil "The repository check failed: ~A" condition)
+                 :stage ':validation
+                 :pathname (configuration-source-root configuration))))
+      (let ((after (clean-commit)))
+        (unless (string= before after)
+          (error 'checkpoint-error
+                 :message "The source revision changed during checkpoint validation."
+                 :stage ':validation
+                 :pathname (configuration-source-root configuration)))
+        after))))
+
+(-> checkpoint--revalidate-source (configuration string) null)
+(defun checkpoint--revalidate-source (configuration expected-commit)
+  "Require CONFIGURATION to remain clean at EXPECTED-COMMIT immediately before fork."
+  (let ((status (self-git-command configuration '("status" "--porcelain")))
+        (commit (string-trim
+                 '(#\Space #\Tab #\Newline #\Return)
+                 (self-git-command configuration '("rev-parse" "HEAD")))))
+    (unless (and (not (non-empty-string-p status))
+                 (string= commit expected-commit))
       (error 'checkpoint-error
-             :message "A checkpoint requires a clean tracked source revision."
+             :message "The source changed after checkpoint validation."
              :stage ':validation
              :pathname (configuration-source-root configuration))))
-  (uiop:run-program
-   (list (namestring (merge-pathnames "check"
-                                     (configuration-source-root configuration))))
-   :directory (configuration-source-root configuration)
-   :output :string
-   :error-output :output)
   nil)
+
+(-> checkpoint--single-threaded-p () boolean)
+(defun checkpoint--single-threaded-p ()
+  "Return true when SBCL's current thread is the only live Lisp thread."
+  (notany (lambda (thread)
+            (and (not (eq thread sb-thread:*current-thread*))
+                 (sb-thread:thread-alive-p thread)))
+          (sb-thread:list-all-threads)))
 
 (-> checkpoint--detach-worker (t) null)
 (defun checkpoint--detach-worker (worker)
@@ -360,6 +438,9 @@
         (setf *checkpoint-in-progress-p* nil
               *credentials-in-request-scope* nil)
         (checkpoint--detach-worker worker)
+        (when (boundp '*active-application*)
+          (checkpoint-detach-state
+           (symbol-value '*active-application*)))
         (sb-ext:save-lisp-and-die
          (namestring (generation-temporary-core-pathname generation))
          :toplevel #'checkpoint-resume-main
@@ -374,18 +455,20 @@
 (defun checkpoint--coordinate (configuration generation worker)
   "Fork the saver, publish its completed artifacts, and exit this coordinator."
   (handler-case
-      (let ((saver-pid (sb-posix:fork)))
-        (if (zerop saver-pid)
-            (checkpoint--save-core generation worker)
-            (multiple-value-bind (waited-pid status)
-                (sb-posix:waitpid saver-pid 0)
-              (if (and (= waited-pid saver-pid)
-                       (sb-posix:wifexited status)
-                       (zerop (sb-posix:wexitstatus status)))
-                  (progn
-                    (generation-publish configuration generation)
-                    (sb-posix:_exit 0))
-                  (sb-posix:_exit 1)))))
+      (progn
+        (checkpoint--detach-worker worker)
+        (let ((saver-pid (sb-posix:fork)))
+          (if (zerop saver-pid)
+              (checkpoint--save-core generation worker)
+              (multiple-value-bind (waited-pid status)
+                  (sb-posix:waitpid saver-pid 0)
+                (if (and (= waited-pid saver-pid)
+                         (sb-posix:wifexited status)
+                         (zerop (sb-posix:wexitstatus status)))
+                    (progn
+                      (generation-publish configuration generation)
+                      (sb-posix:_exit 0))
+                    (sb-posix:_exit 1))))))
     (error ()
       (sb-posix:_exit 1)))
   nil)
@@ -393,15 +476,19 @@
 (-> checkpoint--watch-coordinator (generation integer) null)
 (defun checkpoint--watch-coordinator (generation coordinator-pid)
   "Update parent-side GENERATION status after COORDINATOR-PID terminates."
-  (multiple-value-bind (waited-pid status)
-      (sb-posix:waitpid coordinator-pid 0)
-    (setf (generation-status generation)
-          (if (and (= waited-pid coordinator-pid)
-                   (sb-posix:wifexited status)
-                   (zerop (sb-posix:wexitstatus status)))
-              ':ready
-              ':failed)
-          *checkpoint-in-progress-p* nil))
+  (unwind-protect
+       (handler-case
+           (multiple-value-bind (waited-pid status)
+               (sb-posix:waitpid coordinator-pid 0)
+             (setf (generation-status generation)
+                   (if (and (= waited-pid coordinator-pid)
+                            (sb-posix:wifexited status)
+                            (zerop (sb-posix:wexitstatus status)))
+                       ':ready
+                       ':failed)))
+         (error ()
+           (setf (generation-status generation) ':failed)))
+    (setf *checkpoint-in-progress-p* nil))
   nil)
 
 (defmethod checkpoint-create ((backend linux-sbcl-checkpoint-backend))
@@ -413,6 +500,7 @@
            :pathname nil))
   (let* ((configuration (checkpoint-backend-configuration backend))
          (worker (checkpoint-backend-worker backend))
+         (source-commit (checkpoint--source-snapshot configuration))
          (generation nil)
          (coordinator-p nil)
          (coordinator-pid nil))
@@ -422,8 +510,17 @@
                :message "A checkpoint is already being published."
                :stage ':validation
                :pathname nil))
-      (checkpoint--validate-source configuration)
-      (setf generation (generation-create-record configuration))
+      (checkpoint--revalidate-source configuration source-commit)
+      (unless (checkpoint--single-threaded-p)
+        (error 'checkpoint-error
+               :message "A checkpoint requires the current Lisp thread to be the only live thread."
+               :stage ':fork
+               :pathname nil))
+      (finish-output *standard-output*)
+      (finish-output *error-output*)
+      (setf generation (generation-create-record
+                        configuration
+                        :git-commit source-commit))
       (ensure-directories-exist (generation-directory generation))
       (setf *checkpoint-in-progress-p* t)
       (handler-case

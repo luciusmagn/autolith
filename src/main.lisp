@@ -204,8 +204,7 @@
           (application-rendered-sequence application) 0)
     application))
 
-(-> application-prepare-checkpoint (application) application)
-(defun application-prepare-checkpoint (application)
+(defmethod checkpoint-detach-state ((application application))
   "Detach APPLICATION's ephemeral object graph in a checkpoint saver child."
   (setf (application-provider application) nil
         (application-worker application) nil
