@@ -6,6 +6,9 @@
                 #:base64-string-to-string)
   (:import-from #:bordeaux-threads
                 #:make-lock
+                #:make-recursive-lock
+                #:make-thread
+                #:with-recursive-lock-held
                 #:with-lock-held)
   (:import-from #:dexador.error
                 #:http-request-failed

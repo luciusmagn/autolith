@@ -87,6 +87,14 @@
 
 ;;;; -- Mutation Journal --
 
+(defvar *live-mutation-lock* (make-recursive-lock "Frob live mutation")
+  "The process-wide lock serializing active-image and durable mutations.")
+
+(defmacro with-live-mutation (&body body)
+  "Evaluate BODY while excluding checkpoints and other live mutations."
+  `(with-recursive-lock-held (*live-mutation-lock*)
+     ,@body))
+
 (-> mutation-journal-append (configuration list) list)
 (defun mutation-journal-append (configuration record)
   "Append portable mutation RECORD to CONFIGURATION's journal."
@@ -134,29 +142,30 @@
                          (arguments hash-table))
   "Evaluate one exploratory form in CONTEXT's active image and journal it."
   (declare (ignore tool))
-  (let* ((source (tool-argument arguments "form" :required t))
-         (configuration (tool-context-configuration context)))
-    (mutation-journal-append
-     configuration
-     (list :mutation :kind :eval :proposed source :result :pending))
-    (handler-case
-        (multiple-value-bind (result-values output)
-            (self-capture-evaluation
-             (lambda ()
-               (eval (self-read-form source))))
+  (with-live-mutation
+    (let* ((source (tool-argument arguments "form" :required t))
+           (configuration (tool-context-configuration context)))
+      (mutation-journal-append
+       configuration
+       (list :mutation :kind :eval :proposed source :result :pending))
+      (handler-case
+          (multiple-value-bind (result-values output)
+              (self-capture-evaluation
+               (lambda ()
+                 (eval (self-read-form source))))
+            (mutation-journal-append
+             configuration
+             (list :mutation :kind :eval :proposed source :result :installed))
+            (tool-success (self-evaluation-result result-values output)))
+        (error (condition)
           (mutation-journal-append
            configuration
-           (list :mutation :kind :eval :proposed source :result :installed))
-          (tool-success (self-evaluation-result result-values output)))
-      (error (condition)
-        (mutation-journal-append
-         configuration
-         (list :mutation
-               :kind :eval
-               :proposed source
-               :result :failed
-               :condition (princ-to-string condition)))
-        (error condition)))))
+           (list :mutation
+                 :kind :eval
+                 :proposed source
+                 :result :failed
+                 :condition (princ-to-string condition)))
+          (error condition))))))
 
 
 ;;;; -- Definition Installation --
@@ -215,25 +224,36 @@
 (-> self-install-definition (configuration string) t)
 (defun self-install-definition (configuration source)
   "Compile and install one complete SOURCE definition, recording its active history."
-  (let ((definition (self-read-form source)))
-    (unless (definition-form-p definition)
-      (error 'source-mutation-error
-             :message "self.redefine accepts one complete supported definition."
-             :tool-name "self.redefine"
-             :pathname nil))
-    (let ((key (definition-key definition))
-          (previous (self-previous-definition definition)))
-      (mutation-journal-append
-       configuration
-       (list :mutation
-             :kind :definition
-             :target key
-             :previous previous
-             :proposed source
-             :result :pending))
-      (handler-case
-          (let ((result (eval definition)))
-            (setf (gethash key *exploratory-definitions*) source)
+  (with-live-mutation
+    (let ((definition (self-read-form source)))
+      (unless (definition-form-p definition)
+        (error 'source-mutation-error
+               :message "self.redefine accepts one complete supported definition."
+               :tool-name "self.redefine"
+               :pathname nil))
+      (let ((key (definition-key definition))
+            (previous (self-previous-definition definition)))
+        (mutation-journal-append
+         configuration
+         (list :mutation
+               :kind :definition
+               :target key
+               :previous previous
+               :proposed source
+               :result :pending))
+        (handler-case
+            (let ((result (eval definition)))
+              (setf (gethash key *exploratory-definitions*) source)
+              (mutation-journal-append
+               configuration
+               (list :mutation
+                     :kind :definition
+                     :target key
+                     :previous previous
+                     :proposed source
+                     :result :installed))
+              result)
+          (error (condition)
             (mutation-journal-append
              configuration
              (list :mutation
@@ -241,19 +261,9 @@
                    :target key
                    :previous previous
                    :proposed source
-                   :result :installed))
-            result)
-        (error (condition)
-          (mutation-journal-append
-           configuration
-           (list :mutation
-                 :kind :definition
-                 :target key
-                 :previous previous
-                 :proposed source
-                 :result :failed
-                 :condition (princ-to-string condition)))
-          (error condition))))))
+                   :result :failed
+                   :condition (princ-to-string condition)))
+            (error condition)))))))
 
 (defmethod tool-execute ((tool self-redefine-tool)
                          (context tool-context)
@@ -269,22 +279,13 @@
                          (arguments hash-table))
   "Set one active global binding after journaling its previous value."
   (declare (ignore tool))
-  (let* ((symbol (self-resolve-symbol
-                  (tool-argument arguments "symbol" :required t)))
-         (value-source (tool-argument arguments "value" :required t))
-         (configuration (tool-context-configuration context))
-         (previous (and (boundp symbol)
-                        (worker-render-value (symbol-value symbol)))))
-    (mutation-journal-append
-     configuration
-     (list :mutation
-           :kind :set
-           :target (write-to-string symbol)
-           :previous previous
-           :proposed value-source
-           :result :pending))
-    (let ((value (eval (self-read-form value-source))))
-      (setf (symbol-value symbol) value)
+  (with-live-mutation
+    (let* ((symbol (self-resolve-symbol
+                    (tool-argument arguments "symbol" :required t)))
+           (value-source (tool-argument arguments "value" :required t))
+           (configuration (tool-context-configuration context))
+           (previous (and (boundp symbol)
+                          (worker-render-value (symbol-value symbol)))))
       (mutation-journal-append
        configuration
        (list :mutation
@@ -292,8 +293,19 @@
              :target (write-to-string symbol)
              :previous previous
              :proposed value-source
-             :result :installed))
-      (tool-success (format nil "~S is now ~A." symbol (worker-render-value value))))))
+             :result :pending))
+      (let ((value (eval (self-read-form value-source))))
+        (setf (symbol-value symbol) value)
+        (mutation-journal-append
+         configuration
+         (list :mutation
+               :kind :set
+               :target (write-to-string symbol)
+               :previous previous
+               :proposed value-source
+               :result :installed))
+        (tool-success
+         (format nil "~S is now ~A." symbol (worker-render-value value)))))))
 
 
 ;;;; -- Form-Aware Source Persistence --
@@ -454,26 +466,27 @@
                          (arguments hash-table))
   "Install and form-aware persist one complete definition in CONTEXT."
   (declare (ignore tool))
-  (let* ((definition-source
-           (tool-argument arguments "definition" :required t))
-         (relative-name
-           (tool-argument arguments "pathname" :required t))
-         (configuration (tool-context-configuration context))
-         (pathname (self-source-pathname configuration relative-name)))
-    (self-install-definition configuration definition-source)
-    (source-replace-definition pathname definition-source)
-    (mutation-journal-append
-     configuration
-     (list :mutation
-           :kind :source
-           :target (enough-namestring pathname
-                                      (configuration-source-root configuration))
-           :proposed definition-source
-           :result :source-written))
-    (tool-success
-     (format nil "Installed and wrote ~A. The change is not durable until committed."
-             (enough-namestring pathname
-                                (configuration-source-root configuration))))))
+  (with-live-mutation
+    (let* ((definition-source
+             (tool-argument arguments "definition" :required t))
+           (relative-name
+             (tool-argument arguments "pathname" :required t))
+           (configuration (tool-context-configuration context))
+           (pathname (self-source-pathname configuration relative-name)))
+      (self-install-definition configuration definition-source)
+      (source-replace-definition pathname definition-source)
+      (mutation-journal-append
+       configuration
+       (list :mutation
+             :kind :source
+             :target (enough-namestring pathname
+                                        (configuration-source-root configuration))
+             :proposed definition-source
+             :result :source-written))
+      (tool-success
+       (format nil "Installed and wrote ~A. The change is not durable until committed."
+               (enough-namestring pathname
+                                  (configuration-source-root configuration)))))))
 
 
 ;;;; -- Git Operations --
@@ -536,28 +549,29 @@
                          (arguments hash-table))
   "Check, stage, and commit only the explicit paths supplied in ARGUMENTS."
   (declare (ignore tool))
-  (let* ((configuration (tool-context-configuration context))
-         (title (self-validate-commit-title
-                 (tool-argument arguments "title" :required t)))
-         (raw-paths (tool-argument arguments "paths" :required t)))
-    (unless (vectorp raw-paths)
-      (error 'tool-error
-             :message "self.commit paths must be a JSON array."
-             :tool-name "self.commit"))
-    (let ((paths (self-validate-commit-paths configuration raw-paths)))
-      (self-git-command configuration (append '("diff" "--check" "--") paths))
-      (self-git-command configuration (append '("add" "--") paths))
-      (let ((output (self-git-command configuration
-                                      (append (list "commit" "-m" title "--only" "--")
-                                              paths)
-                                      :ignore-error-status t)))
-        (mutation-journal-append
-         configuration
-         (list :mutation
-               :kind :commit
-               :paths paths
-               :title title
-               :result (if (search "nothing to commit" output :test #'char-equal)
-                           :unchanged
-                           :committed)))
-        (tool-success output)))))
+  (with-live-mutation
+    (let* ((configuration (tool-context-configuration context))
+           (title (self-validate-commit-title
+                   (tool-argument arguments "title" :required t)))
+           (raw-paths (tool-argument arguments "paths" :required t)))
+      (unless (vectorp raw-paths)
+        (error 'tool-error
+               :message "self.commit paths must be a JSON array."
+               :tool-name "self.commit"))
+      (let ((paths (self-validate-commit-paths configuration raw-paths)))
+        (self-git-command configuration (append '("diff" "--check" "--") paths))
+        (self-git-command configuration (append '("add" "--") paths))
+        (let ((output (self-git-command
+                       configuration
+                       (append (list "commit" "-m" title "--only" "--") paths)
+                       :ignore-error-status t)))
+          (mutation-journal-append
+           configuration
+           (list :mutation
+                 :kind :commit
+                 :paths paths
+                 :title title
+                 :result (if (search "nothing to commit" output :test #'char-equal)
+                             :unchanged
+                             :committed)))
+          (tool-success output))))))
