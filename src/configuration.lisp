@@ -32,6 +32,10 @@
   '("low" "medium" "high" "xhigh" "max" "ultra")
   "Reasoning effort names accepted by Frob configuration.")
 
+(defparameter +supported-web-search-modes+
+  '("cached" "live" "disabled")
+  "Hosted web search modes accepted by Frob configuration.")
+
 
 ;;;; -- Configuration Object --
 
@@ -76,6 +80,12 @@
     :reader configuration-reasoning-effort
     :type non-empty-string
     :documentation "The user-visible reasoning effort.")
+   (web-search-mode
+    :initarg :web-search-mode
+    :initform "cached"
+    :reader configuration-web-search-mode
+    :type non-empty-string
+    :documentation "The hosted web search mode: cached, live, or disabled.")
    (provider-endpoint
     :initarg :provider-endpoint
     :reader configuration-provider-endpoint
@@ -117,10 +127,19 @@
          (selected-model (or model (uiop:getenv "FROB_MODEL") +default-model+))
          (selected-effort (or reasoning-effort
                               (uiop:getenv "FROB_REASONING_EFFORT")
-                              +default-reasoning-effort+)))
+                              +default-reasoning-effort+))
+         (selected-web-search (let ((mode (uiop:getenv "FROB_WEB_SEARCH")))
+                                (if (non-empty-string-p mode)
+                                    (string-downcase mode)
+                                    "cached"))))
     (unless (member selected-effort +supported-reasoning-efforts+ :test #'string=)
       (error 'configuration-error
              :message (format nil "Unsupported reasoning effort ~S." selected-effort)))
+    (unless (member selected-web-search +supported-web-search-modes+
+                    :test #'string=)
+      (error 'configuration-error
+             :message (format nil "Unsupported web search mode ~S."
+                              selected-web-search)))
     (make-instance 'configuration
                    :source-root (uiop:ensure-directory-pathname
                                  (or source-root
@@ -135,6 +154,7 @@
                    :codex-auth-path (merge-pathnames "auth.json" codex-home)
                    :model selected-model
                    :reasoning-effort selected-effort
+                   :web-search-mode selected-web-search
                    :provider-endpoint (or (uiop:getenv "FROB_PROVIDER_ENDPOINT")
                                           +codex-responses-endpoint+))))
 

@@ -105,8 +105,18 @@
     :initarg :session-id
     :reader provider-session-id
     :type non-empty-string
-    :documentation "The stable provider session identifier."))
+    :documentation "The stable provider session identifier.")
+   (rate-limits
+    :initform nil
+    :accessor provider-rate-limits
+    :type list
+    :documentation "The most recent portable rate limit snapshot from response headers."))
   (:documentation "A direct ChatGPT subscription client for the Codex Responses service."))
+
+(defmethod provider-rate-limits ((provider model-provider))
+  "Return no rate limit snapshot for providers that do not report one."
+  (declare (ignore provider))
+  nil)
 
 (-> provider-create (configuration) codex-subscription-provider)
 (defun provider-create (configuration)
@@ -151,14 +161,45 @@
    "role" "developer"
    "tools" tool-namespaces))
 
+(-> provider-web-search-tool (configuration) (option json-object))
+(defun provider-web-search-tool (configuration)
+  "Return the hosted web search tool for CONFIGURATION, or NIL when disabled.
+
+Cached mode keeps external_web_access false so searches use the provider's
+indexed corpus, while live mode permits direct fetches. The tool rides in the
+additional_tools developer item exactly as Codex Responses Lite requests do
+at reference commit 5c19155c."
+  (let ((mode (configuration-web-search-mode configuration)))
+    (cond
+      ((string= mode "disabled")
+       nil)
+      ((string= mode "live")
+       (json-object "type" "web_search"
+                    "external_web_access" t))
+      (t
+       (json-object "type" "web_search"
+                    "external_web_access" false)))))
+
+;; No service_tier field is ever sent. Omitting it selects the provider's
+;; standard processing path; sending "priority" selects the fast path that
+;; drains subscription rate limits much faster (Codex reference commit
+;; 5c19155c filters its explicit "default" sentinel out of requests too).
 (-> provider-request-object
     (codex-subscription-provider conversation vector)
     json-object)
 (defun provider-request-object (provider conversation tool-namespaces)
-  "Build the complete stateless Sol Responses Lite request for CONVERSATION."
+  "Build the complete stateless Sol Responses Lite request for CONVERSATION.
+
+The request never carries a service_tier, keeping Frob on the standard path."
   (let* ((configuration (provider-configuration provider))
+         (web-search-tool (provider-web-search-tool configuration))
          (prefix (list
-                  (responses-lite-additional-tools tool-namespaces)
+                  (responses-lite-additional-tools
+                   (if web-search-tool
+                       (concatenate 'vector
+                                    tool-namespaces
+                                    (vector web-search-tool))
+                       tool-namespaces))
                   (responses-lite-developer-message
                    (system-prompt configuration))))
          (input (coerce (append prefix (conversation-input-items conversation))
@@ -294,6 +335,63 @@
       (t
        nil))))
 
+;;;; -- Rate Limit Snapshots --
+
+(define-constant +unix-epoch-universal-time+ 2208988800
+  :documentation "The Common Lisp universal time of the POSIX epoch.")
+
+(-> provider--parse-decimal (string) (option real))
+(defun provider--parse-decimal (text)
+  "Parse non-negative decimal TEXT such as 28 or 28.5 without the Lisp reader."
+  (handler-case
+      (let* ((trimmed (string-trim " " text))
+             (dot (position #\. trimmed)))
+        (if dot
+            (let ((whole (parse-integer trimmed :end dot))
+                  (fraction (subseq trimmed (1+ dot))))
+              (if (zerop (length fraction))
+                  whole
+                  (float (+ whole
+                            (/ (parse-integer fraction)
+                               (expt 10 (length fraction)))))))
+            (parse-integer trimmed)))
+    (error ()
+      nil)))
+
+(-> provider--rate-limit-window (t string) (option list))
+(defun provider--rate-limit-window (headers prefix)
+  "Return one portable rate limit window parsed from HEADERS under PREFIX."
+  (let ((used (response-header headers
+                               (format nil "~A-used-percent" prefix))))
+    (when (non-empty-string-p used)
+      (let ((used-percent (provider--parse-decimal used))
+            (minutes (response-header headers
+                                      (format nil "~A-window-minutes" prefix)))
+            (resets (response-header headers
+                                     (format nil "~A-reset-at" prefix))))
+        (when used-percent
+          (list :used-percent used-percent
+                :window-minutes (and (non-empty-string-p minutes)
+                                     (parse-integer minutes :junk-allowed t))
+                :resets-at (let ((seconds
+                                   (and (non-empty-string-p resets)
+                                        (parse-integer resets
+                                                       :junk-allowed t))))
+                             (and seconds
+                                  (+ seconds
+                                     +unix-epoch-universal-time+)))))))))
+
+(-> provider-rate-limit-snapshot (t) (option list))
+(defun provider-rate-limit-snapshot (headers)
+  "Return the portable subscription rate limit snapshot carried by HEADERS."
+  (let ((primary (provider--rate-limit-window headers "x-codex-primary"))
+        (secondary (provider--rate-limit-window headers "x-codex-secondary")))
+    (when (or primary secondary)
+      (list :captured-at (get-universal-time)
+            :primary primary
+            :secondary secondary))))
+
+
 (-> normalize-response-item (json-object) json-object)
 (defun normalize-response-item (item)
   "Remove transient server item identifiers from replayable provider ITEM."
@@ -409,6 +507,9 @@
              (provider-request-object provider conversation tool-namespaces)
              credentials
              conversation)
+          (let ((snapshot (provider-rate-limit-snapshot headers)))
+            (when snapshot
+              (setf (provider-rate-limits provider) snapshot)))
           (unless (= status 200)
             (when (open-stream-p stream)
               (close stream))

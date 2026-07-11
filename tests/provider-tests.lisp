@@ -2,6 +2,33 @@
 
 ;;;; -- Subsystem Tests --
 
+(-> test-provider-rate-limits () null)
+(defun test-provider-rate-limits ()
+  "Test rate limit header parsing into portable snapshots."
+  (let ((snapshot (provider-rate-limit-snapshot
+                   '(("x-codex-primary-used-percent" . "28.5")
+                     ("x-codex-primary-window-minutes" . "300")
+                     ("x-codex-primary-reset-at" . "1783000000")
+                     ("x-codex-secondary-used-percent" . "45")
+                     ("x-codex-secondary-window-minutes" . "10080")))))
+    (test-assert (= (getf (getf snapshot :primary) :window-minutes) 300)
+                 "primary rate limit windows parse their minutes")
+    (test-assert (= (round (* 10 (getf (getf snapshot :primary)
+                                       :used-percent)))
+                    285)
+                 "decimal used percents parse without the Lisp reader")
+    (test-assert (= (getf (getf snapshot :primary) :resets-at)
+                    (+ 1783000000 +unix-epoch-universal-time+))
+                 "reset times convert from the POSIX epoch")
+    (test-assert (= (getf (getf snapshot :secondary) :used-percent) 45)
+                 "secondary rate limit windows parse")
+    (test-assert (null (getf (getf snapshot :secondary) :resets-at))
+                 "missing reset headers stay absent"))
+  (test-assert (null (provider-rate-limit-snapshot
+                      '(("content-type" . "text/event-stream"))))
+               "absent rate limit headers produce no snapshot")
+  nil)
+
 (-> test-provider-request () null)
 (defun test-provider-request ()
   "Test the Sol Responses Lite request shape without network access."
@@ -20,17 +47,36 @@
                 (request nil))
            (conversation-append-user-message conversation "hello")
            (setf request (provider-request-object provider conversation schemas))
+           (test-assert (null (json-get request "service_tier"))
+                        "requests never select a provider service tier")
            (let ((input (json-get request "input")))
              (test-assert (= (length input) 3)
                           "the provider request prefixes two developer items")
              (test-assert
               (string= (json-get (aref input 0) "type") "additional_tools")
               "additional tools are the first input item")
+             (let* ((tools (coerce (json-get (aref input 0) "tools") 'list))
+                    (web-search
+                      (find "web_search" tools
+                            :key (lambda (tool)
+                                   (and (json-object-p tool)
+                                        (json-get tool "type")))
+                            :test #'equal)))
+               (test-assert web-search
+                            "cached web search rides in additional tools")
+               (test-assert (eq (json-get web-search "external_web_access")
+                                false)
+                            "cached web search forbids live web access"))
              (test-assert
               (string= (json-get (aref input 1) "role") "developer")
               "the Frob system prompt is the second input item")
              (test-assert (string= (json-get (aref input 2) "role") "user")
                           "conversation history follows the developer prefix"))
+           (test-assert
+            (null (provider-web-search-tool
+                   (make-instance 'configuration
+                                  :web-search-mode "disabled")))
+            "disabled web search adds no hosted tool")
            (test-assert
             (string= (json-get (json-get request "reasoning") "effort") "max")
             "the provider request maps Ultra reasoning to Max")
