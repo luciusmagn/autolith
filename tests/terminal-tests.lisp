@@ -366,6 +366,37 @@
                  "styling is omitted when the terminal does not permit it"))
   nil)
 
+(-> test-terminal-narrow-live-region () null)
+(defun test-terminal-narrow-live-region ()
+  "Test typed prompt layout and repaint bookkeeping at minimal terminal widths."
+  (dolist (columns '(1 2))
+    (let* ((terminal (make-instance 'recording-terminal :columns columns))
+           (ui (terminal-ui-create :terminal terminal :prompt "❯ ")))
+      (with-terminal-ui (active-ui ui)
+        (terminal-ui-process-event active-ui '(:insert "a"))
+        (multiple-value-bind (rows cursor-row cursor-column)
+            (terminal-ui--live-rows active-ui)
+          (let ((row-width (max 0 (1- columns))))
+            (test-assert
+             (every (lambda (row)
+                      (<= (terminal--spans-width row) row-width))
+                    rows)
+             (format nil "every live row fits a ~D-column terminal" columns))
+            (test-assert
+             (<= cursor-column row-width)
+             (format nil "the live cursor fits a ~D-column terminal" columns))
+            (test-assert
+             (= (terminal-ui-live-row-count active-ui) (length rows))
+             (format nil
+                     "repaint bookkeeping counts rows at ~D columns"
+                     columns))
+            (test-assert
+             (= (terminal-ui-live-cursor-row active-ui) cursor-row)
+             (format nil
+                     "repaint bookkeeping tracks the cursor at ~D columns"
+                     columns)))))))
+  nil)
+
 (-> test-terminal-stream-update () null)
 (defun test-terminal-stream-update ()
   "Test continuous streamed blocks, fluid tail repaint, and block completion."
@@ -586,6 +617,7 @@
   (test-terminal-line-editor)
   (test-terminal-input-decoding)
   (test-terminal-live-region-layout)
+  (test-terminal-narrow-live-region)
   (test-terminal-stream-update)
   (test-terminal-command-completion)
   (test-terminal-modal-selection)

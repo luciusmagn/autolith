@@ -138,14 +138,16 @@
                 (terminal--text-width visible-prompt))
         (multiple-value-bind (row cursor-column)
             (line-editor-render editor (terminal-ui-prompt ui) columns)
-          (let ((content-style (if (uiop:string-prefix-p
-                                    "/" (line-editor-text editor))
-                                   :user
-                                   :plain)))
-            (values (list (terminal-span :brand visible-prompt)
-                          (terminal-span content-style
-                                         (subseq row (length visible-prompt))))
-                    cursor-column))))))
+          (let* ((content-style (if (uiop:string-prefix-p
+                                     "/" (line-editor-text editor))
+                                    :user
+                                    :plain))
+                 (spans (list (terminal-span :brand visible-prompt)
+                              (terminal-span content-style
+                                             (subseq row
+                                                     (length visible-prompt))))))
+            (values (terminal--clip-spans spans row-width)
+                    (min cursor-column row-width)))))))
 
 ;;;; -- Command Completion Suggestions --
 
