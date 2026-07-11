@@ -1,0 +1,36 @@
+("quicklisp" .
+ (:class qlot/source/dist:source-dist
+  :initargs (:distribution "https://beta.quicklisp.org/dist/quicklisp.txt" :%version :latest)
+  :version "2026-01-01"))
+("alexandria" .
+ (:class qlot/source/ql:source-ql
+  :initargs (:%version "2026-01-01")
+  :version "ql-2024-10-12"))
+("bordeaux-threads" .
+ (:class qlot/source/ql:source-ql
+  :initargs (:%version "2026-01-01")
+  :version "ql-2024-10-12"))
+("cl-base64" .
+ (:class qlot/source/ql:source-ql
+  :initargs (:%version "2026-01-01")
+  :version "ql-2020-10-16"))
+("closer-mop" .
+ (:class qlot/source/ql:source-ql
+  :initargs (:%version "2026-01-01")
+  :version "ql-2026-01-01"))
+("dexador" .
+ (:class qlot/source/ql:source-ql
+  :initargs (:%version "2026-01-01")
+  :version "ql-2026-01-01"))
+("quri" .
+ (:class qlot/source/ql:source-ql
+  :initargs (:%version "2026-01-01")
+  :version "ql-2026-01-01"))
+("serapeum" .
+ (:class qlot/source/ql:source-ql
+  :initargs (:%version "2026-01-01")
+  :version "ql-2026-01-01"))
+("yason" .
+ (:class qlot/source/ql:source-ql
+  :initargs (:%version "2026-01-01")
+  :version "ql-2025-06-22"))

@@ -1,4 +1,6 @@
 *.fasl
 *.core
 .cache/
+.qlot/
+.bundle-libs/
 var/

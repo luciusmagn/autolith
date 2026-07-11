@@ -4,8 +4,12 @@
 
 (let* ((script-path (truename *load-truename*))
        (source-root (uiop:pathname-directory-pathname script-path))
-       (quicklisp-setup (merge-pathnames "quicklisp/setup.lisp"
-                                         (user-homedir-pathname))))
+       (project-setup (merge-pathnames ".qlot/setup.lisp" source-root))
+       (user-setup (merge-pathnames "quicklisp/setup.lisp"
+                                    (user-homedir-pathname)))
+       (quicklisp-setup (if (probe-file project-setup)
+                           project-setup
+                           user-setup)))
   (unless (probe-file quicklisp-setup)
     (error "Frob needs Quicklisp at ~A" quicklisp-setup))
   (load quicklisp-setup)
