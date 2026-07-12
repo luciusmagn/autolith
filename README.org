@@ -151,8 +151,11 @@ They run in the active process but touch only files and subprocesses, never
 the Lisp heap, so the model does not need =self.eval= to look around. The
 stable launcher and recovery artifacts stay read-only through these tools.
 
-When the workspace contains an =AGENTS.md=, its contents ride along in the
-system prompt automatically, bounded and refreshed on every request.
+=AGENTS.md= files are discovered the way Codex discovers them: Frob walks up
+from the workspace to the nearest =.git= project root, then includes every
+=AGENTS.md= from the root down to the workspace, root first, bounded and
+refreshed on every request. Without a project root only the workspace file
+is considered.
 
 The initial =lisp.*= tools are =eval=, =compile=, =load-system=, =describe=,
 =run-tests=, and =reset=. They use a persistent but disposable SBCL subprocess

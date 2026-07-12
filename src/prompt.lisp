@@ -28,20 +28,75 @@ The current date is ~A.~@[~2%~A~]"
 (define-constant +workspace-instructions-limit+ 16000
   :documentation "The characters of workspace AGENTS.md included in the prompt.")
 
+(define-constant +workspace-instructions-depth-limit+ 64
+  :documentation "The most directory levels walked while locating AGENTS.md files.")
+
+(-> system-prompt--project-root (pathname) pathname)
+(defun system-prompt--project-root (working-directory)
+  "Return the nearest ancestor holding a .git marker, or WORKING-DIRECTORY.
+
+Mirrors the Codex AGENTS.md discovery at reference commit 5c19155c: the walk
+never continues past the project root, and a missing marker keeps discovery
+inside the working directory alone."
+  (labels ((marker-p (directory)
+             "Return true when DIRECTORY contains a .git entry."
+             (and (or (uiop:directory-exists-p
+                       (merge-pathnames ".git/" directory))
+                      (uiop:file-exists-p (merge-pathnames ".git" directory)))
+                  t)))
+    (loop repeat +workspace-instructions-depth-limit+
+          for directory = working-directory
+            then (uiop:pathname-parent-directory-pathname directory)
+          for parent = (uiop:pathname-parent-directory-pathname directory)
+          when (marker-p directory)
+            return directory
+          when (equal directory parent)
+            return working-directory
+          finally (return working-directory))))
+
+(-> system-prompt--instruction-paths (pathname) list)
+(defun system-prompt--instruction-paths (working-directory)
+  "Return AGENTS.md paths from the project root down to WORKING-DIRECTORY."
+  (let* ((root (system-prompt--project-root working-directory))
+         (directories
+           (loop repeat +workspace-instructions-depth-limit+
+                 for directory = working-directory
+                   then (uiop:pathname-parent-directory-pathname directory)
+                 collect directory
+                 until (or (equal directory root)
+                           (equal directory
+                                  (uiop:pathname-parent-directory-pathname
+                                   directory))))))
+    (loop for directory in (reverse directories)
+          for path = (merge-pathnames "AGENTS.md" directory)
+          when (uiop:file-exists-p path)
+            collect path)))
+
 (-> system-prompt--workspace-instructions (configuration) (option string))
 (defun system-prompt--workspace-instructions (configuration)
-  "Return the workspace AGENTS.md instructions section, when the file exists."
-  (let ((path (merge-pathnames "AGENTS.md"
-                               (configuration-working-directory configuration))))
-    (when (probe-file path)
-      (handler-case
-          (format nil "Workspace instructions from ~A follow. Respect them ~
-                       for work in this workspace.~2%~A"
-                  (system-prompt--context-value (namestring path))
-                  (bounded-string (uiop:read-file-string path)
-                                  :limit +workspace-instructions-limit+))
-        (error ()
-          nil)))))
+  "Return the concatenated AGENTS.md instructions along the workspace path."
+  (let ((sections
+          (loop for path in (system-prompt--instruction-paths
+                             (configuration-working-directory configuration))
+                for contents = (handler-case
+                                   (uiop:read-file-string path)
+                                 (error ()
+                                   nil))
+                when (non-empty-string-p contents)
+                  collect (format nil "From ~A:~2%~A"
+                                  (system-prompt--context-value
+                                   (namestring path))
+                                  contents))))
+    (when sections
+      (bounded-string
+       (format nil "Workspace instructions from ~A follow, project root ~
+                    first; deeper files refine earlier ones. Respect them ~
+                    for work in this workspace.~2%~{~A~^~2%~}"
+               (if (rest sections)
+                   "AGENTS.md files"
+                   "AGENTS.md")
+               sections)
+       :limit +workspace-instructions-limit+))))
 
 (define-constant +system-prompt-context-value-limit+ 256
   :documentation "The maximum decoded length of one dynamic system-prompt value.")

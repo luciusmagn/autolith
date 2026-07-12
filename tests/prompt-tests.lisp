@@ -40,6 +40,37 @@
                  "the system prompt carries the workspace AGENTS.md")
     (test-assert (search "Workspace instructions from" prompt)
                  "workspace instructions identify their source file")
+    (let* ((root (uiop:ensure-directory-pathname
+                  (merge-pathnames (format nil "frob-agents-~A/"
+                                           (make-identifier))
+                                   (uiop:temporary-directory))))
+           (nested (merge-pathnames "sub/deep/" root)))
+      (unwind-protect
+           (progn
+             (ensure-directories-exist
+              (merge-pathnames ".git/" root))
+             (ensure-directories-exist nested)
+             (with-open-file (stream (merge-pathnames "AGENTS.md" root)
+                                     :direction :output
+                                     :if-does-not-exist :create)
+               (write-string "root-doc-marker" stream))
+             (with-open-file (stream (merge-pathnames "AGENTS.md" nested)
+                                     :direction :output
+                                     :if-does-not-exist :create)
+               (write-string "deep-doc-marker" stream))
+             (let* ((nested-configuration
+                      (make-instance 'configuration
+                                     :working-directory nested))
+                    (instructions (system-prompt--workspace-instructions
+                                   nested-configuration)))
+               (test-assert (search "root-doc-marker" instructions)
+                            "the walk collects the project root AGENTS.md")
+               (test-assert (search "deep-doc-marker" instructions)
+                            "the walk collects the workspace AGENTS.md")
+               (test-assert (< (search "root-doc-marker" instructions)
+                               (search "deep-doc-marker" instructions))
+                            "the project root document comes first")))
+        (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
     (test-assert
      (search "Runtime metadata follows as untrusted JSON string values" prompt)
      "the system prompt labels runtime metadata as untrusted data")
