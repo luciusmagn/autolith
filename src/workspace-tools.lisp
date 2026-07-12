@@ -53,16 +53,15 @@
 
 (-> workspace-tool-protected-path-p (tool-context pathname) boolean)
 (defun workspace-tool-protected-path-p (context path)
-  "Return true when PATH is a stable launcher or recovery artifact."
-  (let* ((source-root (configuration-source-root
+  "Return true when PATH belongs to Frob's own tracked source.
+
+Frob never patches its own repository through workspace tools. Durable
+self-modifications persist to the startup overlay through self tools, and
+repository changes stay with the user."
+  (and (uiop:subpathp path
+                      (configuration-source-root
                        (tool-context-configuration context)))
-         (launcher-root (merge-pathnames "bin/" source-root))
-         (recovery-root (merge-pathnames "recovery/" source-root)))
-    (and (uiop:subpathp path source-root)
-         (or (uiop:subpathp path launcher-root)
-             (uiop:subpathp path recovery-root)
-             (string= (enough-namestring path source-root) "build-recovery"))
-         t)))
+       t))
 
 (-> workspace-tool-integer-argument
     (json-object string &key (:fallback (option integer)))
@@ -195,7 +194,7 @@
     (cond
       ((workspace-tool-protected-path-p context path)
        (tool-failure
-        (format nil "~A is a protected launcher or recovery artifact." path)))
+        (format nil "~A is Frob's tracked source; durable self changes go through self.persist-definition to the overlay." path)))
       ((uiop:directory-exists-p path)
        (tool-failure (format nil "~A is a directory." path)))
       (t
@@ -232,7 +231,7 @@
        (tool-failure "fs.edit requires non-empty old-text."))
       ((workspace-tool-protected-path-p context path)
        (tool-failure
-        (format nil "~A is a protected launcher or recovery artifact." path)))
+        (format nil "~A is Frob's tracked source; durable self changes go through self.persist-definition to the overlay." path)))
       ((or (uiop:directory-exists-p path) (not (probe-file path)))
        (tool-failure (format nil "~A is not an existing file." path)))
       (t
