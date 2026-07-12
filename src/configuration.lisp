@@ -40,6 +40,20 @@
   '("gpt-5.6-sol" "gpt-5.6-luna" "gpt-5.6-terra")
   "The 5.6 model family identifiers offered by the interactive model picker.")
 
+;; Window sizes read from the live Codex model catalog on 2026-07-12; every
+;; 5.6 family model reported context_window 372000.
+(defparameter +model-context-windows+
+  '(("gpt-5.6-sol"   . 372000)
+    ("gpt-5.6-luna"  . 372000)
+    ("gpt-5.6-terra" . 372000))
+  "Provider context window sizes in tokens for known models.")
+
+(define-constant +default-context-window+ 272000
+  :documentation "The conservative context window assumed for unknown models.")
+
+(define-constant +default-compaction-threshold-percent+ 80
+  :documentation "The context window percentage that triggers compaction.")
+
 
 ;;;; -- Configuration Object --
 
@@ -90,12 +104,55 @@
     :reader configuration-web-search-mode
     :type non-empty-string
     :documentation "The hosted web search mode: cached, live, or disabled.")
+   (context-window
+    :initarg :context-window
+    :initform +default-context-window+
+    :reader configuration-context-window
+    :type (integer 1)
+    :documentation "The provider context window in tokens for the model.")
+   (compaction-threshold-percent
+    :initarg :compaction-threshold-percent
+    :initform +default-compaction-threshold-percent+
+    :reader configuration-compaction-threshold-percent
+    :type (integer 1 95)
+    :documentation "The context window percentage that triggers compaction.")
    (provider-endpoint
     :initarg :provider-endpoint
     :reader configuration-provider-endpoint
     :type non-empty-string
     :documentation "The streaming Responses endpoint."))
   (:documentation "Immutable paths and model choices for one Frob process."))
+
+(-> configuration--context-window-for (string) integer)
+(defun configuration--context-window-for (model)
+  "Return MODEL's context window from the environment, table, or fallback."
+  (let ((override (uiop:getenv "FROB_CONTEXT_WINDOW")))
+    (or (and (non-empty-string-p override)
+             (let ((parsed (parse-integer override :junk-allowed t)))
+               (and parsed (plusp parsed) parsed)))
+        (rest (assoc model +model-context-windows+ :test #'string=))
+        +default-context-window+)))
+
+(-> configuration--compaction-threshold () integer)
+(defun configuration--compaction-threshold ()
+  "Return the validated compaction threshold percentage from the environment."
+  (let ((override (uiop:getenv "FROB_COMPACTION_THRESHOLD")))
+    (if (non-empty-string-p override)
+        (let ((parsed (parse-integer override :junk-allowed t)))
+          (unless (and parsed (<= 1 parsed 95))
+            (error 'configuration-error
+                   :message (format nil "FROB_COMPACTION_THRESHOLD must be ~
+                                         a percentage between 1 and 95, not ~S."
+                                    override)))
+          parsed)
+        +default-compaction-threshold-percent+)))
+
+(-> configuration-compaction-token-limit (configuration) integer)
+(defun configuration-compaction-token-limit (configuration)
+  "Return the token count at which CONFIGURATION compacts the conversation."
+  (floor (* (configuration-context-window configuration)
+            (configuration-compaction-threshold-percent configuration))
+         100))
 
 (-> environment-directory (string pathname) pathname)
 (defun environment-directory (variable fallback)
@@ -159,6 +216,10 @@
                    :model selected-model
                    :reasoning-effort selected-effort
                    :web-search-mode selected-web-search
+                   :context-window (configuration--context-window-for
+                                    selected-model)
+                   :compaction-threshold-percent
+                   (configuration--compaction-threshold)
                    :provider-endpoint (or (uiop:getenv "FROB_PROVIDER_ENDPOINT")
                                           +codex-responses-endpoint+))))
 
@@ -167,7 +228,9 @@
                    (:reasoning-effort (option string)))
     configuration)
 (defun configuration--clone (configuration &key model reasoning-effort)
-  "Copy CONFIGURATION, replacing only the supplied model and reasoning effort."
+  "Copy CONFIGURATION, replacing only the supplied model and reasoning effort.
+
+Selecting a different model recomputes the context window for that model."
   (make-instance 'configuration
                  :source-root (configuration-source-root configuration)
                  :working-directory
@@ -181,6 +244,12 @@
                                        (configuration-reasoning-effort
                                         configuration))
                  :web-search-mode (configuration-web-search-mode configuration)
+                 :context-window (if model
+                                     (configuration--context-window-for model)
+                                     (configuration-context-window
+                                      configuration))
+                 :compaction-threshold-percent
+                 (configuration-compaction-threshold-percent configuration)
                  :provider-endpoint
                  (configuration-provider-endpoint configuration)))
 
