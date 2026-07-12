@@ -120,7 +120,7 @@
 
 (-> test-durable-self-mutation () null)
 (defun test-durable-self-mutation ()
-  "Test checked live installation, source persistence, commit, and durable journaling."
+  "Test checked live installation, overlay persistence, and startup replay."
   (let* ((source-root
            (uiop:ensure-directory-pathname
             (merge-pathnames
@@ -131,7 +131,6 @@
          (previous-function (symbol-function 'test-self-target))
          (active-check-count 0)
          (source-check-count 0)
-         (expected-source-fragment "Return the durable baseline.")
          (checker
            (make-instance
             'callback-mutation-checker
@@ -139,21 +138,11 @@
             (lambda (checked-configuration definition-source)
               (declare (ignore checked-configuration definition-source))
               (incf active-check-count)
-              (test-assert
-               (search expected-source-fragment
-                       (uiop:read-file-string source-pathname))
-               "active checks run before durable source replacement")
               "active checks passed")
             :source-callback
             (lambda (checked-configuration paths)
-              (declare (ignore checked-configuration))
+              (declare (ignore checked-configuration paths))
               (incf source-check-count)
-              (test-assert (equal paths '("src/definitions.lisp"))
-                           "source checks receive normalized explicit paths")
-              (test-assert
-               (search "Return the durable value."
-                       (uiop:read-file-string source-pathname))
-               "source checks run after durable source replacement")
               "source checks passed"))))
     (unwind-protect
          (progn
@@ -173,7 +162,8 @@
            (self-git-command configuration
                              '("commit" "--quiet" "-m" "Create baseline"))
            (let* ((conversation
-                    (conversation-create configuration :identifier "durable-mutation"))
+                    (conversation-create configuration
+                                         :identifier "durable-mutation"))
                   (context
                     (make-instance 'tool-context
                                    :configuration configuration
@@ -191,287 +181,128 @@
                       'callback-mutation-checker
                       :active-callback
                       (lambda (checked-configuration definition-source)
-                        (declare (ignore checked-configuration definition-source))
+                        (declare (ignore checked-configuration
+                                         definition-source))
                         (error "Injected active check failure."))
                       :source-callback
                       (lambda (checked-configuration paths)
                         (declare (ignore checked-configuration paths))
                         "unused"))))
                   (registry (make-default-tool-registry))
-                  (persist-tool (tool-registry-find registry "self" "persist-definition"))
+                  (persist-tool (tool-registry-find registry
+                                                    "self"
+                                                    "persist-definition"))
                   (commit-tool (tool-registry-find registry "self" "commit"))
-                  (failed-persist-p
-                    (handler-case
-                        (progn
-                          (tool-execute
-                           persist-tool
-                           failing-active-context
-                           (json-object
-                            "definition"
-                            "(defun test-self-target () \"Return a rejected value.\" 13)"
-                            "pathname" "src/definitions.lisp"))
-                          nil)
-                      (error ()
-                        t)))
-                  (failed-persist-restored-p (= (test-self-target) 0))
-                  (failed-persist-source-unchanged-p
-                    (search "Return the durable baseline."
-                            (uiop:read-file-string source-pathname)))
-                  (persist-result
+                  (overlay (overlay-pathname
+                            configuration
+                            (definition-key '(defun test-self-target () 0)))))
+             (test-assert
+              (handler-case
+                  (progn
                     (tool-execute
                      persist-tool
-                     context
+                     failing-active-context
                      (json-object
                       "definition"
-                      "(defun test-self-target () \"Return the durable value.\" 84)"
-                      "pathname" "src/definitions.lisp")))
-                  (mutation
-                    (loop for value being the hash-values of *durable-mutations*
-                          when (and
-                                (string= (durable-mutation-target value)
-                                         (definition-key '(defun test-self-target () 84)))
-                                (eq (durable-mutation-phase value) :source-written))
-                            return value)))
-             (test-assert failed-persist-p
-                          "a failing active check rejects durable persistence")
-             (test-assert failed-persist-restored-p
-                          "a rejected durable definition restores the active definition")
-             (test-assert failed-persist-source-unchanged-p
-              "a rejected durable definition leaves source unchanged")
-             (test-assert (tool-result-success-p persist-result)
-                          "durable persistence succeeds after active checks")
+                      "(defun test-self-target () \"Return a rejected value.\" 13)"))
+                    nil)
+                (error ()
+                  t))
+              "a failing active check rejects durable persistence")
+             (test-assert (= (test-self-target) 0)
+                          "a rejected definition restores the previous behavior")
+             (test-assert (not (uiop:file-exists-p overlay))
+                          "a rejected definition writes no overlay")
+             (let ((result
+                     (tool-execute
+                      persist-tool
+                      context
+                      (json-object
+                       "definition"
+                       "(defun test-self-target () \"Return the durable value.\" 84)"))))
+               (test-assert (tool-result-success-p result)
+                            "durable persistence succeeds after active checks")
+               (test-assert (search "overlay" (tool-result-content result))
+                            "the persistence result names the overlay"))
              (test-assert (= (test-self-target) 84)
                           "durable persistence installs the live definition")
              (test-assert (= active-check-count 1)
                           "durable persistence runs active checks exactly once")
-             (test-assert mutation
-                          "durable persistence retains an explicit source-written transaction")
-             (let ((identifier (durable-mutation-identifier mutation)))
-               (clrhash *durable-mutations*)
-               (durable-mutations-load configuration)
-               (setf mutation (gethash identifier *durable-mutations*))
-               (test-assert
-                (and mutation
-                     (eq (durable-mutation-phase mutation) :source-written))
-                "pending durable state reconstructs from the append-only journal"))
-             (let* ((failing-source-context
-                      (make-instance
-                       'tool-context
-                       :configuration configuration
-                       :worker nil
-                       :conversation conversation
-                       :mutation-checker
-                       (make-instance
-                        'callback-mutation-checker
-                        :active-callback
-                        (lambda (checked-configuration definition-source)
-                          (declare (ignore checked-configuration definition-source))
-                          "unused")
-                        :source-callback
-                        (lambda (checked-configuration paths)
-                          (declare (ignore checked-configuration paths))
-                          (error "Injected source check failure.")))))
-                    (baseline-commit
-                      (string-trim
-                       '(#\Space #\Tab #\Newline #\Return)
-                       (self-git-command configuration '("rev-parse" "HEAD"))))
-                    (failed-commit-p
-                      (handler-case
-                          (progn
-                            (tool-execute
-                             commit-tool
-                             failing-source-context
-                             (json-object
-                              "title" "Reject durable test definition"
-                              "paths" (json-array "src/definitions.lisp")))
-                            nil)
-                        (error ()
-                          t)))
-                    (failed-commit-left-git-p
-                      (string= baseline-commit
-                               (string-trim
-                                '(#\Space #\Tab #\Newline #\Return)
-                                (self-git-command configuration
-                                                  '("rev-parse" "HEAD")))))
-                    (failed-commit-left-pending-p
-                      (eq (durable-mutation-phase mutation) :source-written))
-                    (commit-result
-                     (tool-execute
-                      commit-tool
-                      context
-                      (json-object
-                       "title" "Persist durable test definition"
-                       "paths" (json-array "src/definitions.lisp")))))
-               (test-assert failed-commit-p
-                            "a failing clean-source check rejects self.commit")
-               (test-assert failed-commit-left-git-p
-                "a rejected self.commit leaves Git unchanged")
-               (test-assert failed-commit-left-pending-p
-                            "a rejected self.commit leaves its transaction pending")
-               (test-assert (tool-result-success-p commit-result)
-                            "self.commit creates the explicit checked commit")
-               (test-assert (= source-check-count 1)
-                            "self.commit runs clean-source checks exactly once")
-               (test-assert (eq (durable-mutation-phase mutation) :durable)
-                            "self.commit marks the matching transaction durable")
-               (test-assert
-                (string= (durable-mutation-git-commit mutation)
-                         (string-trim
-                          '(#\Space #\Tab #\Newline #\Return)
-                          (self-git-command configuration '("rev-parse" "HEAD"))))
-                "the durable journal records the exact Git commit")
-               (setf expected-source-fragment "Return the durable value.")
-               (tool-execute
-                persist-tool
-                context
-                (json-object
-                 "definition"
-                 "(defun test-self-target () \"Return the reconciled value.\" 85)"
-                 "pathname" "src/definitions.lisp"))
-               (let* ((pending
-                        (loop for value being the hash-values of *durable-mutations*
-                              when (and
-                                    (eq (durable-mutation-phase value)
-                                        :source-written)
-                                    (search "reconciled"
-                                            (durable-mutation-proposed-source value)))
-                                return value))
-                      (identifier (durable-mutation-identifier pending)))
-                 (self-git-command
-                  configuration
-                  '("commit" "--quiet" "-m" "Commit before journal"
-                    "--only" "--" "src/definitions.lisp"))
+             (test-assert (uiop:file-exists-p overlay)
+                          "durable persistence writes the overlay file")
+             (test-assert (search "Return the durable value."
+                                  (uiop:read-file-string overlay))
+                          "the overlay carries the complete definition")
+             (test-assert (search "Return the durable baseline."
+                                  (uiop:read-file-string source-pathname))
+                          "the tracked source is never modified")
+             (let ((mutation
+                     (loop for value being the hash-values of *durable-mutations*
+                           when (and (string= (durable-mutation-target value)
+                                              (definition-key
+                                               '(defun test-self-target () 0)))
+                                     (eq (durable-mutation-phase value)
+                                         :durable))
+                             return value)))
+               (test-assert mutation
+                            "overlay persistence is durable immediately")
+               (let ((identifier (durable-mutation-identifier mutation)))
                  (clrhash *durable-mutations*)
                  (durable-mutations-load configuration)
-                 (let ((reconciled (gethash identifier *durable-mutations*)))
-                   (test-assert
-                    (and reconciled
-                         (eq (durable-mutation-phase reconciled) :durable)
-                         (non-empty-string-p
-                          (durable-mutation-git-commit reconciled)))
-                    "journal replay reconciles a crash after Git commit")))
-               (setf expected-source-fragment "Return the reconciled value.")
+                 (let ((reloaded (gethash identifier *durable-mutations*)))
+                   (test-assert (and reloaded
+                                     (eq (durable-mutation-phase reloaded)
+                                         :durable))
+                                "durable overlay state replays from the journal"))))
+             (tool-execute
+              persist-tool
+              context
+              (json-object
+               "definition"
+               "(defun test-self-target () \"Return the second value.\" 85)"))
+             (test-assert (= (test-self-target) 85)
+                          "overlay persistence replaces the live definition")
+             (let ((overlay-source (uiop:read-file-string overlay)))
+               (test-assert (and (search "Return the second value."
+                                         overlay-source)
+                                 (not (search "Return the durable value."
+                                              overlay-source)))
+                            "the overlay holds exactly the newest definition"))
+             (setf (symbol-function 'test-self-target) previous-function)
+             (test-assert (null (overlay-load-all configuration))
+                          "overlay loading reports no failures")
+             (test-assert (= (test-self-target) 85)
+                          "startup overlay loading restores definitions")
+             (let ((broken (merge-pathnames
+                            "broken.lisp"
+                            (configuration-overlay-root configuration))))
+               (with-open-file (stream broken
+                                       :direction :output
+                                       :if-exists :supersede
+                                       :if-does-not-exist :create
+                                       :external-format :utf-8)
+                 (write-string "(defun test-broken-overlay (" stream))
+               (let ((failures (overlay-load-all configuration)))
+                 (test-assert (= (length failures) 1)
+                              "a broken overlay is reported as one failure")
+                 (test-assert (= (test-self-target) 85)
+                              "later overlays still load past a broken one")))
+             (with-open-file (stream source-pathname
+                                     :direction :output
+                                     :if-exists :append
+                                     :external-format :utf-8)
+               (format stream "~%;; A user-made repository change.~%"))
+             (test-assert
+              (tool-result-success-p
                (tool-execute
-                persist-tool
+                commit-tool
                 context
                 (json-object
-                 "definition"
-                 "(defun test-self-target () \"Return the precise value.\" 87)"
-                 "pathname" "src/definitions.lisp"))
-               (let* ((precise
-                        (loop for value being the hash-values of *durable-mutations*
-                              when (and
-                                    (eq (durable-mutation-phase value)
-                                        :source-written)
-                                    (search "precise"
-                                            (durable-mutation-proposed-source value)))
-                                return value))
-                      (identifier (durable-mutation-identifier precise)))
-                 (test-assert
-                  (null
-                   (durable-mutation--revision-source
-                    configuration
-                    precise
-                    "0000000000000000000000000000000000000000"))
-                  "missing historical revisions are ignored safely")
-                 (test-assert
-                  (not
-                   (durable-mutation--source-contains-definition-p
-                    "(defun unreadable"
-                    (self-read-form
-                     (durable-mutation-proposed-source precise)
-                     :read-eval nil)))
-                  "unreadable historical source is ignored safely")
-                 (source-replace-definition
-                  source-pathname
-                  "(defun test-self-target () \"Return an intervening value.\" 870)")
-                 (self-git-command
-                  configuration
-                  '("commit" "--quiet" "-m" "Commit different definition first"
-                    "--only" "--" "src/definitions.lisp"))
-                 (let ((earlier-commit
-                         (string-trim
-                          '(#\Space #\Tab #\Newline #\Return)
-                          (self-git-command configuration
-                                            '("rev-parse" "HEAD")))))
-                   (test-assert
-                    (null (durable-mutation-committing-revision
-                           configuration precise))
-                    "an earlier same-file commit cannot claim the mutation")
-                   (source-replace-definition
-                    source-pathname
-                    (durable-mutation-proposed-source precise))
-                   (self-git-command
-                    configuration
-                    '("commit" "--quiet" "-m" "Commit exact definition second"
-                      "--only" "--" "src/definitions.lisp"))
-                   (let ((matching-commit
-                           (string-trim
-                            '(#\Space #\Tab #\Newline #\Return)
-                            (self-git-command configuration
-                                              '("rev-parse" "HEAD")))))
-                     (test-assert (not (string= earlier-commit matching-commit))
-                                  "the regression creates two distinct commits")
-                     (test-assert
-                      (string= (durable-mutation-committing-revision
-                                configuration precise)
-                               matching-commit)
-                      "reconciliation finds the first commit with the exact definition")
-                     (clrhash *durable-mutations*)
-                     (durable-mutations-load configuration)
-                     (let ((reconciled (gethash identifier *durable-mutations*)))
-                       (test-assert
-                        (and reconciled
-                             (eq (durable-mutation-phase reconciled) :durable)
-                             (string= (durable-mutation-git-commit reconciled)
-                                      matching-commit))
-                        "journal replay records the exact definition commit")))))
-               (setf expected-source-fragment "Return the precise value.")
-               (tool-execute
-                persist-tool
-                context
-                (json-object
-                 "definition"
-                 "(defun test-self-target () \"Return a drifting value.\" 86)"
-                 "pathname" "src/definitions.lisp"))
-               (let ((drifting
-                       (loop for value being the hash-values of *durable-mutations*
-                             when (and
-                                   (eq (durable-mutation-phase value)
-                                       :source-written)
-                                   (search "drifting"
-                                           (durable-mutation-proposed-source value)))
-                               return value)))
-                 (source-replace-definition
-                  source-pathname
-                  "(defun test-self-target () \"Return the reconciled value.\" 85)")
-                 (durable-mutation-mark-paths
-                  configuration
-                  '("src/definitions.lisp")
-                  (string-trim
-                   '(#\Space #\Tab #\Newline #\Return)
-                   (self-git-command configuration '("rev-parse" "HEAD"))))
-                 (test-assert (eq (durable-mutation-phase drifting) :superseded)
-                              "a committed path cannot bless a drifted definition")
-                 (mutation-journal-append
-                  configuration
-                  (list :mutation
-                        :kind :durable-definition
-                        :id (durable-mutation-identifier drifting)
-                        :target (durable-mutation-target drifting)
-                        :pathname (durable-mutation-pathname drifting)
-                        :previous (durable-mutation-previous-source drifting)
-                        :proposed (durable-mutation-proposed-source drifting)
-                        :base-commit (durable-mutation-base-commit drifting)
-                        :result :installed))
-                 (test-assert
-                  (handler-case
-                      (progn
-                        (durable-mutations-load configuration)
-                        nil)
-                    (source-mutation-error ()
-                      t))
-                  "journal replay rejects an illegal durable transition")))))
+                 "title" "Record a user-directed change"
+                 "paths" (json-array "src/definitions.lisp"))))
+              "self.commit still serves explicit user-directed commits")
+             (test-assert (= source-check-count 1)
+                          "self.commit runs clean-source checks exactly once")))
       (setf (symbol-function 'test-self-target) previous-function)
       (let ((test-identifiers nil))
         (maphash

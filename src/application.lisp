@@ -43,6 +43,11 @@
     :accessor application-goal
     :type list
     :documentation "The session goal plist holding objective, status, and continuations.")
+   (overlay-failures
+    :initform nil
+    :accessor application-overlay-failures
+    :type list
+    :documentation "Overlay files that failed to load at startup, with reasons.")
    (rendered-sequence
     :initform 0
     :accessor application-rendered-sequence
@@ -139,7 +144,8 @@
   "Create a connected application, loading CONVERSATION-ID when supplied."
   (configuration-ensure-directories configuration)
   (durable-mutations-load configuration)
-  (let* ((conversation (if conversation-id
+  (let* ((overlay-failures (overlay-load-all configuration))
+         (conversation (if conversation-id
                            (conversation-load-by-id configuration conversation-id)
                            (conversation-create configuration)))
          (provider (provider-create configuration))
@@ -159,6 +165,7 @@
                                      :worker worker
                                      :agent agent
                                      :ui ui)))
+    (setf (application-overlay-failures application) overlay-failures)
     (application--load-goal application)
     application))
 
@@ -181,6 +188,7 @@
                     recovery-conversation-id)
                (conversation-identifier
                 (application-conversation application))))
+         (overlay-failures (overlay-load-all configuration))
          (conversation
            (conversation-load-by-id
             configuration
@@ -212,7 +220,8 @@
                    (string= selected-conversation-id
                             (or recovery-conversation-id "")))
               recovery-rendered-sequence
-              0))
+              0)
+          (application-overlay-failures application) overlay-failures)
     (application--load-goal application)
     application))
 

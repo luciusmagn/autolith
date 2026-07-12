@@ -28,6 +28,7 @@
                              (:file "workspace-tools")
                              (:file "lisp-worker")
                              (:file "self-tools")
+                             (:file "overlays")
                              (:file "durable-mutations")
                              (:file "generations")
                              (:file "agent")

@@ -425,15 +425,28 @@
 
 (-> durable-mutation-record-p (configuration t) boolean)
 (defun durable-mutation-record-p (configuration record)
-  "Return true when RECORD is a valid durable-definition journal state."
+  "Return true when RECORD is a valid durable-definition journal state.
+
+The recorded pathname is either a startup overlay file or, for records
+written before overlays existed, a tracked src/ file."
   (and (durable-mutation-journal-record-p record)
        (non-empty-string-p (getf (rest record) :id))
        (non-empty-string-p (getf (rest record) :target))
        (non-empty-string-p (getf (rest record) :pathname))
-       (uiop:subpathp
-        (merge-pathnames (getf (rest record) :pathname)
-                         (configuration-source-root configuration))
-        (merge-pathnames "src/" (configuration-source-root configuration)))
+       (let ((pathname (merge-pathnames
+                        (getf (rest record) :pathname)
+                        (configuration-source-root configuration))))
+         (or (uiop:subpathp pathname
+                            (merge-pathnames
+                             "src/"
+                             (configuration-source-root configuration)))
+             (uiop:subpathp pathname
+                            (configuration-overlay-root configuration))
+             ;; Journals may be replayed under a different data root, so a
+             ;; foreign overlays directory is still a recognizable location.
+             (find "overlays"
+                   (pathname-directory pathname)
+                   :test #'equal)))
        (stringp (getf (rest record) :previous))
        (stringp (getf (rest record) :proposed))
        (or (null (getf (rest record) :base-commit))
@@ -507,80 +520,97 @@
   *durable-mutations*)
 
 
+(-> durable-mutation--fallback-source (configuration list) (option string))
+(defun durable-mutation--fallback-source (configuration definition)
+  "Return DEFINITION's tracked source for restoration when no overlay exists."
+  (handler-case
+      (loop for tracked in (self-tracked-definitions configuration
+                                                     (second definition))
+            for form = (source-form-form
+                        (tracked-definition-source-form tracked))
+            when (eq (first form) (first definition))
+              return (tracked-definition-source tracked))
+    (error ()
+      nil)))
+
 (defmethod tool-execute ((tool self-persist-definition-tool)
                          (context tool-context)
                          (arguments hash-table))
-  "Install, check, and form-aware persist one journaled definition in CONTEXT."
+  "Install, check, and persist one journaled definition to the overlay.
+
+The tracked source repository is never patched; the definition is written to
+an overlay file under the data root and loaded again at every startup."
   (declare (ignore tool))
   (with-live-mutation
     (let* ((definition-source
              (tool-argument arguments "definition" :required t))
-           (relative-name
-             (tool-argument arguments "pathname" :required t))
            (configuration (tool-context-configuration context))
-           (pathname (self-source-pathname configuration relative-name))
-           (definition (self-read-form definition-source :read-eval nil))
-           (repository-name
-             (enough-namestring pathname
-                                (configuration-source-root configuration))))
+           (definition (self-read-form definition-source :read-eval nil)))
       (unless (definition-form-p definition)
         (error 'source-mutation-error
                :message "The durable source is not a supported complete definition."
                :tool-name "self.persist-definition"
-               :pathname pathname))
-      (multiple-value-bind (source-form source)
-          (source-find-definition pathname definition)
-        (let* ((previous-source
-                 (subseq source
-                         (source-form-start source-form)
-                         (source-form-end source-form)))
-               (mutation
-                 (durable-mutation-create configuration
-                                          definition
-                                          :relative-pathname repository-name
-                                          :previous-source previous-source
-                                          :proposed-source definition-source))
-               (checker (tool-context-effective-mutation-checker context)))
-          (handler-case
-              (progn
-                (self--install-definition definition definition-source)
-                (durable-mutation-transition configuration mutation :installed)
-                (mutation-checker-check-active checker
-                                               configuration
-                                               definition-source)
-                (durable-mutation-transition configuration mutation :checked)
-                (source-replace-definition pathname definition-source)
-                (durable-mutation-transition configuration mutation :source-written)
-                (tool-success
-                 (format nil
-                         "Mutation ~A installed, checked, and wrote ~A. Commit that path to make it durable."
-                         (durable-mutation-identifier mutation)
-                         repository-name)))
-            (error (condition)
-              (when (member (durable-mutation-phase mutation)
-                            '(:pending :installed :checked)
+               :pathname (configuration-overlay-root configuration)))
+      (let* ((target (definition-key definition))
+             (previous-source (or (overlay-read configuration target)
+                                  (durable-mutation--fallback-source
+                                   configuration
+                                   definition)
+                                  ""))
+             (overlay (overlay-pathname configuration target))
+             (mutation
+               (durable-mutation-create configuration
+                                        definition
+                                        :relative-pathname
+                                        (namestring overlay)
+                                        :previous-source previous-source
+                                        :proposed-source definition-source))
+             (checker (tool-context-effective-mutation-checker context)))
+        (handler-case
+            (progn
+              (self--install-definition definition definition-source)
+              (durable-mutation-transition configuration mutation :installed)
+              (mutation-checker-check-active checker
+                                             configuration
+                                             definition-source)
+              (durable-mutation-transition configuration mutation :checked)
+              (overlay-write configuration target definition-source)
+              (durable-mutation-transition configuration mutation
+                                           :source-written)
+              (durable-mutation-transition configuration mutation :durable)
+              (tool-success
+               (format nil
+                       "Mutation ~A installed, checked, and persisted to ~
+                        overlay ~A. Overlays load automatically at startup; ~
+                        the tracked source repository was not modified."
+                       (durable-mutation-identifier mutation)
+                       (namestring overlay))))
+          (error (condition)
+            (when (and (member (durable-mutation-phase mutation)
+                               '(:pending :installed :checked)
+                               :test #'eq)
+                       (non-empty-string-p previous-source))
+              (handler-case
+                  (self-restore-definition previous-source condition)
+                (active-image-corruption (corruption)
+                  (durable-mutation-transition
+                   configuration
+                   mutation
+                   :failed
+                   :detail
+                   (format nil "Mutation failed: ~A~%Restoration failed: ~A"
+                           condition
+                           (active-image-corruption-restoration-condition
+                            corruption)))
+                  (error corruption))))
+            (unless (member (durable-mutation-phase mutation)
+                            '(:failed :superseded)
                             :test #'eq)
-                (handler-case
-                    (self-restore-definition previous-source condition)
-                  (active-image-corruption (corruption)
-                    (durable-mutation-transition
-                     configuration
-                     mutation
-                     :failed
-                     :detail
-                     (format nil "Mutation failed: ~A~%Restoration failed: ~A"
-                             condition
-                             (active-image-corruption-restoration-condition
-                              corruption)))
-                    (error corruption))))
-              (unless (member (durable-mutation-phase mutation)
-                              '(:failed :superseded)
-                              :test #'eq)
-                (durable-mutation-transition configuration
-                                             mutation
-                                             :failed
-                                             :detail condition))
-              (error condition))))))))
+              (durable-mutation-transition configuration
+                                           mutation
+                                           :failed
+                                           :detail condition))
+            (error condition)))))))
 
 
 ;;;; -- Git Operations --

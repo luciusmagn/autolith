@@ -286,6 +286,11 @@ Selecting a different model recomputes the context window for that model."
   "Return the directory containing append-only conversation files."
   (merge-pathnames "conversations/" (configuration-data-root configuration)))
 
+(-> configuration-overlay-root (configuration) pathname)
+(defun configuration-overlay-root (configuration)
+  "Return the directory of self-modification overlays loaded at startup."
+  (merge-pathnames "overlays/" (configuration-data-root configuration)))
+
 (-> configuration-auth-path (configuration) pathname)
 (defun configuration-auth-path (configuration)
   "Return Frob's private OAuth credential pathname."

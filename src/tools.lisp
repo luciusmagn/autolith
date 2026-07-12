@@ -483,13 +483,12 @@
                  '("symbol" "value")))
       (register 'self-persist-definition-tool
                 "self" "persist-definition"
-                "Compile, install, and form-aware persist one complete top-level definition."
+                "Compile, install, and persist one complete top-level definition to the startup overlay. The tracked source repository is never modified."
                 (tool-object-schema
                  (json-object
-                  "definition" (tool-string-property "A complete defining Common Lisp form.")
-                  "pathname" (tool-string-property
-                              "A source pathname relative to the Frob root."))
-                 '("definition" "pathname")))
+                  "definition" (tool-string-property
+                                "A complete defining Common Lisp form."))
+                 '("definition")))
       (register 'self-diff-tool
                 "self" "diff"
                 "Show the current tracked source diff without modifying the repository."
