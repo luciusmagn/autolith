@@ -183,10 +183,14 @@ Durable self-modifications never patch the tracked repository. Instead,
 =self.persist-definition= writes each complete top-level definition to an
 overlay file under =${XDG_DATA_HOME:-~/.local/share}/frob/overlays/=, and every
 startup loads the overlays after the tracked system. A broken overlay is
-skipped with a visible notice instead of blocking startup. The =fs.write= and
-=fs.edit= tools refuse Frob's own tracked source entirely, and repository
-commits stay with the user; =self.commit= remains for explicitly
-user-directed commits.
+skipped with a visible notice instead of blocking startup.
+
+Running Frob with its own repository as the workspace turns it into an
+ordinary development agent for Frob: =fs.write= and =fs.edit= then work on
+the tracked source like on any project, with only the stable launcher and
+recovery artifacts read-only. From any other workspace those tools refuse
+Frob's own source entirely. Repository commits stay with the user;
+=self.commit= remains for explicitly user-directed commits.
 
 Frob keeps all project definitions in one =FROB= package. Files and CLOS
 protocols express subsystem boundaries without scoped packages.

@@ -53,15 +53,44 @@
 
 (-> workspace-tool-protected-path-p (tool-context pathname) boolean)
 (defun workspace-tool-protected-path-p (context path)
-  "Return true when PATH belongs to Frob's own tracked source.
+  "Return true when PATH is off limits to workspace writes.
 
-Frob never patches its own repository through workspace tools. Durable
-self-modifications persist to the startup overlay through self tools, and
-repository changes stay with the user."
-  (and (uiop:subpathp path
-                      (configuration-source-root
-                       (tool-context-configuration context)))
-       t))
+The stable launcher and recovery artifacts are always read-only. The rest
+of Frob's tracked source is writable only when the workspace itself is
+inside the source root, meaning the user deliberately runs Frob as a
+development agent on its own repository. From any other workspace Frob
+never reaches into its own source, and live self-modification persists
+through overlays instead."
+  (let* ((configuration (tool-context-configuration context))
+         (source-root (configuration-source-root configuration)))
+    (cond
+      ((not (uiop:subpathp path source-root))
+       nil)
+      ((or (uiop:subpathp path (merge-pathnames "bin/" source-root))
+           (uiop:subpathp path (merge-pathnames "recovery/" source-root))
+           (string= (enough-namestring path source-root) "build-recovery"))
+       t)
+      ((uiop:subpathp (configuration-working-directory configuration)
+                      source-root)
+       nil)
+      (t
+       t))))
+
+(-> workspace-tool-protection-notice (tool-context pathname) string)
+(defun workspace-tool-protection-notice (context path)
+  "Explain why PATH is refused by the workspace write tools."
+  (let ((source-root (configuration-source-root
+                      (tool-context-configuration context))))
+    (if (or (uiop:subpathp path (merge-pathnames "bin/" source-root))
+            (uiop:subpathp path (merge-pathnames "recovery/" source-root))
+            (string= (enough-namestring path source-root) "build-recovery"))
+        (format nil "~A is a stable launcher or recovery artifact and stays ~
+                     read-only."
+                path)
+        (format nil "~A is Frob's own source repository. Run Frob with that ~
+                     repository as the workspace to develop it, and use ~
+                     self.persist-definition for live self changes."
+                path))))
 
 (-> workspace-tool-integer-argument
     (json-object string &key (:fallback (option integer)))
@@ -193,8 +222,7 @@ repository changes stay with the user."
              :tool-name "fs.write"))
     (cond
       ((workspace-tool-protected-path-p context path)
-       (tool-failure
-        (format nil "~A is Frob's tracked source; durable self changes go through self.persist-definition to the overlay." path)))
+       (tool-failure (workspace-tool-protection-notice context path)))
       ((uiop:directory-exists-p path)
        (tool-failure (format nil "~A is a directory." path)))
       (t
@@ -230,8 +258,7 @@ repository changes stay with the user."
       ((zerop (length old-text))
        (tool-failure "fs.edit requires non-empty old-text."))
       ((workspace-tool-protected-path-p context path)
-       (tool-failure
-        (format nil "~A is Frob's tracked source; durable self changes go through self.persist-definition to the overlay." path)))
+       (tool-failure (workspace-tool-protection-notice context path)))
       ((or (uiop:directory-exists-p path) (not (probe-file path)))
        (tool-failure (format nil "~A is not an existing file." path)))
       (t

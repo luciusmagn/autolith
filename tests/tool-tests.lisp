@@ -171,6 +171,47 @@
                                                configuration)))
                                      "old-text" "frob"
                                      "new-text" "borf")))
-                          "fs.edit refuses recovery artifacts")))
+                          "fs.edit refuses recovery artifacts")
+             (let ((repo-root (merge-pathnames "fake-repo/" root))
+                   (outside-root (merge-pathnames "elsewhere/" root)))
+               (ensure-directories-exist repo-root)
+               (ensure-directories-exist outside-root)
+               (labels ((write-via (working-directory path)
+                          "Write PATH through a context whose workspace is WORKING-DIRECTORY."
+                          (tool-registry-execute-call
+                           registry
+                           (json-object
+                            "namespace" "fs"
+                            "name" "write"
+                            "arguments" (json-encode
+                                         (json-object "path" path
+                                                      "content" "note")))
+                           (make-instance
+                            'tool-context
+                            :configuration (make-instance
+                                            'configuration
+                                            :source-root repo-root
+                                            :working-directory
+                                            working-directory)
+                            :worker nil
+                            :conversation conversation))))
+                 (test-assert
+                  (tool-result-success-p
+                   (write-via repo-root
+                              (namestring (merge-pathnames "note.txt"
+                                                           repo-root))))
+                  "Frob develops its own repository from inside it")
+                 (test-assert
+                  (not (tool-result-success-p
+                        (write-via outside-root
+                                   (namestring (merge-pathnames "reach.txt"
+                                                                repo-root)))))
+                  "other workspaces cannot reach into Frob's repository")
+                 (test-assert
+                  (not (tool-result-success-p
+                        (write-via repo-root
+                                   (namestring (merge-pathnames "bin/frob"
+                                                                repo-root)))))
+                  "launcher artifacts stay read-only even while developing")))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
