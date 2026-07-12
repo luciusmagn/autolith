@@ -66,42 +66,60 @@
          (with-terminal-ui (active-ui ui)
            (declare (ignore active-ui))
            (application-present application (application-banner application))
+           (dolist (failure (application-overlay-failures application))
+             (application-present
+              application
+              (application--transcript-entry
+               application
+               :style ':failure
+               :header "✗ overlay skipped"
+               :body (format nil "~A~%~A"
+                             (namestring (first failure))
+                             (rest failure)))))
            (application-render-records application)
-           (loop
-             (let ((event (application-read-terminal-event ui)))
-               (multiple-value-bind (action payload)
-                   (terminal-ui-process-event ui event)
-                 (case action
-                   (:submit
-                    (let ((signal-backtrace nil))
-                      (handler-bind
-                          ((serious-condition
-                             (lambda (condition)
-                               (declare (ignore condition))
-                               (setf signal-backtrace
-                                     (application-safe-backtrace)))))
-                        (handler-case
-                            (when (eq (application-handle-input application payload)
-                                      :quit)
-                              (return))
-                          (rollback-requested (condition)
-                            (error condition))
-                          ((or agent-loop-error
-                               conversation-invariant-error
-                               response-stream-error
-                               active-image-corruption)
-                           (condition)
-                            (application-raise-fatal application
-                                                     condition
-                                                     signal-backtrace))
-                          (frob-error (condition)
-                            (application-handle-expected-error application condition))
-                          (serious-condition (condition)
-                            (application-raise-fatal application
-                                                     condition
-                                                     signal-backtrace))))))
-                   ((:end-of-input :interrupt)
-                    (return)))))))
+           ;; Entering the interactive debugger would hang the raw terminal,
+           ;; so any debugger entry becomes the fatal recovery path instead.
+           (let ((*debugger-hook*
+                   (lambda (condition hook)
+                     (declare (ignore hook))
+                     (application-raise-fatal application
+                                              condition
+                                              (application-safe-backtrace)))))
+             (loop
+               (let ((event (application-read-terminal-event ui)))
+                 (multiple-value-bind (action payload)
+                     (terminal-ui-process-event ui event)
+                   (case action
+                     (:submit
+                      (let ((signal-backtrace nil))
+                        (handler-bind
+                            ((serious-condition
+                               (lambda (condition)
+                                 (declare (ignore condition))
+                                 (setf signal-backtrace
+                                       (application-safe-backtrace)))))
+                          (handler-case
+                              (when (eq (application-handle-input application payload)
+                                        :quit)
+                                (return))
+                            (rollback-requested (condition)
+                              (error condition))
+                            ((or agent-loop-error
+                                 conversation-invariant-error
+                                 response-stream-error
+                                 active-image-corruption)
+                             (condition)
+                              (application-raise-fatal application
+                                                       condition
+                                                       signal-backtrace))
+                            (frob-error (condition)
+                              (application-handle-expected-error application condition))
+                            (serious-condition (condition)
+                              (application-raise-fatal application
+                                                       condition
+                                                       signal-backtrace))))))
+                     ((:end-of-input :interrupt)
+                      (return))))))))
       (sb-sys:enable-interrupt sb-unix:sigwinch :default)
       (when worker
         (lisp-worker-stop worker))))
