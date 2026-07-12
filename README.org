@@ -110,6 +110,7 @@ name when it still needs an argument. The commands are:
 /generations    list retained generations
 /rollback       start a retained generation through recovery
 /status         show usage and rate limits
+/compact        summarize earlier context now
 /quit           leave Frob
 #+END_EXAMPLE
 
@@ -127,6 +128,18 @@ goal. Goals persist with their conversation across =/resume=.
 
 =/model= switches between the 5.6 family models (sol, luna, terra) for the
 current session; =FROB_MODEL= still selects any model at startup.
+
+Context compaction keeps long conversations going. When the newest provider
+step reports total token usage at or beyond the compaction limit, Frob asks
+the model for a context checkpoint summary, appends it as a durable
+=(:summary ...)= record, and replaces the request projection with one bridge
+message carrying that summary; the durable conversation file keeps everything.
+The 5.6 family models have a 372000 token context window (read from the live
+model catalog), and compaction triggers at 80 percent of the window by
+default. Set =FROB_COMPACTION_THRESHOLD= to a percentage between 1 and 95 to
+compact earlier or later, and =FROB_CONTEXT_WINDOW= to override the window
+for unlisted models. =/compact= forces a compaction immediately, and
+=/status= shows how full the context currently is.
 
 =/status= reports the model, token usage, and subscription rate limit windows
 parsed from provider responses. Requests never ask for the provider's priority

@@ -466,7 +466,9 @@
              (test-assert (search "█" text)
                           "status draws usage bars")
              (test-assert (search "standard" text)
-                          "status names the standard service path")))
+                          "status names the standard service path")
+             (test-assert (search "compacts at 80%" text)
+                          "status reports the compaction threshold")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 

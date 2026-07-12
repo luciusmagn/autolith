@@ -157,6 +157,16 @@
                                         (getf usage :input))
                                        (application--token-count-description
                                         (getf usage :output))))
+     (application--field-spans
+      "context"
+      (let ((used (conversation-last-total-tokens
+                   (application-conversation application)))
+            (window (configuration-context-window configuration)))
+        (format nil "~A of ~A used (~D%), compacts at ~D%"
+                (application--token-count-description used)
+                (application--token-count-description window)
+                (round (* 100 used) (max 1 window))
+                (configuration-compaction-threshold-percent configuration))))
      (cond
        ((null snapshot)
         (list (terminal-span :dim
@@ -314,6 +324,31 @@
   (application--install-configuration
    application
    (configuration-with-model (application-configuration application) model)))
+
+;;;; -- Manual Compaction --
+
+(-> application-compact (application) null)
+(defun application-compact (application)
+  "Manually compact the active conversation into a durable summary."
+  (let ((agent (application-agent application))
+        (conversation (application-conversation application)))
+    (unless agent
+      (error 'configuration-error
+             :message "No connected agent can compact the conversation."))
+    (if (null (conversation-input-items conversation))
+        (application-present application "Nothing to compact yet.")
+        (progn
+          (unwind-protect
+               (agent-compact-conversation
+                agent
+                (application-agent-observer application))
+            (terminal-ui-set-status (application-ui application) nil))
+          (application-render-records application)
+          (application-present
+           application
+           "Compacted; a summary now stands in for the earlier history."))))
+  nil)
+
 
 ;;;; -- Session Goal Command --
 
@@ -486,6 +521,9 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        :continue)
       ((member command '("/status" "/usage") :test #'string=)
        (application-present application (application-status-entry application))
+       :continue)
+      ((string= command "/compact")
+       (application-compact application)
        :continue)
       ((string= command "/new")
        (application-install-conversation application

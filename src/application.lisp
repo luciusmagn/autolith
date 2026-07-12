@@ -77,6 +77,7 @@
     (:name "/generations"   :argument nil :description "list retained generations")
     (:name "/rollback"      :argument nil :description "pick a generation for recovery")
     (:name "/status"        :argument nil :description "show usage and rate limits")
+    (:name "/compact"       :argument nil :description "summarize earlier context now")
     (:name "/quit"          :argument nil :description "leave Frob"))
   :test #'equal
   :documentation "The interactive commands offered by completion and /help.")
@@ -447,6 +448,11 @@
                         (getf (rest record) :tool))
         :body (application--bounded-tool-output (getf (rest record) :output))
         :body-style ':dim)))
+    (:summary
+     (list (terminal-span
+            ':hint
+            (format nil "∙ context compacted through sequence ~A"
+                    (getf (rest record) :through-seq)))))
     (otherwise
      nil)))
 
@@ -703,6 +709,11 @@ later conversation replay cannot duplicate their streamed transcript rows."
              ui
              (format nil "running ~A" (getf details :tool))))
            (:tool-call-completed
+            (application-render-records application)
+            (terminal-ui-set-status ui activity-label))
+           (:compaction-started
+            (terminal-ui-set-status ui "compacting the conversation"))
+           (:compaction-completed
             (application-render-records application)
             (terminal-ui-set-status ui activity-label))
            (:turn-completed
