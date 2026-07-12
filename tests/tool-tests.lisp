@@ -22,21 +22,103 @@
                                "arguments" "{}"))
                 (result (tool-registry-execute-call
                          registry unknown-call context)))
-           (test-assert (= (length (tool-registry-tools registry)) 17)
+           (test-assert (= (length (tool-registry-tools registry)) 20)
                         "the default registry exposes the complete initial tool set")
-           (test-assert (= (length schemas) 2)
-                        "the provider schemas contain two namespaces")
-           (test-assert (string= (json-get (aref schemas 0) "name") "lisp")
-                        "the disposable Lisp namespace is first")
-           (test-assert (= (length (json-get (aref schemas 0) "tools")) 6)
+           (test-assert (= (length schemas) 4)
+                        "the provider schemas contain four namespaces")
+           (test-assert (string= (json-get (aref schemas 0) "name") "fs")
+                        "the workspace filesystem namespace is first")
+           (test-assert (string= (json-get (aref schemas 1) "name") "shell")
+                        "the workspace shell namespace is second")
+           (test-assert (string= (json-get (aref schemas 2) "name") "lisp")
+                        "the disposable Lisp namespace follows the workspace tools")
+           (test-assert (= (length (json-get (aref schemas 2) "tools")) 6)
                         "the Lisp namespace exposes six worker operations")
-           (test-assert (string= (json-get (aref schemas 1) "name") "self")
-                        "the active-image namespace is second")
-           (test-assert (= (length (json-get (aref schemas 1) "tools")) 11)
+           (test-assert (string= (json-get (aref schemas 3) "name") "self")
+                        "the active-image namespace is last")
+           (test-assert (= (length (json-get (aref schemas 3) "tools")) 11)
                         "the self namespace exposes eleven active-image operations")
            (test-assert (tool-registry-find registry "self" "source")
                         "tracked source inspection has a dedicated self tool")
            (test-assert (not (tool-result-success-p result))
                         "unknown provider calls produce a correlated tool failure"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-workspace-tools () null)
+(defun test-workspace-tools ()
+  "Test workspace file reading, listing, and bounded shell commands."
+  (let* ((registry (make-default-tool-registry))
+         (configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let ((conversation (conversation-create configuration
+                                                  :identifier "workspace")))
+           (labels ((run (namespace name &rest arguments)
+                      "Execute NAMESPACE.NAME with ARGUMENTS through the registry."
+                      (tool-registry-execute-call
+                       registry
+                       (json-object "namespace" namespace
+                                    "name" name
+                                    "arguments" (json-encode
+                                                 (apply #'json-object
+                                                        arguments)))
+                       (make-instance 'tool-context
+                                      :configuration configuration
+                                      :worker nil
+                                      :conversation conversation))))
+             (let ((sample (merge-pathnames "sample.txt" root)))
+               (with-open-file (stream sample
+                                       :direction :output
+                                       :if-does-not-exist :create)
+                 (loop for index from 1 to 10
+                       do (format stream "line ~D~%" index)))
+               (let ((result (run "fs" "read"
+                                  "path" (namestring sample)
+                                  "start-line" 3
+                                  "line-count" 2)))
+                 (test-assert (tool-result-success-p result)
+                              "fs.read reads existing files")
+                 (test-assert (search "   3  line 3"
+                                      (tool-result-content result))
+                              "fs.read numbers lines from the window start")
+                 (test-assert (search "lines 3-4 of 10"
+                                      (tool-result-content result))
+                              "fs.read reports its window and total honestly")
+                 (test-assert (not (search "line 5"
+                                           (tool-result-content result)))
+                              "fs.read honors the requested line window")))
+             (test-assert (not (tool-result-success-p
+                                (run "fs" "read"
+                                     "path" (namestring
+                                             (merge-pathnames "absent.txt"
+                                                              root)))))
+                          "fs.read fails cleanly for missing files")
+             (ensure-directories-exist (merge-pathnames "nested/" root))
+             (let ((result (run "fs" "list" "path" (namestring root))))
+               (test-assert (tool-result-success-p result)
+                            "fs.list lists directories")
+               (test-assert (search "d           nested/"
+                                    (tool-result-content result))
+                            "fs.list marks subdirectories")
+               (test-assert (search "sample.txt" (tool-result-content result))
+                            "fs.list shows files with their sizes"))
+             (let ((result (run "shell" "run"
+                                "command" "echo frob-shell-works && exit 3")))
+               (test-assert (tool-result-success-p result)
+                            "shell.run reports command completion")
+               (test-assert (search "exit 3" (tool-result-content result))
+                            "shell.run reports nonzero exit codes")
+               (test-assert (search "frob-shell-works"
+                                    (tool-result-content result))
+                            "shell.run captures combined output"))
+             (let ((result (run "shell" "run"
+                                "command" "sleep 5"
+                                "timeout-seconds" 1)))
+               (test-assert (not (tool-result-success-p result))
+                            "shell.run stops runaway commands")
+               (test-assert (search "stopped after 1"
+                                    (tool-result-content result))
+                            "shell.run explains its timeout"))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

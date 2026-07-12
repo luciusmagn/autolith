@@ -128,6 +128,26 @@
    "description" description
    "items" (json-object "type" "string")))
 
+(-> tool-integer-property (string) json-object)
+(defun tool-integer-property (description)
+  "Return a documented JSON integer property schema."
+  (json-object "type" "integer" "description" description))
+
+(-> tool-namespace-description (string) string)
+(defun tool-namespace-description (namespace)
+  "Return the model-visible description of tool NAMESPACE."
+  (cond
+    ((string= namespace "fs")
+     "Workspace file reading and listing.")
+    ((string= namespace "shell")
+     "External commands run in the workspace.")
+    ((string= namespace "lisp")
+     "Operations in a separate disposable Common Lisp worker.")
+    ((string= namespace "self")
+     "Operations on the active Frob Common Lisp image.")
+    (t
+     "Frob operations.")))
+
 (-> tool-provider-schema (tool) json-object)
 (defun tool-provider-schema (tool)
   "Return TOOL in the Responses API namespaced function schema."
@@ -261,10 +281,7 @@
         (json-object
          "type" "namespace"
          "name" namespace
-         "description"
-         (if (string= namespace "lisp")
-             "Operations in a separate disposable Common Lisp worker."
-             "Operations on the active Frob Common Lisp image.")
+         "description" (tool-namespace-description namespace)
          "tools" (coerce (gethash namespace namespace-tools) 'vector)))
       namespace-order)
      'vector)))
@@ -333,6 +350,38 @@
                              :name name
                              :description description
                              :parameters parameters))))
+      (register 'fs-read-tool
+                "fs" "read"
+                "Read one workspace file, returning numbered lines from an optional window."
+                (tool-object-schema
+                 (json-object
+                  "path" (tool-string-property
+                          "The file path, absolute or workspace-relative.")
+                  "start-line" (tool-integer-property
+                                "The first line to return, starting at 1.")
+                  "line-count" (tool-integer-property
+                                "How many lines to return; default 400."))
+                 '("path")))
+      (register 'fs-list-tool
+                "fs" "list"
+                "List one workspace directory's entries with kinds and byte sizes."
+                (tool-object-schema
+                 (json-object
+                  "path" (tool-string-property
+                          "The directory path; defaults to the workspace."))
+                 nil))
+      (register 'shell-run-tool
+                "shell" "run"
+                "Run one external command line in the workspace and return its exit code and combined output."
+                (tool-object-schema
+                 (json-object
+                  "command" (tool-string-property
+                             "The shell command line to execute.")
+                  "directory" (tool-string-property
+                               "The working directory; defaults to the workspace.")
+                  "timeout-seconds" (tool-integer-property
+                                     "Seconds before the command is stopped; default 60."))
+                 '("command")))
       (register 'lisp-eval-tool
                 "lisp" "eval"
                 "Evaluate one Common Lisp form in the disposable worker."

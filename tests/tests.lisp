@@ -42,6 +42,7 @@
     (test-provider-stream-failures)
     (test-provider-authentication-retries)
     (test-tool-registry)
+    (test-workspace-tools)
     (test-lisp-worker-protocol)
     (test-self-tools)
     (test-durable-self-mutation)

@@ -25,6 +25,7 @@
                              (:file "prompt")
                              (:file "provider")
                              (:file "tools")
+                             (:file "workspace-tools")
                              (:file "lisp-worker")
                              (:file "self-tools")
                              (:file "durable-mutations")
