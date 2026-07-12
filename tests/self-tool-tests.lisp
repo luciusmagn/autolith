@@ -118,6 +118,78 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-self-restart-selection () null)
+(defun test-self-restart-selection ()
+  "Test restart discovery and selection through the active-image tools."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation (conversation-create configuration
+                                                   :identifier "restarts"))
+                (context (make-instance 'tool-context
+                                        :configuration configuration
+                                        :worker nil
+                                        :conversation conversation))
+                (registry (make-default-tool-registry))
+                (eval-tool (tool-registry-find registry "self" "eval")))
+           (labels ((run (&rest arguments)
+                      "Execute self.eval with ARGUMENTS through the registry."
+                      (tool-registry-execute-call
+                       registry
+                       (json-object "namespace" "self"
+                                    "name" "eval"
+                                    "arguments" (json-encode
+                                                 (apply #'json-object
+                                                        arguments)))
+                       context)))
+             (declare (ignorable eval-tool))
+             (let ((result (run "form"
+                                "(cerror \"Keep going anyway.\" \"Deliberate stop.\")")))
+               (test-assert (not (tool-result-success-p result))
+                            "correctable conditions fail without a restart")
+               (test-assert (search "Available restarts"
+                                    (tool-result-content result))
+                            "failures enumerate the available restarts")
+               (test-assert (search "CONTINUE" (tool-result-content result))
+                            "the continue restart is offered")
+               (test-assert (not (search "  ABORT"
+                                         (tool-result-content result)))
+                            "the abort restart is never offered"))
+             (test-assert (tool-result-success-p
+                           (run "form"
+                                "(cerror \"Keep going anyway.\" \"Deliberate stop.\")"
+                                "restart" "CONTINUE"))
+                          "selecting continue completes the operation")
+             (let ((result (run "form"
+                                "(restart-case (error \"Needs a value.\") (use-value (value) value))"
+                                "restart" "USE-VALUE"
+                                "restart-value" "(* 6 7)")))
+               (test-assert (and (tool-result-success-p result)
+                                 (search "42" (tool-result-content result)))
+                            "value restarts receive the evaluated value"))
+             (test-assert (not (tool-result-success-p
+                                (run "form"
+                                     "(cerror \"Keep going.\" \"Stop.\")"
+                                     "restart" "NO-SUCH-RESTART")))
+                          "unknown restart names still fail with the menu")
+             (test-assert (tool-result-success-p
+                           (run "form"
+                                "(define-constant +self-restart-trial+ 1 :test #'=)"))
+                          "defining a fresh constant succeeds")
+             (test-assert (not (tool-result-success-p
+                                (run "form"
+                                     "(define-constant +self-restart-trial+ 2 :test #'=)")))
+                          "conflicting constant redefinition asks for a restart")
+             (test-assert (tool-result-success-p
+                           (run "form"
+                                "(define-constant +self-restart-trial+ 2 :test #'=)"
+                                "restart" "CONTINUE"))
+                          "continue redefines the constant deliberately")
+             (test-assert (= (symbol-value '+self-restart-trial+) 2)
+                          "the constant carries the deliberately chosen value")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-durable-self-mutation () null)
 (defun test-durable-self-mutation ()
   "Test checked live installation, overlay persistence, and startup replay."

@@ -55,6 +55,7 @@
     (test-workspace-tools)
     (test-lisp-worker-protocol)
     (test-self-tools)
+    (test-self-restart-selection)
     (test-durable-self-mutation)
     (test-generation-manifest)
     (test-crash-capsule-correlation)

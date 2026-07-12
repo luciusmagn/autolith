@@ -140,6 +140,80 @@
       (format stream "Output:~%~A~%" output))
     (format stream "Values:~%~{~A~%~}" result-values)))
 
+
+;;;; -- Restart Selection --
+
+(-> self--selectable-restarts (condition) list)
+(defun self--selectable-restarts (condition)
+  "Return (NAME . REPORT) pairs for CONDITION's invokable restarts.
+
+The ABORT restart is excluded because invoking it would unwind Frob's own
+event loop instead of correcting the failed operation."
+  (loop for restart in (compute-restarts condition)
+        for name = (restart-name restart)
+        when (and name (not (eq name 'abort)))
+          collect (cons (symbol-name name)
+                        (princ-to-string restart))))
+
+(-> self--find-selected-restart (condition string) t)
+(defun self--find-selected-restart (condition name)
+  "Return CONDITION's first non-ABORT restart named NAME, or NIL."
+  (find-if (lambda (restart)
+             (let ((restart-name (restart-name restart)))
+               (and restart-name
+                    (not (eq restart-name 'abort))
+                    (string-equal (symbol-name restart-name) name))))
+           (compute-restarts condition)))
+
+(-> self--correctable-message (condition list) string)
+(defun self--correctable-message (condition restarts)
+  "Describe CONDITION and its RESTARTS together with retry instructions."
+  (format nil
+          "~A~2%Available restarts:~%~{~A~%~}~
+           Retry the identical call adding \"restart\": \"NAME\" to invoke ~
+           one, and add \"restart-value\" with a value form when the ~
+           restart consumes a value."
+          condition
+          (loop for (name . report) in restarts
+                collect (format nil "  ~A  ~A" name report))))
+
+(-> self-call-with-restarts
+    (function &key (:restart-name (option string))
+              (:restart-value-source (option string)))
+    t)
+(defun self-call-with-restarts (thunk &key restart-name restart-value-source)
+  "Call THUNK, invoking the chosen restart or describing the available ones.
+
+With RESTART-NAME, the first matching non-ABORT restart is invoked while the
+signaling operation is still live, optionally passing the evaluated
+RESTART-VALUE-SOURCE. Without a match, a condition that offers selectable
+restarts becomes a SELF-CORRECTABLE-ERROR whose report teaches the retry
+protocol."
+  (handler-bind
+      ((error
+         (lambda (condition)
+           (unless (typep condition 'self-correctable-error)
+             (let ((restarts (self--selectable-restarts condition)))
+               (when restarts
+                 (error 'self-correctable-error
+                        :message (self--correctable-message condition
+                                                            restarts)
+                        :restart-names (mapcar #'first restarts))))))))
+    (if (non-empty-string-p restart-name)
+        (handler-bind
+            ((error
+               (lambda (condition)
+                 (let ((restart (self--find-selected-restart condition
+                                                             restart-name)))
+                   (when restart
+                     (if (non-empty-string-p restart-value-source)
+                         (invoke-restart restart
+                                         (eval (self-read-form
+                                                restart-value-source)))
+                         (invoke-restart restart)))))))
+          (funcall thunk))
+        (funcall thunk))))
+
 (defmethod tool-execute ((tool self-eval-tool)
                          (context tool-context)
                          (arguments hash-table))
@@ -147,6 +221,8 @@
   (declare (ignore tool))
   (with-live-mutation
     (let* ((source (tool-argument arguments "form" :required t))
+           (restart-name (tool-argument arguments "restart"))
+           (restart-value-source (tool-argument arguments "restart-value"))
            (configuration (tool-context-configuration context)))
       (mutation-journal-append
        configuration
@@ -155,7 +231,11 @@
           (multiple-value-bind (result-values output)
               (self-capture-evaluation
                (lambda ()
-                 (eval (self-read-form source))))
+                 (self-call-with-restarts
+                  (lambda ()
+                    (eval (self-read-form source)))
+                  :restart-name restart-name
+                  :restart-value-source restart-value-source)))
             (mutation-journal-append
              configuration
              (list :mutation :kind :eval :proposed source :result :installed))
@@ -318,7 +398,11 @@
   "Install one exploratory top-level definition in CONTEXT's active image."
   (declare (ignore tool))
   (let ((source (tool-argument arguments "definition" :required t)))
-    (self-install-definition (tool-context-configuration context) source)
+    (self-call-with-restarts
+     (lambda ()
+       (self-install-definition (tool-context-configuration context) source))
+     :restart-name (tool-argument arguments "restart")
+     :restart-value-source (tool-argument arguments "restart-value"))
     (tool-success "The definition was compiled and installed in the active image.")))
 
 (defmethod tool-execute ((tool self-set-tool)
@@ -341,8 +425,14 @@
              :previous previous
              :proposed value-source
              :result :pending))
-      (let ((value (eval (self-read-form value-source))))
-        (setf (symbol-value symbol) value)
+      (let ((value (self-call-with-restarts
+                    (lambda ()
+                      (let ((evaluated (eval (self-read-form value-source))))
+                        (setf (symbol-value symbol) evaluated)
+                        evaluated))
+                    :restart-name (tool-argument arguments "restart")
+                    :restart-value-source (tool-argument arguments
+                                                         "restart-value"))))
         (mutation-journal-append
          configuration
          (list :mutation

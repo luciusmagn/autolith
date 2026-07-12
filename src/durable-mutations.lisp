@@ -568,7 +568,11 @@ an overlay file under the data root and loaded again at every startup."
              (checker (tool-context-effective-mutation-checker context)))
         (handler-case
             (progn
-              (self--install-definition definition definition-source)
+              (self-call-with-restarts
+               (lambda ()
+                 (self--install-definition definition definition-source))
+               :restart-name (tool-argument arguments "restart")
+               :restart-value-source (tool-argument arguments "restart-value"))
               (durable-mutation-transition configuration mutation :installed)
               (mutation-checker-check-active checker
                                              configuration

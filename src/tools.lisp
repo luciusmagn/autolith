@@ -138,6 +138,18 @@
   "Return a documented JSON boolean property schema."
   (json-object "type" "boolean" "description" description))
 
+(-> tool-restart-property () json-object)
+(defun tool-restart-property ()
+  "Return the shared schema of the optional restart selection argument."
+  (tool-string-property
+   "A restart name to invoke when the operation signals a correctable condition, for example CONTINUE."))
+
+(-> tool-restart-value-property () json-object)
+(defun tool-restart-value-property ()
+  "Return the shared schema of the optional restart value argument."
+  (tool-string-property
+   "A value form passed to a restart that consumes a value, such as use-value or store-value."))
+
 (-> tool-namespace-description (string) string)
 (defun tool-namespace-description (namespace)
   "Return the model-visible description of tool NAMESPACE."
@@ -464,14 +476,21 @@
       (register 'self-eval-tool
                 "self" "eval"
                 "Evaluate one exploratory Common Lisp form in the active image."
-                (required-form-schema "One readable Common Lisp form."))
+                (tool-object-schema
+                 (json-object
+                  "form" (tool-string-property "One readable Common Lisp form.")
+                  "restart" (tool-restart-property)
+                  "restart-value" (tool-restart-value-property))
+                 '("form")))
       (register 'self-redefine-tool
                 "self" "redefine"
                 "Compile and install one complete exploratory top-level definition."
                 (tool-object-schema
                  (json-object
                   "definition" (tool-string-property
-                                "A complete defining Common Lisp form."))
+                                "A complete defining Common Lisp form.")
+                  "restart" (tool-restart-property)
+                  "restart-value" (tool-restart-value-property))
                  '("definition")))
       (register 'self-set-tool
                 "self" "set"
@@ -479,7 +498,9 @@
                 (tool-object-schema
                  (json-object
                   "symbol" (tool-string-property "The active global symbol name.")
-                  "value" (tool-string-property "A Common Lisp value form."))
+                  "value" (tool-string-property "A Common Lisp value form.")
+                  "restart" (tool-restart-property)
+                  "restart-value" (tool-restart-value-property))
                  '("symbol" "value")))
       (register 'self-persist-definition-tool
                 "self" "persist-definition"
@@ -487,7 +508,9 @@
                 (tool-object-schema
                  (json-object
                   "definition" (tool-string-property
-                                "A complete defining Common Lisp form."))
+                                "A complete defining Common Lisp form.")
+                  "restart" (tool-restart-property)
+                  "restart-value" (tool-restart-value-property))
                  '("definition")))
       (register 'self-diff-tool
                 "self" "diff"

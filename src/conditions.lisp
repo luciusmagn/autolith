@@ -118,6 +118,15 @@
     :documentation "The source file involved in the failed mutation."))
   (:documentation "An active-image or durable source mutation failed."))
 
+(define-condition self-correctable-error (frob-error)
+  ((restart-names
+    :initarg :restart-names
+    :reader self-correctable-error-restart-names
+    :type list
+    :documentation "The invokable restart names offered by the failed operation."))
+  (:documentation
+   "An active-image operation failed while offering selectable restarts."))
+
 (define-condition active-image-corruption (frob-error)
   ((original-condition
     :initarg :original-condition
