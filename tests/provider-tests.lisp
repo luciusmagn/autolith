@@ -27,6 +27,20 @@
   (test-assert (null (provider-rate-limit-snapshot
                       '(("content-type" . "text/event-stream"))))
                "absent rate limit headers produce no snapshot")
+  (test-assert
+   (search "model_not_found means this model is unavailable"
+           (provider--http-error-message
+            404
+            "{\"error\":{\"message\":\"model_not_found means this model is unavailable\"}}"))
+   "HTTP errors surface the provider's own explanation")
+  (test-assert
+   (search "not being served"
+           (provider--http-error-message 404 nil))
+   "HTTP 404 carries a human hint even without a body")
+  (test-assert
+   (search "rate limit"
+           (provider--http-error-message 429 "plain text overload"))
+   "HTTP 429 explains itself and keeps the raw body")
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (provider (provider-create configuration))

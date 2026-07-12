@@ -507,13 +507,63 @@ asks for a context checkpoint handoff."
       (setf (provider-rate-limits provider) snapshot))
     snapshot))
 
+(-> provider--drain-error-body (stream) (option string))
+(defun provider--drain-error-body (stream)
+  "Read and return a bounded error body from STREAM, closing it afterwards."
+  (unwind-protect
+       (handler-case
+           (let ((buffer (make-string 4000)))
+             (let ((end (read-sequence buffer stream)))
+               (and (plusp end) (subseq buffer 0 end))))
+         (error ()
+           nil))
+    (when (open-stream-p stream)
+      (close stream))))
+
+(-> provider--error-body-detail ((option string)) (option string))
+(defun provider--error-body-detail (body)
+  "Return the human-readable explanation carried by an error BODY, if any."
+  (when (non-empty-string-p body)
+    (let ((message
+            (handler-case
+                (let ((decoded (json-decode body)))
+                  (when (json-object-p decoded)
+                    (let ((error-object (json-get decoded "error")))
+                      (or (and (json-object-p error-object)
+                               (let ((text (json-get error-object "message")))
+                                 (and (non-empty-string-p text) text)))
+                          (let ((detail (json-get decoded "detail")))
+                            (and (non-empty-string-p detail) detail))))))
+              (error ()
+                nil))))
+      (bounded-string (or message body) :limit 400))))
+
+(-> provider--http-error-message (integer (option string)) string)
+(defun provider--http-error-message (status body)
+  "Return a display message for HTTP STATUS including BODY's explanation."
+  (let ((detail (provider--error-body-detail body))
+        (hint (case status
+                (404 "The requested resource or model is not being served.")
+                (429 "The subscription rate limit was reached; see /status.")
+                ((500 502 503) "The provider service is having trouble.")
+                (t nil))))
+    (format nil "The provider returned HTTP ~D.~@[ ~A~]~@[~%~A~]"
+            status
+            hint
+            detail)))
+
 (-> provider-signal-http-failure
     (codex-subscription-provider http-request-failed)
     null)
 (defun provider-signal-http-failure (provider condition)
   "Record CONDITION headers and signal a typed provider or authentication error."
   (let ((status (response-status condition))
-        (headers (response-headers condition)))
+        (headers (response-headers condition))
+        (body (handler-case
+                  (let ((content (response-body condition)))
+                    (and (stringp content) content))
+                (error ()
+                  nil))))
     (provider-record-rate-limits provider headers)
     (if (= status 401)
         (error 'provider-unauthorized
@@ -522,10 +572,10 @@ asks for a context checkpoint handoff."
                :request-id (response-header headers "x-request-id")
                :response nil)
         (error 'provider-error
-               :message (format nil "The provider returned HTTP ~D." status)
+               :message (provider--http-error-message status body)
                :status status
                :request-id (response-header headers "x-request-id")
-               :response (bounded-string (response-body condition) :limit 2000)))))
+               :response (and body (bounded-string body :limit 2000))))))
 
 
 (-> normalize-response-item (json-object) json-object)
@@ -660,19 +710,19 @@ asks for a context checkpoint handoff."
              conversation)
           (provider-record-rate-limits provider headers)
           (unless (= status 200)
-            (when (open-stream-p stream)
-              (close stream))
-            (if (= status 401)
-                (error 'provider-unauthorized
-                       :message "The provider rejected the current ChatGPT credentials."
-                       :status status
-                       :request-id nil
-                       :response nil)
-                (error 'provider-error
-                       :message (format nil "The provider returned HTTP ~D." status)
-                       :status status
-                       :request-id nil
-                       :response nil)))
+            (let ((body (provider--drain-error-body stream)))
+              (if (= status 401)
+                  (error 'provider-unauthorized
+                         :message "The provider rejected the current ChatGPT credentials."
+                         :status status
+                         :request-id (response-header headers "x-request-id")
+                         :response nil)
+                  (error 'provider-error
+                         :message (provider--http-error-message status body)
+                         :status status
+                         :request-id (response-header headers "x-request-id")
+                         :response (and body
+                                        (bounded-string body :limit 2000))))))
           (unwind-protect
                (provider--consume-stream stream headers event-callback)
             (when (open-stream-p stream)
