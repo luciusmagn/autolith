@@ -146,11 +146,12 @@
 (-> provider-stream-turn
     (model-provider conversation vector function
      &key (:turn-budget-state turn-budget-state)
-          (:goal-context (option string)))
+          (:goal-context (option string))
+          (:compaction-p boolean))
     provider-result)
 (defgeneric provider-stream-turn
     (provider conversation tool-namespaces event-callback
-     &key turn-budget-state goal-context)
+     &key turn-budget-state goal-context compaction-p)
   (:documentation
    "Stream one model response for CONVERSATION using TOOL-NAMESPACES and EVENT-CALLBACK."))
 
@@ -203,6 +204,42 @@
     (t
      nil)))
 
+;; Modeled on the Codex context checkpoint compaction instructions at
+;; reference commit 5c19155c, restated for Frob.
+(define-constant +compaction-instructions+
+  "You are performing a context checkpoint compaction. Write a handoff summary for another model that will resume this conversation. Include the current progress and key decisions, important context, constraints, and user preferences, what remains to be done as clear next steps, and any critical data or references needed to continue. Be concise, structured, and complete enough that no earlier context is required."
+  :test #'string=
+  :documentation "The developer instructions driving one compaction request.")
+
+(-> response-item-assistant-text (json-object) (option string))
+(defun response-item-assistant-text (item)
+  "Return the joined visible text of assistant message ITEM, when applicable."
+  (when (and (string= (or (json-get item "type") "") "message")
+             (string= (or (json-get item "role") "") "assistant"))
+    (let ((content (json-get item "content")))
+      (when (vectorp content)
+        (let ((parts
+                (loop for part across content
+                      when (and (json-object-p part)
+                                (member (json-get part "type")
+                                        '("output_text" "text")
+                                        :test #'string=)
+                                (stringp (json-get part "text")))
+                        collect (json-get part "text"))))
+          (when parts
+            (format nil "~{~A~^~%~}" parts)))))))
+
+(-> provider-result-assistant-text (provider-result) (option string))
+(defun provider-result-assistant-text (result)
+  "Return the joined assistant text across RESULT's output items."
+  (let ((parts (loop for item in (provider-result-output-items result)
+                     for text = (and (json-object-p item)
+                                     (response-item-assistant-text item))
+                     when text
+                       collect text)))
+    (when parts
+      (format nil "~{~A~^~%~}" parts))))
+
 (-> provider-web-search-tool (configuration) (option json-object))
 (defun provider-web-search-tool (configuration)
   "Return the hosted web search tool for CONFIGURATION, or NIL when disabled.
@@ -229,23 +266,27 @@ at reference commit 5c19155c."
 (-> provider-request-object
     (codex-subscription-provider conversation vector
      &key (:turn-budget-state turn-budget-state)
-          (:goal-context (option string)))
+          (:goal-context (option string))
+          (:compaction-p boolean))
     json-object)
 (defun provider-request-object
     (provider conversation tool-namespaces
-     &key (turn-budget-state :normal) goal-context)
+     &key (turn-budget-state :normal) goal-context compaction-p)
   "Build the complete stateless Sol Responses Lite request for CONVERSATION.
 
 The request never carries a service_tier, keeping Frob on the standard path.
 GOAL-CONTEXT rides as one transient developer message that is never persisted
-in the durable conversation, mirroring the budget reminders."
+in the durable conversation, mirroring the budget reminders. COMPACTION-P
+builds a tool-free summarization request whose trailing developer message
+asks for a context checkpoint handoff."
   (let* ((configuration (provider-configuration provider))
          (finalization-p (eq turn-budget-state :finalization))
          (web-search-tool (and (not finalization-p)
+                               (not compaction-p)
                                (provider-web-search-tool configuration)))
          (effective-tools
            (cond
-             (finalization-p
+             ((or finalization-p compaction-p)
               #())
              (web-search-tool
               (concatenate 'vector
@@ -253,16 +294,23 @@ in the durable conversation, mirroring the budget reminders."
                            (vector web-search-tool)))
              (t
               tool-namespaces)))
-         (budget-message (responses-lite-budget-message turn-budget-state))
+         (budget-message (and (not compaction-p)
+                              (responses-lite-budget-message turn-budget-state)))
          (prefix (append
                   (list (responses-lite-additional-tools effective-tools)
                         (responses-lite-developer-message
                          (system-prompt configuration)))
-                  (when (and goal-context (not finalization-p))
+                  (when (and goal-context
+                             (not finalization-p)
+                             (not compaction-p))
                     (list (responses-lite-developer-message goal-context)))
                   (when budget-message
                     (list budget-message))))
-         (input (coerce (append prefix (conversation-input-items conversation))
+         (input (coerce (append prefix
+                                (conversation-input-items conversation)
+                                (when compaction-p
+                                  (list (responses-lite-developer-message
+                                         +compaction-instructions+))))
                         'vector)))
     (json-object
      "model" (configuration-model configuration)
@@ -574,11 +622,12 @@ in the durable conversation, mirroring the budget reminders."
     (model-provider conversation vector function
      &key (:force-refresh boolean)
           (:turn-budget-state turn-budget-state)
-          (:goal-context (option string)))
+          (:goal-context (option string))
+          (:compaction-p boolean))
     provider-result)
 (defgeneric provider-attempt-turn
     (provider conversation tool-namespaces event-callback
-     &key force-refresh turn-budget-state goal-context)
+     &key force-refresh turn-budget-state goal-context compaction-p)
   (:documentation
    "Perform one normalized provider attempt, optionally forcing credential refresh."))
 
@@ -590,7 +639,8 @@ in the durable conversation, mirroring the budget reminders."
      &key
        force-refresh
        (turn-budget-state :normal)
-       goal-context)
+       goal-context
+       compaction-p)
   "Perform one direct request and normalize every HTTP boundary condition."
   (declare (type boolean force-refresh))
   (handler-case
@@ -604,7 +654,8 @@ in the durable conversation, mirroring the budget reminders."
               conversation
               tool-namespaces
               :turn-budget-state turn-budget-state
-              :goal-context goal-context)
+              :goal-context goal-context
+              :compaction-p compaction-p)
              credentials
              conversation)
           (provider-record-rate-limits provider headers)
@@ -638,7 +689,8 @@ in the durable conversation, mirroring the budget reminders."
      (event-callback function)
      &key
        (turn-budget-state :normal)
-       goal-context)
+       goal-context
+       compaction-p)
   "Stream one Sol turn with one credential reload and one bounded refresh attempt."
   (loop for attempt-number from 1 to 3
         for force-refresh = (= attempt-number 3)
@@ -650,7 +702,8 @@ in the durable conversation, mirroring the budget reminders."
                                         event-callback
                                         :force-refresh force-refresh
                                         :turn-budget-state turn-budget-state
-                                        :goal-context goal-context))
+                                        :goal-context goal-context
+                                        :compaction-p compaction-p))
              (provider-unauthorized ()
                (when (= attempt-number 3)
                  (error 'authentication-error

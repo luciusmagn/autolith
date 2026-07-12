@@ -343,9 +343,11 @@
      &key
        force-refresh
        (turn-budget-state :normal)
-       goal-context)
+       goal-context
+       compaction-p)
   "Return the next scripted PROVIDER outcome and record FORCE-REFRESH."
-  (declare (ignore conversation tool-namespaces event-callback goal-context))
+  (declare (ignore conversation tool-namespaces event-callback goal-context
+                   compaction-p))
   (push force-refresh (test-codex-provider-refresh-flags provider))
   (push turn-budget-state (test-codex-provider-turn-budget-states provider))
   (let ((outcome (pop (test-codex-provider-outcomes provider))))

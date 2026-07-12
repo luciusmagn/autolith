@@ -264,6 +264,10 @@
            :request-number nil))
   (with-lock-held ((agent-turn-lock agent))
     (let ((conversation (agent-conversation agent)))
+      ;; Compact before appending CONTENT so the fresh question survives
+      ;; verbatim instead of being folded into the summary.
+      (when (agent--should-compact-p agent)
+        (agent-compact-conversation agent observer))
       (conversation-append-user-message conversation content)
       (unwind-protect
            (agent--run-provider-loop agent observer goal-context)
@@ -450,6 +454,44 @@
          :tool-calls tool-calls
          :reason reason))
 
+(-> agent--should-compact-p (agent) boolean)
+(defun agent--should-compact-p (agent)
+  "Return true when the newest usage crossed AGENT's compaction limit."
+  (>= (conversation-last-total-tokens (agent-conversation agent))
+      (configuration-compaction-token-limit (agent-configuration agent))))
+
+(-> agent-compact-conversation (agent agent-observer) null)
+(defun agent-compact-conversation (agent observer)
+  "Summarize AGENT's conversation and replace its projection with the summary.
+
+The summarization request itself is a side channel: its output items are not
+persisted as history, only the durable summary record is."
+  (let ((conversation (agent-conversation agent)))
+    (agent-observer-status
+     observer
+     :compaction-started
+     (list :total-tokens (conversation-last-total-tokens conversation)))
+    (let* ((result (provider-stream-turn
+                    (agent-provider agent)
+                    conversation
+                    #()
+                    (lambda (event)
+                      (declare (ignore event))
+                      nil)
+                    :compaction-p t))
+           (summary (provider-result-assistant-text result)))
+      (unless (non-empty-string-p summary)
+        (error 'agent-loop-error
+               :message "Compaction produced no summary text."
+               :conversation-id (conversation-identifier conversation)
+               :request-number nil))
+      (conversation-append-summary conversation summary)
+      (agent-observer-status
+       observer
+       :compaction-completed
+       (list :summary-characters (length summary)))))
+  nil)
+
 (-> agent--run-provider-loop
     (agent agent-observer (option string))
     provider-result)
@@ -460,6 +502,8 @@
         (tool-rounds 0)
         (tool-calls 0))
     (loop
+      (when (agent--should-compact-p agent)
+        (agent-compact-conversation agent observer))
       (incf request-number)
       (let ((budget-state (agent--budget-state agent request-number)))
         (when (eq budget-state :warning)

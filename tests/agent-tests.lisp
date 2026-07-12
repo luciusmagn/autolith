@@ -32,7 +32,12 @@
     :initform nil
     :accessor scripted-provider-goal-contexts
     :type list
-    :documentation "The goal context supplied on each request."))
+    :documentation "The goal context supplied on each request.")
+   (compaction-flags
+    :initform nil
+    :accessor scripted-provider-compaction-flags
+    :type list
+    :documentation "The compaction flag supplied on each request."))
   (:documentation "A deterministic provider for exercising repeated agent rounds."))
 
 (defmethod provider-stream-turn
@@ -42,7 +47,8 @@
      (event-callback function)
      &key
        (turn-budget-state :normal)
-       goal-context)
+       goal-context
+       compaction-p)
   "Return PROVIDER's next scripted result after recording request state."
   (push (length (conversation-input-items conversation))
         (scripted-provider-input-counts provider))
@@ -54,6 +60,8 @@
         (scripted-provider-turn-budget-states provider))
   (push goal-context
         (scripted-provider-goal-contexts provider))
+  (push compaction-p
+        (scripted-provider-compaction-flags provider))
   (let ((result (pop (scripted-provider-results provider))))
     (unless result
       (error "The scripted provider has no remaining result."))
@@ -508,6 +516,76 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-agent-compaction () null)
+(defun test-agent-compaction ()
+  "Test threshold-triggered compaction through the scripted provider."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation (conversation-create configuration
+                                                   :identifier
+                                                   "agent-compaction"))
+                (summary-item
+                  (json-object
+                   "type" "message"
+                   "role" "assistant"
+                   "content" (json-array
+                              (json-object
+                               "type" "output_text"
+                               "text" "Summary: earlier work is complete."))))
+                (answer-item
+                  (json-object
+                   "type" "message"
+                   "role" "assistant"
+                   "content" (json-array
+                              (json-object "type" "output_text"
+                                           "text" "Done."))))
+                (provider
+                  (make-instance
+                   'scripted-provider
+                   :results (list (agent-test-result "compact-1"
+                                                     (list summary-item)
+                                                     :turn-completion :end)
+                                  (agent-test-result "turn-1"
+                                                     (list answer-item)
+                                                     :turn-completion :end))))
+                (agent (agent-create :configuration configuration
+                                     :provider provider
+                                     :conversation conversation
+                                     :tool-registry (agent-test-registry)
+                                     :worker nil)))
+           (conversation-append-user-message conversation "earlier context")
+           (conversation-append-provider-metadata
+            conversation
+            (list :request-number 1
+                  :response-id "seed"
+                  :usage '(("total_tokens" 999999))))
+           (agent-run-user-turn agent "hello")
+           (test-assert (equal (reverse
+                                (scripted-provider-compaction-flags provider))
+                               '(t nil))
+                        "the compaction request precedes the user request")
+           (test-assert (equal (reverse
+                                (scripted-provider-input-counts provider))
+                               '(1 2))
+                        "the user question survives compaction verbatim")
+           (test-assert (find :summary
+                              (rest (conversation--read-records
+                                     (conversation-pathname conversation)))
+                              :key #'first)
+                        "compaction persists one durable summary record")
+           (test-assert (search "A previous segment"
+                                (json-get
+                                 (aref (json-get
+                                        (first (conversation-input-items
+                                                conversation))
+                                        "content")
+                                       0)
+                                 "text"))
+                        "the live projection starts from the summary bridge"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> run-agent-tests () boolean)
 (defun run-agent-tests ()
   "Run focused agent-loop tests and return true on success."
@@ -516,4 +594,5 @@
   (test-agent-invalid-call-history)
   (test-agent-bounds-and-tool-failures)
   (test-agent-long-tool-turn)
+  (test-agent-compaction)
   t)

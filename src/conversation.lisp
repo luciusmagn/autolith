@@ -38,7 +38,12 @@
     :initform nil
     :accessor conversation-turn-state
     :type (option string)
-    :documentation "The transient provider routing token for one user turn."))
+    :documentation "The transient provider routing token for one user turn.")
+   (last-total-tokens
+    :initform 0
+    :accessor conversation-last-total-tokens
+    :type (integer 0)
+    :documentation "The total token usage reported by the newest provider step."))
   (:documentation "An append-only conversation and its provider projection."))
 
 (-> conversation--write-form (pathname list &key (:append boolean)) null)
@@ -182,12 +187,65 @@
            :wire-json (json-encode item)))
     (conversation--append-input-item conversation item)))
 
+(-> conversation--usage-total (t) (option integer))
+(defun conversation--usage-total (usage)
+  "Return the total token count carried by portable or wire USAGE data."
+  (cond
+    ((json-object-p usage)
+     (let ((total (json-get usage "total_tokens")))
+       (and (integerp total) total)))
+    ((listp usage)
+     (let ((total (second (assoc "total_tokens" usage :test #'equal))))
+       (and (integerp total) total)))
+    (t
+     nil)))
+
 (-> conversation-append-provider-metadata (conversation list) list)
 (defun conversation-append-provider-metadata (conversation metadata)
   "Persist portable provider METADATA that is not part of request history."
+  (let ((total (conversation--usage-total (getf metadata :usage))))
+    (when total
+      (setf (conversation-last-total-tokens conversation) total)))
   (conversation-append-record
    conversation
    (list :provider :metadata metadata)))
+
+(define-constant +conversation-summary-prefix+
+  "A previous segment of this conversation was compacted. The summary below replaces that segment; use it to continue seamlessly without repeating completed work."
+  :test #'string=
+  :documentation "The bridge text introducing a compaction summary to the model.")
+
+(-> conversation-summary-item (string) json-object)
+(defun conversation-summary-item (content)
+  "Return the replayable wire item carrying a compaction summary CONTENT."
+  (json-object
+   "type" "message"
+   "role" "user"
+   "content" (json-array
+              (json-object
+               "type" "input_text"
+               "text" (format nil "~A~2%~A"
+                              +conversation-summary-prefix+
+                              content)))))
+
+(-> conversation-append-summary (conversation string) list)
+(defun conversation-append-summary (conversation content)
+  "Persist a compaction summary and replace CONVERSATION's projection with it.
+
+The durable record covers every record before it, so replay reproduces the
+same compacted projection. The provider turn-state token is dropped because
+it described the uncompacted context."
+  (let ((record (conversation-append-record
+                 conversation
+                 (list :summary
+                       :through-seq (1- (conversation-next-sequence
+                                         conversation))
+                       :content content))))
+    (setf (conversation-input-items conversation)
+          (list (conversation-summary-item content))
+          (conversation-turn-state conversation) nil
+          (conversation-last-total-tokens conversation) 0)
+    record))
 
 
 ;;;; -- Conversation Loading --
@@ -234,7 +292,18 @@
                  :message "A persisted provider item is not a JSON object."
                  :pathname (conversation-pathname conversation)
                  :sequence sequence))
-        (conversation--append-input-item conversation item))))
+        (conversation--append-input-item conversation item)))
+    (when (eq (first record) :summary)
+      (let ((content (getf (rest record) :content)))
+        (when (stringp content)
+          (setf (conversation-input-items conversation)
+                (list (conversation-summary-item content))
+                (conversation-last-total-tokens conversation) 0))))
+    (when (eq (first record) :provider)
+      (let ((total (conversation--usage-total
+                    (getf (getf (rest record) :metadata) :usage))))
+        (when total
+          (setf (conversation-last-total-tokens conversation) total)))))
   nil)
 
 (-> conversation-peek-header (pathname) (option list))
