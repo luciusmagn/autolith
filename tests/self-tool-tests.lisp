@@ -358,7 +358,18 @@
                  (test-assert (= (length failures) 1)
                               "a broken overlay is reported as one failure")
                  (test-assert (= (test-self-target) 85)
-                              "later overlays still load past a broken one")))
+                              "later overlays still load past a broken one")
+                 (delete-file broken)))
+             (eval '(define-constant +overlay-constant-trial+ 1 :test #'=))
+             (overlay-write configuration
+                            "(alexandria:define-constant +overlay-constant-trial+)"
+                            (format nil "(define-constant ~
+                                         +overlay-constant-trial+ 2 ~
+                                         :test #'=)"))
+             (test-assert (null (overlay-load-all configuration))
+                          "constant overlays replay without re-asking")
+             (test-assert (= (symbol-value '+overlay-constant-trial+) 2)
+                          "constant overlays continue deliberately at startup")
              (with-open-file (stream source-pathname
                                      :direction :output
                                      :if-exists :append
