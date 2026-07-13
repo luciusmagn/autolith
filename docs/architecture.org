@@ -153,7 +153,7 @@ launcher can use the core.
 ** =bin/= and =recovery/=
 
 Contain the stable launcher boundary, pinned-runtime adapter, and minimal
-recovery runtime. =bootstrap= locates or installs the pinned SBCL beneath the
+recovery runtime. =script/bootstrap= locates or installs the pinned SBCL beneath the
 data root without changing the system Lisp. It builds the recovery runtime into
 a read-only pristine core and builds the separate preloaded active image outside
 the repository. Both builders record exact source provenance and boot-probe each

@@ -56,11 +56,11 @@
   "Run the repository check command after source changes to PATHS."
   (declare (ignore checker paths))
   (let ((check-pathname
-          (merge-pathnames "check"
+          (merge-pathnames "script/check"
                            (configuration-source-root configuration))))
     (unless (probe-file check-pathname)
       (error 'source-mutation-error
-             :message "The repository has no check command."
+             :message "The repository has no script/check command."
              :tool-name "self.commit"
              :pathname check-pathname))
     (uiop:run-program (list (namestring check-pathname))
@@ -674,7 +674,7 @@ an overlay file under the data root and loaded again at every startup."
              (when (or (uiop:subpathp pathname launcher-root)
                        (uiop:subpathp pathname recovery-root)
                        (string= (enough-namestring pathname source-root)
-                                "build-recovery"))
+                                "script/build-recovery"))
                (error 'tool-error
                       :message (format nil
                                        "Normal self tools cannot commit stable artifact ~S."

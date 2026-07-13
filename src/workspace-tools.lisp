@@ -68,7 +68,8 @@ through overlays instead."
        nil)
       ((or (uiop:subpathp path (merge-pathnames "bin/" source-root))
            (uiop:subpathp path (merge-pathnames "recovery/" source-root))
-           (string= (enough-namestring path source-root) "build-recovery"))
+           (string= (enough-namestring path source-root)
+                    "script/build-recovery"))
        t)
       ((uiop:subpathp (configuration-working-directory configuration)
                       source-root)
@@ -83,7 +84,8 @@ through overlays instead."
                       (tool-context-configuration context))))
     (if (or (uiop:subpathp path (merge-pathnames "bin/" source-root))
             (uiop:subpathp path (merge-pathnames "recovery/" source-root))
-            (string= (enough-namestring path source-root) "build-recovery"))
+            (string= (enough-namestring path source-root)
+                     "script/build-recovery"))
         (format nil "~A is a stable launcher or recovery artifact and stays ~
                      read-only."
                 path)

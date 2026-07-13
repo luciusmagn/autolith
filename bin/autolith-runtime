@@ -189,7 +189,7 @@ if [[ -z "$sbcl_command" && "$install_requested" == true ]]; then
   sbcl_command=$managed_sbcl
 fi
 if [[ -z "$sbcl_command" ]]; then
-  fail "SBCL $expected_version is unavailable; run ./bootstrap."
+  fail "SBCL $expected_version is unavailable; run ./script/bootstrap."
 fi
 
 runtime_record "$sbcl_command"

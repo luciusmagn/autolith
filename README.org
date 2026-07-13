@@ -34,11 +34,11 @@ Dependencies are pinned by =qlfile= and =qlfile.lock=. With Quicklisp already
 installed at =~/quicklisp=, run:
 
 #+BEGIN_SRC sh
-./bootstrap
-./check
+./script/bootstrap
+./script/check
 #+END_SRC
 
-=bootstrap= installs the pinned runtime when needed, installs Qlot through
+=script/bootstrap= installs the pinned runtime when needed, installs Qlot through
 Quicklisp, materializes the locked project dependencies under the ignored
 =.qlot/= directory, builds a small pristine recovery core under
 =${XDG_DATA_HOME:-~/.local/share}/autolith/recovery/=, and builds a preloaded
@@ -50,7 +50,7 @@ system, architecture, and content hash of every Autolith source input plus the
 dependency lock. A valid image avoids dependency and application loading on each
 launch. When it is missing or stale, Autolith safely loads from source and
 immediately says so; a cold Common Lisp compilation cache can take a minute.
-Run =./bootstrap= again after changing compiled source to refresh the fast
+Run =./script/bootstrap= again after changing compiled source to refresh the fast
 startup image. The source loader and check script prefer the project-local
 dependency environment, then fall back to the user's Quicklisp.
 
@@ -243,7 +243,7 @@ protocols express subsystem boundaries without scoped packages.
 
 * Generations and recovery
 
-=/checkpoint= first requires a clean Git worktree and a passing =./check=. It
+=/checkpoint= first requires a clean Git worktree and a passing =./script/check=. It
 briefly excludes live mutation, revalidates the source revision, and forks a
 coordinator. The active parent resumes immediately. A saver child writes a
 temporary core. Before publication, the coordinator boots that core through a
@@ -300,7 +300,7 @@ scope.
 Run the complete test suite from the repository root:
 
 #+BEGIN_SRC sh
-./check
+./script/check
 #+END_SRC
 
 The suite covers request shape, SSE framing, credential storage and device auth,

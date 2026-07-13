@@ -3,7 +3,8 @@
 (asdf:initialize-source-registry)
 
 (let* ((script-path (truename *load-truename*))
-       (source-root (uiop:pathname-directory-pathname script-path))
+       (script-directory (uiop:pathname-directory-pathname script-path))
+       (source-root (uiop:pathname-parent-directory-pathname script-directory))
        (version-pathname (merge-pathnames "sbcl.version" source-root))
        (project-setup (merge-pathnames ".qlot/setup.lisp" source-root))
        (home (user-homedir-pathname))
@@ -27,7 +28,7 @@
              expected-version
              (lisp-implementation-version))))
   (unless (probe-file project-setup)
-    (error "Active-image builds need locked dependencies; run ./bootstrap."))
+    (error "Active-image builds need locked dependencies; run ./script/bootstrap."))
   (format t "~&Loading Autolith for its preloaded active image.~%")
   (finish-output)
   (load project-setup)

@@ -67,7 +67,8 @@
             (handler-case
                 (progn
                   (self-validate-commit-paths configuration
-                                              (json-array "build-recovery"))
+                                              (json-array
+                                               "script/build-recovery"))
                   nil)
               (tool-error ()
                 t))

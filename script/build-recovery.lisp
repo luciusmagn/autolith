@@ -4,7 +4,8 @@
 (require :sb-posix)
 
 (let* ((script-path (truename *load-truename*))
-       (source-root (uiop:pathname-directory-pathname script-path))
+       (script-directory (uiop:pathname-directory-pathname script-path))
+       (source-root (uiop:pathname-parent-directory-pathname script-directory))
        (version-pathname (merge-pathnames "sbcl.version" source-root))
        (arguments (uiop:command-line-arguments))
        (child-p (and arguments (string= (first arguments) "--child")))
@@ -59,14 +60,14 @@
 
            (source-identity ()
              "Return exact provenance for inputs controlling the recovery image."
-             (let* ((paths '("build-recovery"
-                             "build-recovery.lisp"
+             (let* ((paths '("script/build-recovery"
+                             "script/build-recovery.lisp"
                              "recovery/runtime.lisp"
                              "recovery/launcher.lisp"
                              "bin/autolith"
                              "bin/autolith-runtime"
-                             "check"
-                             "check.lisp"
+                             "script/check"
+                             "script/check.lisp"
                              "qlfile.lock"
                              "sbcl.version"))
                     (status (git-output
@@ -75,16 +76,16 @@
                (list :source-commit (git-output '("rev-parse" "HEAD"))
                      :source-clean-p (zerop (length status))
                      :runtime-blob (source-blob "recovery/runtime.lisp")
-                     :builder-blob (source-blob "build-recovery")
+                     :builder-blob (source-blob "script/build-recovery")
                      :builder-source-blob
-                     (source-blob "build-recovery.lisp")
+                     (source-blob "script/build-recovery.lisp")
                      :source-launcher-blob
                      (source-blob "recovery/launcher.lisp")
                      :stable-launcher-blob (source-blob "bin/autolith")
                      :runtime-adapter-blob
                      (source-blob "bin/autolith-runtime")
-                     :check-blob (source-blob "check")
-                     :check-source-blob (source-blob "check.lisp")
+                     :check-blob (source-blob "script/check")
+                     :check-source-blob (source-blob "script/check.lisp")
                      :dependency-lock-blob (source-blob "qlfile.lock")
                      :sbcl-version-blob (source-blob "sbcl.version"))))
 

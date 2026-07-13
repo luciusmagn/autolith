@@ -66,7 +66,7 @@ run_recovery()
     "$sbcl_command" --noinform --core "$recovery_core" \
       --end-runtime-options "$source_root" "$@"
   else
-    printf 'Pristine recovery image is missing or invalid; using source bootstrap. Run ./build-recovery to replace it.\n' >&2
+    printf 'Pristine recovery image is missing or invalid; using source bootstrap. Run ./script/build-recovery to replace it.\n' >&2
     "$sbcl_command" --script "$source_root/recovery/launcher.lisp" \
       "$source_root" "$@"
   fi
@@ -85,7 +85,7 @@ run_active()
   else
     if [[ -t 2 ]]; then
       printf 'Loading Autolith from source. A cold dependency cache can take a minute.\n' >&2
-      printf 'Run "%s/bootstrap" to install the fast startup image.\n' "$source_root" >&2
+      printf 'Run "%s/script/bootstrap" to install the fast startup image.\n' "$source_root" >&2
     fi
     "$sbcl_command" --script "$source_root/bin/autolith-active" "$@"
   fi

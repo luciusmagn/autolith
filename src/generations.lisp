@@ -519,7 +519,7 @@
       (handler-case
           (uiop:run-program
            (list (namestring
-                  (merge-pathnames "check"
+                  (merge-pathnames "script/check"
                                    (configuration-source-root configuration))))
            :directory (configuration-source-root configuration)
            :output :string

@@ -1,7 +1,8 @@
 (require :asdf)
 
 (let* ((script-path (truename *load-truename*))
-       (source-root (uiop:pathname-directory-pathname script-path))
+       (script-directory (uiop:pathname-directory-pathname script-path))
+       (source-root (uiop:pathname-parent-directory-pathname script-directory))
        (version-pathname (merge-pathnames "sbcl.version" source-root))
        (sbcl-command (or (uiop:getenv "AUTOLITH_SBCL") "sbcl"))
        (quicklisp-setup (merge-pathnames "quicklisp/setup.lisp"
@@ -36,7 +37,7 @@
   (finish-output)
   (uiop:run-program (list sbcl-command
                           "--script"
-                          (namestring (merge-pathnames "build-recovery.lisp"
+                          (namestring (merge-pathnames "script/build-recovery.lisp"
                                                        source-root)))
                     :input :interactive
                     :output :interactive
@@ -45,7 +46,7 @@
   (finish-output)
   (uiop:run-program (list sbcl-command
                           "--script"
-                          (namestring (merge-pathnames "build-active.lisp"
+                          (namestring (merge-pathnames "script/build-active.lisp"
                                                        source-root)))
                     :input :interactive
                     :output :interactive

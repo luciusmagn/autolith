@@ -1,7 +1,8 @@
 (require :asdf)
 
 (let* ((script-path (truename *load-truename*))
-       (source-root (uiop:pathname-directory-pathname script-path))
+       (script-directory (uiop:pathname-directory-pathname script-path))
+       (source-root (uiop:pathname-parent-directory-pathname script-directory))
        (version-pathname (merge-pathnames "sbcl.version" source-root))
        (project-setup (merge-pathnames ".qlot/setup.lisp" source-root))
        (user-setup (merge-pathnames "quicklisp/setup.lisp"
@@ -41,9 +42,9 @@
            (merge-pathnames "autolith/recovery/manifest.sexp" data-home))
          (sbcl-command (or (uiop:getenv "AUTOLITH_SBCL") "sbcl")))
     (unless (probe-file recovery-core)
-      (error "Autolith's pristine recovery image is missing; run ./bootstrap."))
+      (error "Autolith's pristine recovery image is missing; run ./script/bootstrap."))
     (unless (probe-file recovery-manifest)
-      (error "Autolith's pristine recovery manifest is missing; run ./bootstrap."))
+      (error "Autolith's pristine recovery manifest is missing; run ./script/bootstrap."))
     (let ((*read-eval* nil))
       (with-open-file (stream recovery-manifest
                               :direction :input

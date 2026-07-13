@@ -223,19 +223,19 @@ and keyword arguments in multi-line calls.
 Run the complete repository check from the repository root with:
 
 ```sh
-./check
+./script/check
 ```
 
 Materialize the locked project dependencies with:
 
 ```sh
-./bootstrap
+./script/bootstrap
 ```
 
 Rebuild only the installed pristine recovery image with:
 
 ```sh
-./build-recovery
+./script/build-recovery
 ```
 
 For a fast parenthesis check before loading edited Lisp, build and run the
