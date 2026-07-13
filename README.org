@@ -2,311 +2,81 @@
 #+SUBTITLE: A live, self-modifying Common Lisp agent
 #+STARTUP: content
 
-* What works
+Autolith, or AL, is a small terminal agent that runs inside a Common Lisp
+image. It owns its model loop, tools, conversations, authentication, live
+mutation, checkpoints, and recovery. It talks directly to the ChatGPT Codex
+subscription service and does not launch or bundle the Codex CLI.
 
-Autolith is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
+The supported target is Linux x86-64 on SBCL. Autolith is dogfoodable, but it
+is not a security sandbox: model-generated Lisp and commands run with the
+user's privileges.
 
-- talks directly to the ChatGPT Codex subscription Responses service;
-- defaults to =gpt-5.6-sol= with user-visible reasoning effort =ultra=;
-- owns its system prompt, conversation state, tool loop, and authentication;
-- never invokes or depends on the Codex executable;
-- keeps finalized output in normal terminal scrollback;
-- runs =lisp.*= operations in a disposable SBCL process;
-- exposes documented =self.*= inspection and mutation operations;
-- saves live SBCL generations without stopping the active parent;
-- keeps a separate pristine recovery core;
-- starts from a validated preloaded active image when available; and
-- can boot a retained generation against its exact Git revision with fallback.
+* Highlights
 
-The implementation follows [[file:docs/autolith-minimal-technical-spec.org][the technical specification]]. The object and
-file boundaries are summarized in [[file:docs/architecture.org][the architecture note]].
+- A responsive primary-screen terminal interface with ordinary scrollback.
+- Multiline editing and reusable completion widgets provided by Clinedi.
+- Input remains editable while model responses and tools are running.
+- Append-only portable conversation files with exact resume commands.
+- Everyday filesystem and shell tools plus an isolated disposable Lisp worker.
+- Live =self.*= inspection and mutation with durable overlay persistence.
+- Forked SBCL checkpoints, retained generations, and a pristine recovery image.
+- A validated preloaded active image for fast startup and source fallback.
 
-* Requirements and setup
+* Quick start
 
-The supported target is Linux x86-64 with Git, OpenSSL, Quicklisp, =curl=, GNU
-=tar=, and =sha256sum=. The tracked =sbcl.version= pins SBCL 2.6.4. The setup
-command uses a matching =AUTOLITH_SBCL= when explicitly configured, locates a
-matching system runtime, or downloads the official Linux x86-64 binary and
-checks its pinned SHA-256 identity before installing it under the Autolith data
-root. The launcher and development commands remember that selection.
-
-Dependencies are pinned by =qlfile= and =qlfile.lock=. With Quicklisp already
-installed at =~/quicklisp=, run:
+Autolith needs Git, OpenSSL, Quicklisp, =curl=, GNU =tar=, and =sha256sum=.
+The repository pins SBCL and every Lisp dependency.
 
 #+BEGIN_SRC sh
 ./script/bootstrap
 ./script/check
-#+END_SRC
-
-=script/bootstrap= installs the pinned runtime when needed, installs Qlot through
-Quicklisp, materializes the locked project dependencies under the ignored
-=.qlot/= directory, builds a small pristine recovery core under
-=${XDG_DATA_HOME:-~/.local/share}/autolith/recovery/=, and builds a preloaded
-active image under the adjacent =active/= directory. Both cores and their
-manifests are installed read-only.
-
-The launcher probes the preloaded image against the current SBCL, operating
-system, architecture, and content hash of every Autolith source input plus the
-dependency lock. A valid image avoids dependency and application loading on each
-launch. When it is missing or stale, Autolith safely loads from source and
-immediately says so; a cold Common Lisp compilation cache can take a minute.
-Run =./script/bootstrap= again after changing compiled source to refresh the fast
-startup image. The source loader and check script prefer the project-local
-dependency environment, then fall back to the user's Quicklisp.
-
-On systems where OpenSSL is outside the dynamic loader's normal search path,
-make its library directory visible to CFFI. Autolith automatically adds
-=~/.guix-profile/lib/= when it exists.
-
-To make the development checkout available in =PATH=:
-
-#+BEGIN_SRC sh
 mkdir -p ~/.local/bin
 ln -sfn "$PWD/bin/autolith" ~/.local/bin/autolith
 #+END_SRC
 
-* Authentication
-
-Autolith stores its own credentials in
-=${XDG_STATE_HOME:-~/.local/state}/autolith/auth.sexp= with mode 0600.
-
-For the initial transition, Autolith may read =~/.codex/auth.json= once as a read-only
-bootstrap source when its private store is absent. It copies only the bounded
-access token and account ID into Autolith state. It never imports or spends Codex's
-refresh token, never reads Codex again while its private store exists, never
-writes that file, and never launches Codex. The imported access token cannot be
-renewed. To perform Autolith's proper device flow, run:
+Authenticate and start a conversation:
 
 #+BEGIN_SRC sh
 autolith --auth
-#+END_SRC
-
-The same flow is available as =/auth= inside the application. Autolith prints the
-public verification URL and one-time code, tries to open a browser, polls the
-device endpoint, performs the PKCE exchange, and writes only its private store.
-
-* Using Autolith
-
-Start a new conversation with:
-
-#+BEGIN_SRC sh
 autolith
 #+END_SRC
 
-The interface stays on the primary screen. Completed transcript rows are emitted
-once and remain in ordinary terminal scrollback. Only the bounded live region,
-holding unfinished status, the full-width prompt, and command suggestions, is
-repainted. Clinedi provides Unicode-aware editing and a cursor-following
-multiline viewport. Input wraps at the actual TTY width, explicit input lines
-are preserved, and the live region never owns the terminal's complete height.
-Each edit replaces that region in one hidden-cursor terminal write. Model and
-pasted text are sanitized before they reach the terminal. The startup =AL= mark
-uses a light-green xterm-256 row gradient when available and solid bold green
-otherwise. Its version heading and divider sit
-beside the mark above the model and workspace; internal conversation identifiers
-stay out of the header. Other styles use the basic terminal palette and
-emphasis. Set =NO_COLOR= to disable styling entirely.
+Enter submits, Alt-Enter inserts a newline, and Ctrl-C clears a draft or exits
+from an empty prompt. Tab and Shift-Tab cycle command suggestions. Messages can
+be drafted and queued while AL is responding. Type =/help= for commands.
 
-Enter submits the complete input. Alt-Enter inserts a newline. Shift-Enter also
-inserts a newline when the terminal reports modified keys with CSI-u or
-modifyOtherKeys sequences.
+* Repository map
 
-The prompt remains editable while Autolith streams a response or runs tools.
-Enter queues another message behind the active turn, and the live region shows
-how many messages are waiting. A draft that has not been submitted survives
-streaming updates unchanged. Slash commands that need modal terminal input are
-held in the editor until the current response finishes; nonmodal commands such
-as =/compact= retain responsive input while they run. Ctrl-C at an empty prompt
-cancels the active turn, discards queued messages, and prints the exact resume
-command for a durable conversation.
+- =src/= contains the active agent in the single =autolith= package.
+- =bin/= contains the stable launcher and pinned-runtime adapter.
+- =recovery/= contains the minimal source recovery runtime.
+- =script/= contains setup, image builders, and repository checks.
+- =tests/= contains the complete regression suite.
+- [[file:docs/guide.org][docs/guide.org]] covers setup, operation, tools, persistence, and recovery.
+- [[file:docs/architecture.org][docs/architecture.org]] maps the runtime components and invariants.
+- [[file:docs/autolith-minimal-technical-spec.org][docs/autolith-minimal-technical-spec.org]] is the product specification.
+- [[file:AGENTS.md][AGENTS.md]] defines repository, Lisp, testing, and commit policy.
 
-A fresh conversation stays in memory until its first durable record. Starting
-Autolith and leaving without a message or other saved state creates no
-conversation file and adds nothing to =/resume= or =/conversations=.
+* Persistent state
 
-=Ctrl-C= clears a nonempty input draft. At an empty prompt it exits Autolith;
-when the conversation is durable, shutdown prints the exact
-=autolith --resume ID= command that reopens it. Empty conversations produce no
-resume instruction.
+Autolith keeps credentials under =${XDG_STATE_HOME:-~/.local/state}/autolith/=
+and conversations, overlays, runtimes, and images under
+=${XDG_DATA_HOME:-~/.local/share}/autolith/=. Credentials never belong in Git,
+conversation files, journals, manifests, or saved cores.
 
-Long agent turns are allowed to continue well beyond eight tool batches. Autolith
-warns the model as provider step 48 approaches, reserves step 64 for a
-tools-disabled text summary, and separately caps a turn at 256 individual tool
-calls. Reaching a spending guard leaves the application and conversation usable;
-it does not invoke image recovery.
-
-Typing =/= opens command suggestions under the prompt. Arrow keys move the
-selection, Tab cycles and previews options, and Enter runs the selected command,
-first filling in the command name when it still needs an argument. Ordinary
-input keeps the previewed option and continues editing; Escape restores the
-prefix from before selection. The commands are:
-
-#+BEGIN_EXAMPLE
-/help           show this reference
-/new            start a new conversation
-/resume         pick a saved conversation to resume
-/conversations  list saved conversations
-/auth           authenticate Autolith with ChatGPT
-/model          pick the 5.6 model
-/effort         pick the reasoning effort
-/goal OBJECTIVE set or view the session goal
-/checkpoint     save a retained live generation
-/generations    list retained generations
-/rollback       start a retained generation through recovery
-/status         show usage and rate limits
-/compact        summarize earlier context now
-/quit           leave Autolith
-#+END_EXAMPLE
-
-=/resume=, =/rollback=, =/model=, and =/effort= open a vertical interactive
-picker; each also accepts an explicit argument. Tab cycles the picker alongside
-Up and Down navigation. Conversations and generations are listed newest first.
-Conversations remember the directory they were started in, and the picker
-shows it.
-
-=/goal OBJECTIVE= sets a session goal in the spirit of Codex goals. The goal
-rides along every provider request as transient context, and after each of
-your messages Autolith automatically continues working toward it for up to eight
-extra turns before pausing. The model marks genuine completion with a literal
-=[GOAL-COMPLETE]= token. =/goal= alone shows the state, =/goal pause= and
-=/goal resume= control automatic continuation, and =/goal clear= removes the
-goal. Goals persist with their conversation across =/resume=.
-
-=/model= switches between the 5.6 family models (sol, luna, terra) for the
-current session; =AUTOLITH_MODEL= still selects any model at startup.
-
-Context compaction keeps long conversations going. When the newest provider
-step reports total token usage at or beyond the compaction limit, Autolith asks
-the model for a context checkpoint summary, appends it as a durable
-=(:summary ...)= record, and replaces the request projection with one bridge
-message carrying that summary; the durable conversation file keeps everything.
-The 5.6 family models have a 372000 token context window (read from the live
-model catalog), and compaction triggers at 80 percent of the window by
-default. Set =AUTOLITH_COMPACTION_THRESHOLD= to a percentage between 1 and 95 to
-compact earlier or later, and =AUTOLITH_CONTEXT_WINDOW= to override the window
-for unlisted models. =/compact= forces a compaction immediately, and
-=/status= shows how full the context currently is.
-
-=/status= reports the model, token usage, and subscription rate limit windows
-parsed from provider responses. Requests never ask for the provider's priority
-service tier, so Autolith always uses the standard path that drains rate limits
-slowest. Hosted web search is requested in cached mode by default; set
-=AUTOLITH_WEB_SEARCH= to =live= or =disabled= to change it.
-
-Use a double slash to send a user message that begins with a literal slash.
-
-Conversations are append-only readable forms under
-=${XDG_DATA_HOME:-~/.local/share}/autolith/conversations/=. A truncated final form is
-ignored after a crash; malformed complete records are rejected.
-
-* Workspace, Lisp, and self tools
-
-The =fs.*= and =shell.*= tools cover everyday workspace work: =fs.read=
-returns numbered file lines from an optional window, =fs.list= lists one
-directory with entry kinds and sizes, =fs.write= creates or replaces a file,
-=fs.edit= replaces exact text with a uniqueness check, and =shell.run=
-executes one external command with a bounded timeout and combined output.
-They run in the active process but touch only files and subprocesses, never
-the Lisp heap, so the model does not need =self.eval= to look around. The
-stable launcher and recovery artifacts stay read-only through these tools.
-
-=AGENTS.md= files are discovered the way Codex discovers them: Autolith walks up
-from the workspace to the nearest =.git= project root, then includes every
-=AGENTS.md= from the root down to the workspace, root first, bounded and
-refreshed on every request. Without a project root only the workspace file
-is considered.
-
-The initial =lisp.*= tools are =eval=, =compile=, =load-system=, =describe=,
-=run-tests=, and =reset=. They use a persistent but disposable SBCL subprocess
-with a small S-expression protocol. They do not share heap objects with the
-active agent.
-
-The initial =self.*= tools inspect bindings, read tracked definitions, evaluate,
-redefine, set, persist complete definitions, show diffs, commit explicit paths,
-checkpoint, list generations, and request immediate rollback.
-
-Durable self-modifications never patch the tracked repository. Instead,
-=self.persist-definition= writes each complete top-level definition to an
-overlay file under =${XDG_DATA_HOME:-~/.local/share}/autolith/overlays/=, and every
-startup loads the overlays after the tracked system. A broken overlay is
-skipped with a visible notice instead of blocking startup.
-
-Running Autolith with its own repository as the workspace turns it into an
-ordinary development agent for Autolith: =fs.write= and =fs.edit= then work on
-the tracked source like on any project, with only the stable launcher and
-recovery artifacts read-only. From any other workspace those tools refuse
-Autolith's own source entirely. Repository commits stay with the user;
-=self.commit= remains for explicitly user-directed commits.
-
-Autolith keeps all project definitions in one =AUTOLITH= package. Files and CLOS
-protocols express subsystem boundaries without scoped packages.
-
-* Generations and recovery
-
-=/checkpoint= first requires a clean Git worktree and a passing =./script/check=. It
-briefly excludes live mutation, revalidates the source revision, and forks a
-coordinator. The active parent resumes immediately. A saver child writes a
-temporary core. Before publication, the coordinator boots that core through a
-private probe and requires its exact generation ID and Git commit. Only then does
-it publish the core, manifest, and selected-generation record.
-
-=/rollback ID= atomically selects a compatible generation and leaves the active
-process through a dedicated recovery status. The stable launcher then starts the
-matching core and source revision immediately.
-
-List or boot retained generations with:
-
-#+BEGIN_SRC sh
-autolith --recovery --list
-autolith --recovery --generation GENERATION-ID
-#+END_SRC
-
-Recovery normally runs from the separately built pristine core without loading
-the active source or damaged active core. Its manifest records exact build-input
-provenance, and both installation and startup require a versioned core handshake.
-An absent or invalid pristine image falls back to the source launcher. Recovery
-sanitizes all terminal output, inspects pending
-mutation identities, creates a detached clean Git worktree at the manifest's
-recorded commit, and points the resumed application at that source. A fatal
-active-path failure writes a private allowlisted crash capsule, publishes it to
-that launcher instance, exits with status 70, restores the terminal, and boots
-the selected generation. If that generation fails fatally, recovery tries other
-compatible retained generations newest first, restoring terminal state and
-refreshing crash context between attempts.
-
-Automatic recovery forwards the original application arguments while marking
-the resumed process as recovered, restores the capsule's conversation, and
-retains the last rendered sequence so ordinary terminal scrollback is not
-duplicated. An explicit =--resume ID= overrides checkpoint-time conversation
-state.
-
-Saved cores are compatible only with the recorded SBCL version, operating system
-build, and architecture. Source remains authoritative for clean rebuilds.
-
-* Security status
-
-Autolith is not a security sandbox. It executes model-generated Lisp and external
-commands with the privileges of the user running it. Process boundaries,
-restricted tool surfaces, append-only records, Git, and retained generations
-reduce accidental permanent damage; they do not contain malicious code.
-
-Credentials are excluded from source, conversations, journals, manifests, crash
-capsules, tool output, and saved cores. Provider objects retain credential paths,
-not token values, and checkpointing is rejected inside a credential request
-scope.
+Source remains authoritative for clean rebuilds. Saved cores retain exact live
+states; overlays retain durable live definitions without patching the tracked
+repository.
 
 * Development
 
-Run the complete test suite from the repository root:
+Run the complete check after every change:
 
 #+BEGIN_SRC sh
 ./script/check
 #+END_SRC
 
-The suite covers request shape, SSE framing, credential storage and device auth,
-append-only conversation recovery, tool dispatch, worker evaluation, active
-definition transactions, agent continuation and tool bounds, terminal control
-safety, crash correlation, generation manifests, a launched isolated worker,
-and startup of the installed pristine recovery core. Manual release smoke tests
-add the live subscription boundary, forked checkpoint publication, automatic
-fatal recovery, and retained-core boot.
+Refresh dependencies and both installed baseline images with
+=./script/bootstrap=. Rebuild only the pristine recovery image with
+=./script/build-recovery=. See [[file:AGENTS.md][AGENTS.md]] before editing and the
+[[file:docs/autolith-minimal-technical-spec.org][technical specification]] before changing architecture.
