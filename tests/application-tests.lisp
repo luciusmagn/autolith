@@ -99,6 +99,49 @@
                  "an empty exploratory word set retains a safe fallback"))
   nil)
 
+(-> test-interrupt-resume-instruction () null)
+(defun test-interrupt-resume-instruction ()
+  "Test that Ctrl-C exits with an exact command only for durable conversations."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (labels ((interrupt-application (conversation)
+               "Run one CONVERSATION until a scripted Ctrl-C and return its output."
+               (let* ((terminal (make-instance 'scripted-terminal
+                                               :columns 80
+                                               :events (list :interrupt)))
+                      (application
+                        (make-instance 'application
+                                       :configuration configuration
+                                       :conversation conversation
+                                       :provider nil
+                                       :tool-registry (make-instance 'tool-registry)
+                                       :worker nil
+                                       :agent nil
+                                       :ui (terminal-ui-create
+                                            :terminal terminal))))
+                 (application-run application)
+                 (recording-terminal-output terminal))))
+      (unwind-protect
+           (let ((durable (conversation-create configuration
+                                               :identifier "resume-this"))
+                 (empty (conversation-create configuration
+                                             :identifier "discard-this")))
+             (conversation-append-user-message durable "keep this conversation")
+             (let ((output (interrupt-application durable)))
+               (test-assert (search "To resume this conversation, run:" output)
+                            "Ctrl-C explains how to resume a durable conversation")
+               (test-assert (search "autolith --resume resume-this" output)
+                            "the Ctrl-C instruction carries the exact resume command"))
+             (let ((output (interrupt-application empty)))
+               (test-assert (not (search "autolith --resume" output))
+                            "Ctrl-C gives no resume command for an empty conversation")
+               (test-assert (not (probe-file (conversation-pathname empty)))
+                            "Ctrl-C does not persist an empty conversation")))
+        (uiop:delete-directory-tree root
+                                    :validate t
+                                    :if-does-not-exist :ignore))))
+  nil)
+
 (-> test-transcript-entries () null)
 (defun test-transcript-entries ()
   "Test styled transcript entry construction, wrapping, and output bounds."
@@ -660,6 +703,7 @@
   "Run focused application presentation tests and return true on success."
   (test-application-banner-version)
   (test-thinking-label-selection)
+  (test-interrupt-resume-instruction)
   (test-transcript-entries)
   (test-streaming-presentation)
   (test-conversation-picker)

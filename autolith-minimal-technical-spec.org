@@ -515,6 +515,10 @@ It should show:
 The interface should remain responsive during tool execution and model
 streaming.
 
+Ctrl-C with an empty input exits the interface. When the active conversation
+has durable records, shutdown displays the exact command that resumes its
+identifier. An empty conversation has no resume command.
+
 Decorative animations, excessive transitions, and visual spectacle are
 out of scope.
 

@@ -98,7 +98,9 @@ capability-checked xterm-256 green gradient with bold basic-green fallback;
 one leading blank row and a divider separate its identity from model and
 workspace metadata. Internal conversation identifiers are omitted. Other
 semantic styles resolve to basic terminal palette colors and emphasis. Untrusted
-text is sanitized before trusted styling controls are added around it.
+text is sanitized before trusted styling controls are added around it. Ctrl-C at
+an empty prompt exits and leaves a paste-ready resume command in scrollback only
+when the active conversation is durable.
 
 ** =agent.lisp=
 

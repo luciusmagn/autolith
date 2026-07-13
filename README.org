@@ -107,6 +107,11 @@ A fresh conversation stays in memory until its first durable record. Starting
 Autolith and leaving without a message or other saved state creates no
 conversation file and adds nothing to =/resume= or =/conversations=.
 
+=Ctrl-C= clears a nonempty input draft. At an empty prompt it exits Autolith;
+when the conversation is durable, shutdown prints the exact
+=autolith --resume ID= command that reopens it. Empty conversations produce no
+resume instruction.
+
 Long agent turns are allowed to continue well beyond eight tool batches. Autolith
 warns the model as provider step 48 approaches, reserves step 64 for a
 tools-disabled text summary, and separately caps a turn at 256 individual tool

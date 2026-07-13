@@ -165,6 +165,31 @@
   (prog1 (terminal-ui-read-event ui)
     (terminal-ui-refresh-size ui #'application-pending-terminal-columns)))
 
+(-> application--resume-command (application) string)
+(defun application--resume-command (application)
+  "Return the shell command that resumes APPLICATION's exact conversation."
+  (format nil "autolith --resume ~A"
+          (uiop:escape-shell-token
+           (conversation-identifier
+            (application-conversation application)))))
+
+(-> application--present-resume-instruction (application) boolean)
+(defun application--present-resume-instruction (application)
+  "Present APPLICATION's exact resume command when its conversation is durable."
+  (let ((conversation (application-conversation application)))
+    (if (conversation-persisted-p conversation)
+        (not
+         (null
+          (application-present
+           application
+           (list
+            (terminal-span :dim "To resume this conversation, run:")
+            (terminal-span :plain (string #\Newline))
+            (terminal-span :code
+                           (format nil "  ~A"
+                                   (application--resume-command application)))))))
+        nil)))
+
 (-> application-run (application) null)
 (defun application-run (application)
   "Run APPLICATION until explicit exit, always restoring terminal and worker state."
@@ -231,7 +256,10 @@
                               (application-raise-fatal application
                                                        condition
                                                        signal-backtrace))))))
-                     ((:end-of-input :interrupt)
+                     (:end-of-input
+                      (return))
+                     (:interrupt
+                      (application--present-resume-instruction application)
                       (return))))))))
       (sb-sys:enable-interrupt sb-unix:sigwinch :default)
       (when worker
