@@ -4,12 +4,25 @@ set -u
 
 launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
 source_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
-sbcl_command=${AUTOLITH_SBCL:-sbcl}
 terminal_state=
 recovery_requested=false
 remaining_arguments=()
 state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 data_home=${XDG_DATA_HOME:-$HOME/.local/share}
+runtime_version=$(tr -d '[:space:]' < "$source_root/sbcl.version")
+runtime_command_path=$data_home/autolith/runtimes/$runtime_version/command
+recorded_runtime=
+if [[ -r "$runtime_command_path" ]]; then
+  IFS= read -r recorded_runtime < "$runtime_command_path" || recorded_runtime=
+fi
+if [[ -n ${AUTOLITH_SBCL:-} ]]; then
+  sbcl_command=$AUTOLITH_SBCL
+elif [[ "$recorded_runtime" == /* && -x "$recorded_runtime" ]]; then
+  sbcl_command=$recorded_runtime
+else
+  sbcl_command=sbcl
+fi
+export AUTOLITH_SBCL=$sbcl_command
 recovery_core=${AUTOLITH_RECOVERY_CORE:-$data_home/autolith/recovery/autolith-recovery.core}
 recovery_manifest=$(dirname -- "$recovery_core")/manifest.sexp
 crash_pointer=

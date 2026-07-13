@@ -1,0 +1,87 @@
+(require :asdf)
+
+(let* ((script-path (truename *load-truename*))
+       (source-root (uiop:pathname-directory-pathname script-path))
+       (version-pathname (merge-pathnames "sbcl.version" source-root))
+       (project-setup (merge-pathnames ".qlot/setup.lisp" source-root))
+       (user-setup (merge-pathnames "quicklisp/setup.lisp"
+                                    (user-homedir-pathname)))
+       (quicklisp-setup (if (probe-file project-setup)
+                           project-setup
+                           user-setup)))
+  (let ((expected-version
+          (string-trim '(#\Space #\Tab #\Newline #\Return)
+                       (uiop:read-file-string version-pathname))))
+    (unless (string= expected-version (lisp-implementation-version))
+      (error "Autolith pins SBCL ~A, but this process is ~A."
+             expected-version
+             (lisp-implementation-version))))
+  (unless (probe-file quicklisp-setup)
+    (error "Autolith needs Quicklisp at ~A" quicklisp-setup))
+  (load quicklisp-setup)
+  (uiop:symbol-call '#:ql '#:quickload :cffi :silent t)
+  (let ((profile-library-directory
+          (merge-pathnames ".guix-profile/lib/" (user-homedir-pathname)))
+        (library-directories
+          (find-symbol "*FOREIGN-LIBRARY-DIRECTORIES*" "CFFI")))
+    (when (probe-file profile-library-directory)
+      (pushnew profile-library-directory
+               (symbol-value library-directories)
+               :test #'equal)))
+  (asdf:load-asd (merge-pathnames "autolith.asd" source-root))
+  (asdf:test-system :autolith)
+  (let* ((home (user-homedir-pathname))
+         (data-home
+           (uiop:ensure-directory-pathname
+            (or (uiop:getenv "XDG_DATA_HOME")
+                (merge-pathnames ".local/share/" home))))
+         (recovery-core
+           (merge-pathnames "autolith/recovery/autolith-recovery.core" data-home))
+         (recovery-manifest
+           (merge-pathnames "autolith/recovery/manifest.sexp" data-home))
+         (sbcl-command (or (uiop:getenv "AUTOLITH_SBCL") "sbcl")))
+    (unless (probe-file recovery-core)
+      (error "Autolith's pristine recovery image is missing; run ./bootstrap."))
+    (unless (probe-file recovery-manifest)
+      (error "Autolith's pristine recovery manifest is missing; run ./bootstrap."))
+    (let ((*read-eval* nil))
+      (with-open-file (stream recovery-manifest
+                              :direction :input
+                              :external-format :utf-8)
+        (let ((manifest (read stream t nil))
+              (end-marker (gensym "RECOVERY-MANIFEST-END-")))
+          (unless (and (listp manifest)
+                       (eq (first manifest) :recovery-image)
+                       (= (or (getf (rest manifest) :version) 0) 2)
+                       (equal (truename (getf (rest manifest) :core))
+                              (truename recovery-core))
+                       (eq (read stream nil end-marker) end-marker))
+            (error "Autolith's pristine recovery manifest is invalid.")))))
+    (let* ((probe-output
+             (uiop:run-program
+              (list sbcl-command
+                    "--noinform"
+                    "--core" (namestring recovery-core)
+                    "--end-runtime-options"
+                    (namestring source-root)
+                    "--probe")
+              :output :string
+              :error-output :output))
+           (*read-eval* nil)
+           (stream (make-string-input-stream probe-output))
+           (end-marker (gensym "RECOVERY-PROBE-END-"))
+           (probe (read stream nil end-marker)))
+      (unless (and (listp probe)
+                   (eq (first probe) :recovery-probe)
+                   (= (or (getf (rest probe) :version) 0) 2)
+                   (eq (read stream nil end-marker) end-marker))
+        (error "Autolith's pristine recovery probe is invalid: ~S" probe-output)))
+    (uiop:run-program
+     (list sbcl-command
+           "--noinform"
+           "--core" (namestring recovery-core)
+           "--end-runtime-options"
+           (namestring source-root)
+           "--list")
+     :output :string
+     :error-output :output)))

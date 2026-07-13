@@ -119,11 +119,13 @@ projects durable records into the terminal, and wires interactive commands.
 
 ** =bin/= and =recovery/=
 
-Contain the stable launcher boundary and minimal recovery runtime. =bootstrap=
-builds that runtime into a read-only pristine core outside the repository. The
-builder records exact source provenance and boot-probes the temporary image.
-The launcher repeats the versioned probe before use and falls back to the source
-launcher when the installed image is missing or invalid. Recovery reports
+Contain the stable launcher boundary, pinned-runtime adapter, and minimal
+recovery runtime. =bootstrap= locates or installs the pinned SBCL beneath the
+data root without changing the system Lisp. It builds the recovery runtime into
+a read-only pristine core outside the repository. The builder records exact
+source provenance and boot-probes the temporary image. The launcher repeats the
+versioned probe before use and falls back to the source launcher when the
+installed image is missing or invalid. Recovery reports
 sanitized crash and mutation context, creates exact-commit recovery worktrees,
 and boots retained cores without loading damaged active source. A failed
 retained core restores terminal state, refreshes crash context, and falls through

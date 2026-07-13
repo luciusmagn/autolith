@@ -22,10 +22,12 @@ file boundaries are summarized in [[file:docs/architecture.org][the architecture
 
 * Requirements and setup
 
-The supported target is Linux x86-64 with SBCL, Git, OpenSSL, and Quicklisp.
-The tracked =sbcl.version= pins SBCL 2.6.4. The launcher honors =AUTOLITH_SBCL=;
-when selecting another executable, invoke setup as
-="$AUTOLITH_SBCL" --script bootstrap= so the same runtime performs validation.
+The supported target is Linux x86-64 with Git, OpenSSL, Quicklisp, =curl=, GNU
+=tar=, and =sha256sum=. The tracked =sbcl.version= pins SBCL 2.6.4. The setup
+command uses a matching =AUTOLITH_SBCL= when explicitly configured, locates a
+matching system runtime, or downloads the official Linux x86-64 binary and
+checks its pinned SHA-256 identity before installing it under the Autolith data
+root. The launcher and development commands remember that selection.
 
 Dependencies are pinned by =qlfile= and =qlfile.lock=. With Quicklisp already
 installed at =~/quicklisp=, run:
@@ -35,11 +37,12 @@ installed at =~/quicklisp=, run:
 ./check
 #+END_SRC
 
-=bootstrap= installs Qlot through Quicklisp, materializes the locked project
-dependencies under the ignored =.qlot/= directory, and builds a small pristine
-recovery core under =${XDG_DATA_HOME:-~/.local/share}/autolith/recovery/=. The core
-and its manifest are installed read-only. The launcher and check script prefer
-the project-local dependency environment, then fall back to the user's Quicklisp.
+=bootstrap= installs the pinned runtime when needed, installs Qlot through
+Quicklisp, materializes the locked project dependencies under the ignored
+=.qlot/= directory, and builds a small pristine recovery core under
+=${XDG_DATA_HOME:-~/.local/share}/autolith/recovery/=. The core and its manifest
+are installed read-only. The launcher and check script prefer the project-local
+dependency environment, then fall back to the user's Quicklisp.
 
 On systems where OpenSSL is outside the dynamic loader's normal search path,
 make its library directory visible to CFFI. Autolith automatically adds

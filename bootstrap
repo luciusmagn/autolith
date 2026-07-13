@@ -1,37 +1,9 @@
-#!/usr/bin/env -S sbcl --script
+#!/usr/bin/env bash
 
-(require :asdf)
+set -euo pipefail
 
-(let* ((script-path (truename *load-truename*))
-       (source-root (uiop:pathname-directory-pathname script-path))
-       (version-pathname (merge-pathnames "sbcl.version" source-root))
-       (quicklisp-setup (merge-pathnames "quicklisp/setup.lisp"
-                                         (user-homedir-pathname))))
-  (let ((expected-version
-          (string-trim '(#\Space #\Tab #\Newline #\Return)
-                       (uiop:read-file-string version-pathname))))
-    (unless (string= expected-version (lisp-implementation-version))
-      (error "Autolith pins SBCL ~A, but this process is ~A. Set AUTOLITH_SBCL to the pinned executable."
-             expected-version
-             (lisp-implementation-version))))
-  (unless (probe-file quicklisp-setup)
-    (error "Autolith bootstrap needs Quicklisp at ~A" quicklisp-setup))
-  (load quicklisp-setup)
-  (uiop:symbol-call '#:ql '#:quickload :cffi :silent t)
-  (let ((profile-library-directory
-          (merge-pathnames ".guix-profile/lib/" (user-homedir-pathname)))
-        (library-directories
-          (find-symbol "*FOREIGN-LIBRARY-DIRECTORIES*" "CFFI")))
-    (when (probe-file profile-library-directory)
-      (pushnew profile-library-directory
-               (symbol-value library-directories)
-               :test #'equal)))
-  (uiop:symbol-call '#:ql '#:quickload :qlot :silent t)
-  (uiop:chdir source-root)
-  (uiop:symbol-call '#:qlot '#:install)
-  (uiop:run-program (list (namestring (merge-pathnames "build-recovery"
-                                                       source-root)))
-                    :input :interactive
-                    :output :interactive
-                    :error-output :interactive)
-  (format t "~&Autolith dependencies and recovery image are installed.~%"))
+launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
+source_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")" && pwd)
+
+exec "$source_root/bin/autolith-runtime" --install \
+  --script "$source_root/bootstrap.lisp" "$@"

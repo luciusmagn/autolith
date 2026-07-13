@@ -475,6 +475,11 @@ through a capability registry.
 Ordinary filesystem, process, networking, and build operations should
 prefer Common Lisp, ASDF, and UIOP.
 
+On the initial Linux x86-64 target, setup may install a hash-verified pinned
+SBCL binary beneath the data root when no compatible runtime is available. The
+launcher and development commands use the recorded executable without changing
+the user's system Lisp installation.
+
 Autolith should not generate ad hoc Python or shell files unless a
 non-Lisp dependency genuinely requires them.
 
