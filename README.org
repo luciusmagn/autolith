@@ -13,7 +13,7 @@ Frob is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
 - keeps finalized output in normal terminal scrollback;
 - runs =lisp.*= operations in a disposable SBCL process;
 - exposes documented =self.*= inspection and mutation operations;
-- saves live SBCL generations without stopping the active parent; and
+- saves live SBCL generations without stopping the active parent;
 - keeps a separate pristine recovery core; and
 - can boot a retained generation against its exact Git revision with fallback.
 
