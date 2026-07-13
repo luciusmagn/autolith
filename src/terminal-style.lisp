@@ -4,11 +4,14 @@
 
 (deftype terminal-style ()
   "A semantic terminal style resolved to color and emphasis by the renderer."
-  '(member :plain :brand :user :tool :success :failure :notice :dim :hint
-           :selected :strong :emphasis :code))
+  '(member :plain :brand
+           :brand-gradient-1 :brand-gradient-2 :brand-gradient-3
+           :brand-gradient-4 :brand-gradient-5 :brand-gradient-6
+           :user :tool :success :failure :notice :dim :hint :selected
+           :strong :emphasis :code))
 
-;; Only basic ANSI palette entries and emphasis appear here, so Autolith follows
-;; the user's terminal theme instead of imposing absolute colors.
+;; General interface styles use the basic ANSI palette so Autolith follows the
+;; terminal theme. Only the startup mark opts into the indexed brand gradient.
 (define-constant +terminal-style-table+
   '((:brand    . "1;35")
     (:user     . "1;36")
@@ -25,15 +28,55 @@
   :test #'equal
   :documentation "Select-graphic-rendition parameters for each semantic style.")
 
+(define-constant +terminal-brand-gradient-table+
+  '((:brand-gradient-1 . 193)
+    (:brand-gradient-2 . 157)
+    (:brand-gradient-3 . 121)
+    (:brand-gradient-4 . 85)
+    (:brand-gradient-5 . 84)
+    (:brand-gradient-6 . 83))
+  :test #'equal
+  :documentation "Light-green xterm-256 colors for successive startup-mark rows.")
+
 (define-constant +terminal-style-reset+
   (format nil "~C[0m" +terminal-escape-character+)
   :test #'string=
   :documentation "The trusted control that restores default terminal rendition.")
 
-(-> terminal-style-sequence (terminal-style) (option string))
-(defun terminal-style-sequence (style)
-  "Return STYLE's trusted rendition control, or NIL when STYLE is plain."
-  (let ((parameters (rest (assoc style +terminal-style-table+))))
+(-> terminal-indexed-color-environment-p
+    ((option string) (option string))
+    boolean)
+(defun terminal-indexed-color-environment-p (term color-term)
+  "Return true when TERM or COLOR-TERM advertises indexed-color support."
+  (not
+   (null
+    (or (and term (search "256color" term :test #'char-equal))
+        (and color-term
+             (member color-term '("truecolor" "24bit")
+                     :test #'string-equal))))))
+
+(-> terminal-environment-indexed-color-p () boolean)
+(defun terminal-environment-indexed-color-p ()
+  "Return true when the process environment advertises indexed colors."
+  (terminal-indexed-color-environment-p (uiop:getenv "TERM")
+                                        (uiop:getenv "COLORTERM")))
+
+(-> terminal-style-sequence
+    (terminal-style &optional boolean)
+    (option string))
+(defun terminal-style-sequence
+    (style &optional (indexed-color-p (terminal-environment-indexed-color-p)))
+  "Return STYLE's trusted control, using INDEXED-COLOR-P for brand gradients."
+  (let* ((indexed-color
+           (rest (assoc style +terminal-brand-gradient-table+)))
+         (parameters
+           (cond
+             ((and indexed-color indexed-color-p)
+              (format nil "1;38;5;~D" indexed-color))
+             (indexed-color
+              "1;32")
+             (t
+              (rest (assoc style +terminal-style-table+))))))
     (and parameters
          (format nil "~C[~Am" +terminal-escape-character+ parameters))))
 

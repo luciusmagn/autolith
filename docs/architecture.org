@@ -91,10 +91,10 @@ Owns a restrained primary-screen interface. Finalized transcript output is
 written once and left in normal terminal scrollback. Autolith never enters the
 alternate screen and never clears scrollback. Only the bounded live region,
 holding the unfinished status row, the padded prompt row, and any command
-completion suggestions, may be repainted. Semantic styles resolve to basic
-terminal palette colors and emphasis, so styled output follows the user's
-terminal theme, and untrusted text is sanitized before trusted styling
-controls are added around it.
+completion suggestions, may be repainted. The startup identity uses a
+capability-checked xterm-256 green gradient with bold basic-green fallback;
+other semantic styles resolve to basic terminal palette colors and emphasis.
+Untrusted text is sanitized before trusted styling controls are added around it.
 
 ** =agent.lisp=
 

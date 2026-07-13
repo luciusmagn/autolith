@@ -606,6 +606,27 @@
    "semantic styles resolve to rendition controls")
   (test-assert (null (terminal-style-sequence :plain))
                "the plain style resolves to no control sequence")
+  (let ((indexed-sequences
+          (loop for style in '(:brand-gradient-1 :brand-gradient-2
+                               :brand-gradient-3 :brand-gradient-4
+                               :brand-gradient-5 :brand-gradient-6)
+                collect (terminal-style-sequence style t))))
+    (test-assert
+     (= (length (remove-duplicates indexed-sequences :test #'string=)) 6)
+     "every brand-gradient row has a distinct indexed color")
+    (test-assert
+     (string= (first indexed-sequences)
+              (format nil "~C[1;38;5;193m" +terminal-escape-character+))
+     "the brand gradient begins with its lightest green"))
+  (test-assert
+   (string= (terminal-style-sequence :brand-gradient-1 nil)
+            (format nil "~C[1;32m" +terminal-escape-character+))
+   "the brand gradient falls back to solid bold green")
+  (test-assert
+   (and (terminal-indexed-color-environment-p "xterm-256color" nil)
+        (terminal-indexed-color-environment-p "xterm" "truecolor")
+        (not (terminal-indexed-color-environment-p "xterm" nil)))
+   "terminal capability detection recognizes indexed-color environments")
   (test-assert
    (terminal-styled-text-p (list (terminal-span :brand "autolith")
                                  (terminal-span :plain " ready")))

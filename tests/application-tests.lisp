@@ -15,27 +15,63 @@
 
 (-> test-application-banner-version () null)
 (defun test-application-banner-version ()
-  "Test that the startup banner presents Autolith's name and configured version."
+  "Test the Cosmic mark, adjacent metadata, narrow layout, and configured version."
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (conversation (conversation-create configuration :identifier "banner"))
+         (terminal (make-instance 'recording-terminal :columns 80))
          (application (make-instance 'application
                                      :configuration configuration
-                                     :conversation conversation)))
+                                     :conversation conversation
+                                     :ui (terminal-ui-create
+                                          :terminal terminal))))
     (unwind-protect
          (let* ((spans (application-banner application))
-                (wordmark (terminal-span-text (first spans)))
                 (text (format nil "~{~A~}"
-                              (mapcar #'terminal-span-text spans))))
-           (test-assert (and (search "#######" wordmark)
-                             (>= (count #\Newline wordmark) 7))
-                        "the startup banner uses a multiline FIGlet wordmark")
-           (test-assert (search "AUTOLITH" text)
-                        "the startup banner names Autolith")
+                              (mapcar #'terminal-span-text spans)))
+                (lines (uiop:split-string text :separator '(#\Newline)))
+                (gradient-styles
+                  (loop for span in spans
+                        for style = (terminal-span-style span)
+                        when (member style
+                                     '(:brand-gradient-1 :brand-gradient-2
+                                       :brand-gradient-3 :brand-gradient-4
+                                       :brand-gradient-5 :brand-gradient-6))
+                          collect style)))
+           (test-assert
+            (equal gradient-styles
+                   '(:brand-gradient-1 :brand-gradient-2 :brand-gradient-3
+                     :brand-gradient-4 :brand-gradient-5 :brand-gradient-6))
+           "the Cosmic AL mark assigns one gradient style to each row")
+           (test-assert (and (search "  :::.      :::" (first lines))
+                             (search (format nil "AUTOLITH v~A"
+                                             +autolith-version+)
+                                     (first lines))
+                             (search "model" (second lines))
+                             (search "conversation" (third lines))
+                             (search "workspace" (fourth lines)))
+                        "wide banners align identity and session data beside the AL mark")
            (test-assert (search (format nil "v~A" +autolith-version+) text)
                         "the startup banner uses the configured version")
            (test-assert (not (search "v6.6.6" text))
-                        "the startup banner contains no stale display version"))
+                        "the startup banner contains no stale display version")
+           (let ((logo-end (search "YUMMM" text))
+                 (notice-start (search "Autolith executes" text)))
+             (test-assert (and logo-end
+                               notice-start
+                               (< logo-end notice-start))
+                          "the security notice follows the complete header"))
+           (setf (terminal-columns terminal) 40)
+           (let* ((narrow-spans (application-banner application))
+                  (narrow-text (format nil "~{~A~}"
+                                       (mapcar #'terminal-span-text
+                                               narrow-spans)))
+                  (logo-end (search "YUMMM" narrow-text))
+                  (metadata-start (search "AUTOLITH" narrow-text)))
+             (test-assert (and logo-end
+                               metadata-start
+                               (< logo-end metadata-start))
+                          "narrow banners stack metadata below the AL mark")))
       (uiop:delete-directory-tree root
                                   :validate t
                                   :if-does-not-exist :ignore)))

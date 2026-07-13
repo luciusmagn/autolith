@@ -2,43 +2,127 @@
 
 ;;;; -- Application Lifecycle --
 
-(-> application-banner (application) list)
-(defun application-banner (application)
-  "Return APPLICATION's restrained styled banner and security notice."
+(define-constant +application-banner-logo-lines+
+  '((:brand-gradient-1 . "  :::.      :::")
+    (:brand-gradient-2 . "  ;;`;;     ;;;")
+    (:brand-gradient-3 . " ,[[ '[[,   [[[")
+    (:brand-gradient-4 . "c$$$cc$$$c  $$'")
+    (:brand-gradient-5 . " 888   888,o88oo,.__")
+    (:brand-gradient-6 . " YMM   \"\"` \"\"\"\"YUMMM"))
+  :test #'equal
+  :documentation
+  "The AL mark generated with FIGlet's Cosmic font, paired with row styles.")
+
+(define-constant +application-banner-gap+ "   "
+  :test #'string=
+  :documentation "Horizontal space between the startup mark and session data.")
+
+(define-constant +application-banner-minimum-metadata-width+ 32
+  :documentation "The minimum useful width for metadata beside the startup mark.")
+
+(-> application--banner-logo-width () (integer 1))
+(defun application--banner-logo-width ()
+  "Return the widest row of the embedded startup mark in terminal cells."
+  (loop for entry in +application-banner-logo-lines+
+        maximize (terminal--text-width (rest entry))))
+
+(-> application--banner-columns (application) (integer 1))
+(defun application--banner-columns (application)
+  "Return APPLICATION's current terminal width or the restrained default."
+  (let ((ui (and (slot-boundp application 'ui)
+                 (application-ui application))))
+    (if ui
+        (terminal-columns (terminal-ui-terminal ui))
+        +terminal-default-columns+)))
+
+(-> application--banner-metadata-field (string string) list)
+(defun application--banner-metadata-field (label value)
+  "Return one aligned metadata LABEL and VALUE row without a newline."
+  (list (terminal-span :dim (format nil "~12A  " label))
+        (terminal-span :plain value)))
+
+(-> application--banner-metadata-rows (application) list)
+(defun application--banner-metadata-rows (application)
+  "Return the identity and current-session rows shown beside the startup mark."
   (let ((configuration (application-configuration application))
         (conversation (application-conversation application)))
+    (list
+     (list (terminal-span :strong "AUTOLITH")
+           (terminal-span :dim (format nil " v~A" +autolith-version+)))
+     (application--banner-metadata-field
+      "model"
+      (format nil "~A (effort ~A)"
+              (configuration-model configuration)
+              (configuration-reasoning-effort configuration)))
+     (application--banner-metadata-field
+      "conversation"
+      (conversation-identifier conversation))
+     (application--banner-metadata-field
+      "workspace"
+      (namestring (configuration-working-directory configuration))))))
+
+(-> application--banner-terminate-row (list) list)
+(defun application--banner-terminate-row (spans)
+  "Return SPANS followed by one plain newline span."
+  (append spans (list (terminal-span :plain (string #\Newline)))))
+
+(-> application--banner-side-by-side-spans (list integer) list)
+(defun application--banner-side-by-side-spans (metadata-rows columns)
+  "Return the startup mark with METADATA-ROWS aligned beside it within COLUMNS."
+  (let* ((logo-width (application--banner-logo-width))
+         (metadata-width (- columns
+                            logo-width
+                            (terminal--text-width +application-banner-gap+))))
+    (loop for logo-entry in +application-banner-logo-lines+
+          for index from 0
+          for metadata-row = (nth index metadata-rows)
+          append
+          (let ((logo-text (rest logo-entry)))
+            (application--banner-terminate-row
+             (append
+              (list (terminal-span
+                     (first logo-entry)
+                     (if metadata-row
+                         (format nil "~VA" logo-width logo-text)
+                         logo-text)))
+              (when metadata-row
+                (append
+                 (list (terminal-span :plain +application-banner-gap+))
+                 (terminal--clip-spans metadata-row metadata-width)))))))))
+
+(-> application--banner-stacked-spans (list integer) list)
+(defun application--banner-stacked-spans (metadata-rows columns)
+  "Return the startup mark above clipped METADATA-ROWS within COLUMNS."
+  (append
+   (loop for logo-entry in +application-banner-logo-lines+
+         append (application--banner-terminate-row
+                 (list (terminal-span (first logo-entry)
+                                      (rest logo-entry)))))
+   (list (terminal-span :plain (string #\Newline)))
+   (loop for metadata-row in metadata-rows
+         append (application--banner-terminate-row
+                 (terminal--clip-spans metadata-row columns)))))
+
+(-> application-banner (application) list)
+(defun application-banner (application)
+  "Return APPLICATION's styled identity, session metadata, and security notice."
+  (let* ((columns (application--banner-columns application))
+         (metadata-rows (application--banner-metadata-rows application))
+         (side-by-side-minimum
+           (+ (application--banner-logo-width)
+              (terminal--text-width +application-banner-gap+)
+              +application-banner-minimum-metadata-width+))
+         (header
+           (if (>= columns side-by-side-minimum)
+               (application--banner-side-by-side-spans metadata-rows columns)
+               (application--banner-stacked-spans metadata-rows columns))))
     (append
-     (list (terminal-span
-            :brand
-            ;; Generated with FIGlet's banner font and embedded for fast startup.
-            (format nil
-                    "~{~A~%~}"
-                    '("   #    #     # ####### ####### #       ### ####### #     #"
-                      "  # #   #     #    #    #     # #        #     #    #     #"
-                      " #   #  #     #    #    #     # #        #     #    #     #"
-                      "#     # #     #    #    #     # #        #     #    #######"
-                      "####### #     #    #    #     # #        #     #    #     #"
-                      "#     # #     #    #    #     # #        #     #    #     #"
-                      "#     #  #####     #    ####### ####### ###    #    #     #")))
-           (terminal-span
-            :dim
-            (format nil "AUTOLITH  v~A~%~%"
-                    +autolith-version+)))
-     (application--field-spans "model"
-                               (format nil "~A (effort ~A)"
-                                       (configuration-model configuration)
-                                       (configuration-reasoning-effort
-                                        configuration)))
-     (application--field-spans "conversation"
-                               (conversation-identifier conversation))
-     (application--field-spans "workspace"
-                               (namestring
-                                (configuration-working-directory
-                                 configuration)))
-     (list (terminal-span
-            :notice
-            (format nil "~%  Autolith executes model-generated code with your ~
-                         user privileges.~%  It is not a security sandbox."))))))
+     header
+     (list
+      (terminal-span
+       :notice
+       (format nil "~%Autolith executes model-generated code with your user ~
+                    privileges.~%It is not a security sandbox."))))))
 
 (-> application-handle-expected-error (application autolith-error) null)
 (defun application-handle-expected-error (application condition)
