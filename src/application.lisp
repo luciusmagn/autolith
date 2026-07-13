@@ -379,24 +379,6 @@
       (t
        ""))))
 
-(-> response-item-assistant-text (json-object) (option string))
-(defun response-item-assistant-text (item)
-  "Return the joined visible text of assistant message ITEM, when applicable."
-  (when (and (string= (or (json-get item "type") "") "message")
-             (string= (or (json-get item "role") "") "assistant"))
-    (let ((content (json-get item "content")))
-      (when (vectorp content)
-        (let ((parts
-                (loop for part across content
-                      when (and (json-object-p part)
-                                (member (json-get part "type")
-                                        '("output_text" "text")
-                                        :test #'string=)
-                                (stringp (json-get part "text")))
-                        collect (json-get part "text"))))
-          (when parts
-            (format nil "~{~A~^~%~}" parts)))))))
-
 (-> response-item-entry (application json-object) (option list))
 (defun response-item-entry (application item)
   "Return a styled transcript entry for completed provider ITEM."
