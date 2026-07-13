@@ -292,6 +292,10 @@
       (terminal-ui-process-event active-ui :history-next)
       (test-assert (string= (line-editor-text editor) "draft")
                    "down arrow restores the draft")
+      (terminal-ui-process-event active-ui '(:insert " alpha beta  "))
+      (terminal-ui-process-event active-ui :kill-word)
+      (test-assert (string= (line-editor-text editor) "draft alpha ")
+                   "Ctrl-Backspace deletes whitespace and the previous word")
       (multiple-value-bind (action payload)
           (terminal-ui-process-event active-ui :interrupt)
         (declare (ignore payload))
@@ -324,7 +328,9 @@
                         paste-end
                         (string escape)
                         (string #\Return)
-                        (format nil "~C[13;2u" escape)))
+                        (format nil "~C[13;2u" escape)
+                        (string (code-char 8))
+                        (format nil "~C[127;5u" escape)))
          (terminal
            (make-instance 'stream-terminal
                           :input-stream (make-string-input-stream input)
@@ -346,7 +352,11 @@
     (test-assert (eq (terminal-read-event terminal) :insert-newline)
                  "legacy Alt-Enter inserts a newline")
     (test-assert (eq (terminal-read-event terminal) :insert-newline)
-                 "enhanced Shift-Enter inserts a newline"))
+                 "enhanced Shift-Enter inserts a newline")
+    (test-assert (eq (terminal-read-event terminal) :kill-word)
+                 "raw Ctrl-Backspace requests word deletion")
+    (test-assert (eq (terminal-read-event terminal) :kill-word)
+                 "enhanced Ctrl-Backspace requests word deletion"))
   nil)
 
 (-> test-terminal-live-region-layout () null)
