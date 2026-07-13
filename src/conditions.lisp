@@ -140,6 +140,20 @@
     :documentation "The second failure that prevented image restoration."))
   (:documentation "A failed mutation could not restore the preceding active definition."))
 
+(define-condition active-image-build-error (autolith-error)
+  ((stage
+    :initarg :stage
+    :reader active-image-build-error-stage
+    :type keyword
+    :documentation "The active-image build stage that failed.")
+   (pathname
+    :initarg :pathname
+    :reader active-image-build-error-pathname
+    :type (option pathname)
+    :documentation "The source or image artifact involved in the failure."))
+  (:documentation
+   "A preloaded active image could not be validated, saved, or published."))
+
 (define-condition checkpoint-error (autolith-error)
   ((stage
     :initarg :stage

@@ -58,6 +58,7 @@
     (test-self-restart-selection)
     (test-durable-self-mutation)
     (test-generation-manifest)
+    (test-active-image-build-record)
     (test-crash-capsule-correlation)
     (run-device-authentication-tests)
     (run-agent-tests)

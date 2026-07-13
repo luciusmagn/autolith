@@ -41,4 +41,13 @@
                     :input :interactive
                     :output :interactive
                     :error-output :interactive)
-  (format t "~&Autolith dependencies and recovery image are installed.~%"))
+  (format t "~&Building the fast startup image.~%")
+  (finish-output)
+  (uiop:run-program (list sbcl-command
+                          "--script"
+                          (namestring (merge-pathnames "build-active.lisp"
+                                                       source-root)))
+                    :input :interactive
+                    :output :interactive
+                    :error-output :interactive)
+  (format t "~&Autolith dependencies, recovery image, and fast startup image are installed.~%"))

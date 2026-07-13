@@ -41,7 +41,8 @@
                              (:file "application")
                              (:file "application-recovery")
                              (:file "commands")
-                             (:file "main"))))
+                             (:file "main")
+                             (:file "active-image"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:autolith/tests))))
 
 (asdf:defsystem #:autolith/tests
@@ -57,6 +58,7 @@
                              (:file "provider-tests")
                              (:file "tool-tests")
                              (:file "generation-tests")
+                             (:file "active-image-tests")
                              (:file "lisp-worker-tests")
                              (:file "self-tool-tests")
                              (:file "device-authentication-tests")

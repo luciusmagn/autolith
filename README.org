@@ -14,7 +14,8 @@ Autolith is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
 - runs =lisp.*= operations in a disposable SBCL process;
 - exposes documented =self.*= inspection and mutation operations;
 - saves live SBCL generations without stopping the active parent;
-- keeps a separate pristine recovery core; and
+- keeps a separate pristine recovery core;
+- starts from a validated preloaded active image when available; and
 - can boot a retained generation against its exact Git revision with fallback.
 
 The implementation follows [[file:autolith-minimal-technical-spec.org][the technical specification]]. The object and
@@ -39,9 +40,18 @@ installed at =~/quicklisp=, run:
 
 =bootstrap= installs the pinned runtime when needed, installs Qlot through
 Quicklisp, materializes the locked project dependencies under the ignored
-=.qlot/= directory, and builds a small pristine recovery core under
-=${XDG_DATA_HOME:-~/.local/share}/autolith/recovery/=. The core and its manifest
-are installed read-only. The launcher and check script prefer the project-local
+=.qlot/= directory, builds a small pristine recovery core under
+=${XDG_DATA_HOME:-~/.local/share}/autolith/recovery/=, and builds a preloaded
+active image under the adjacent =active/= directory. Both cores and their
+manifests are installed read-only.
+
+The launcher probes the preloaded image against the current SBCL, operating
+system, architecture, and content hash of every Autolith source input plus the
+dependency lock. A valid image avoids dependency and application loading on each
+launch. When it is missing or stale, Autolith safely loads from source and
+immediately says so; a cold Common Lisp compilation cache can take a minute.
+Run =./bootstrap= again after changing compiled source to refresh the fast
+startup image. The source loader and check script prefer the project-local
 dependency environment, then fall back to the user's Quicklisp.
 
 On systems where OpenSSL is outside the dynamic loader's normal search path,

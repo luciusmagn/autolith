@@ -117,15 +117,24 @@ Git commit before its core, manifest, and selection become visible.
 Roots logical application state for checkpoints, reconnects ephemeral resources,
 projects durable records into the terminal, and wires interactive commands.
 
+** =active-image.lisp=
+
+Builds and validates the credential-free preloaded baseline image used for fast
+normal startup. The embedded build record hashes every compiled source input
+from Autolith, includes the dependency lock, and records the exact runtime. Its
+private probe refuses stale source or an incompatible runtime before the stable
+launcher can use the core.
+
 ** =bin/= and =recovery/=
 
 Contain the stable launcher boundary, pinned-runtime adapter, and minimal
 recovery runtime. =bootstrap= locates or installs the pinned SBCL beneath the
 data root without changing the system Lisp. It builds the recovery runtime into
-a read-only pristine core outside the repository. The builder records exact
-source provenance and boot-probes the temporary image. The launcher repeats the
-versioned probe before use and falls back to the source launcher when the
-installed image is missing or invalid. Recovery reports
+a read-only pristine core and builds the separate preloaded active image outside
+the repository. Both builders record exact source provenance and boot-probe each
+temporary image. The launcher repeats the versioned probes before use. It
+reports source loading immediately when the active image is missing or stale.
+Recovery reports
 sanitized crash and mutation context, creates exact-commit recovery worktrees,
 and boots retained cores without loading damaged active source. A failed
 retained core restores terminal state, refreshes crash context, and falls through

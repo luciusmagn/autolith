@@ -25,6 +25,8 @@ fi
 export AUTOLITH_SBCL=$sbcl_command
 recovery_core=${AUTOLITH_RECOVERY_CORE:-$data_home/autolith/recovery/autolith-recovery.core}
 recovery_manifest=$(dirname -- "$recovery_core")/manifest.sexp
+active_core=${AUTOLITH_ACTIVE_CORE:-$data_home/autolith/active/autolith-active.core}
+active_manifest=$(dirname -- "$active_core")/manifest.sexp
 crash_pointer=
 
 for argument in "$@"; do
@@ -70,6 +72,25 @@ run_recovery()
   fi
 }
 
+run_active()
+{
+  export AUTOLITH_SOURCE_ROOT="$source_root"
+  if [[ -f "$active_core" && -f "$active_manifest" ]] &&
+     grep -Eq '^\(:ACTIVE-IMAGE :VERSION 1([[:space:]]|$)' "$active_manifest" &&
+     "$sbcl_command" --noinform --core "$active_core" \
+       --end-runtime-options "$source_root" \
+       --autolith-internal-active-image-probe >/dev/null 2>&1; then
+    "$sbcl_command" --noinform --core "$active_core" \
+      --end-runtime-options "$source_root" "$@"
+  else
+    if [[ -t 2 ]]; then
+      printf 'Loading Autolith from source. A cold dependency cache can take a minute.\n' >&2
+      printf 'Run "%s/bootstrap" to install the fast startup image.\n' "$source_root" >&2
+    fi
+    "$sbcl_command" --script "$source_root/bin/autolith-active" "$@"
+  fi
+}
+
 trap finish_launcher EXIT HUP INT TERM
 
 if [[ "$recovery_requested" == true ]]; then
@@ -85,7 +106,7 @@ crash_pointer="$crash_pointer_directory/launcher-$$.path"
 rm -f -- "$crash_pointer"
 export AUTOLITH_CRASH_POINTER="$crash_pointer"
 
-if "$sbcl_command" --script "$source_root/bin/autolith-active" "$@"; then
+if run_active "$@"; then
   exit 0
 else
   status=$?
