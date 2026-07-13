@@ -45,6 +45,14 @@
   (let ((process (lisp-worker-process worker)))
     (and process (uiop:process-alive-p process) t)))
 
+(-> lisp-worker-sbcl-command () string)
+(defun lisp-worker-sbcl-command ()
+  "Return the configured SBCL executable used by disposable workers."
+  (let ((configured-command (uiop:getenv "AUTOLITH_SBCL")))
+    (if (non-empty-string-p configured-command)
+        configured-command
+        "sbcl")))
+
 (-> lisp-worker-start (lisp-worker) lisp-worker)
 (defun lisp-worker-start (worker)
   "Start WORKER when necessary and verify its protocol handshake."
@@ -53,9 +61,13 @@
            (worker-launcher (merge-pathnames
                              "bin/autolith-active"
                              (configuration-source-root configuration)))
+           (sbcl-command (lisp-worker-sbcl-command))
            (process
              (uiop:launch-program
-              (list (namestring worker-launcher) "--worker")
+              (list sbcl-command
+                    "--script"
+                    (namestring worker-launcher)
+                    "--worker")
               :directory (configuration-working-directory configuration)
               :input :stream
               :output :stream

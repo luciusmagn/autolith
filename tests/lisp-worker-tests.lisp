@@ -19,6 +19,19 @@
                  "the worker turns evaluation conditions into protocol errors")
     (test-assert (non-empty-string-p (getf (rest failure) :message))
                  "worker protocol errors carry a readable condition report"))
+  (let ((previous-command (uiop:getenv "AUTOLITH_SBCL")))
+    (unwind-protect
+         (progn
+           (sb-posix:setenv "AUTOLITH_SBCL" "/tmp/autolith-test-sbcl" 1)
+           (test-assert (string= (lisp-worker-sbcl-command)
+                                 "/tmp/autolith-test-sbcl")
+                        "the disposable worker honors the configured SBCL")
+           (sb-posix:setenv "AUTOLITH_SBCL" "" 1)
+           (test-assert (string= (lisp-worker-sbcl-command) "sbcl")
+                        "the disposable worker falls back to PATH"))
+      (if previous-command
+          (sb-posix:setenv "AUTOLITH_SBCL" previous-command 1)
+          (sb-posix:unsetenv "AUTOLITH_SBCL"))))
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (worker (lisp-worker-create configuration)))
