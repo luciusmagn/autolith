@@ -87,7 +87,12 @@
   (:documentation "An SBCL stream terminal backed by POSIX file descriptor zero."))
 
 (defclass terminal-ui ()
-  ((terminal
+  ((lock
+    :initform (make-recursive-lock "Autolith terminal UI")
+    :reader terminal-ui-lock
+    :type t
+    :documentation "The recursive lock serializing editor state and terminal writes.")
+   (terminal
     :initarg :terminal
     :reader terminal-ui-terminal
     :type terminal
@@ -149,6 +154,11 @@
     :accessor terminal-ui-status
     :type (option string)
     :documentation "The optional unfinished activity shown above the prompt.")
+   (queued-input-count
+    :initform 0
+    :accessor terminal-ui-queued-input-count
+    :type (integer 0)
+    :documentation "Submitted messages waiting behind the active model turn.")
    (stream-tail
     :initform nil
     :accessor terminal-ui-stream-tail
@@ -194,6 +204,14 @@
 
 (defgeneric terminal-read-event (terminal)
   (:documentation "Read and return one semantic input event from TERMINAL."))
+
+(defgeneric terminal-input-ready-p (terminal)
+  (:documentation "Return true when TERMINAL can read an event without blocking."))
+
+(defmethod terminal-input-ready-p ((terminal terminal))
+  "Assume application-provided TERMINAL transports have an event ready."
+  (declare (ignore terminal))
+  t)
 
 (defgeneric terminal--write (terminal text)
   (:documentation "Write trusted renderer TEXT through the terminal transport."))

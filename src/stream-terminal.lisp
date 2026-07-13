@@ -32,6 +32,11 @@
   (finish-output (stream-terminal-output-stream terminal))
   nil)
 
+(defmethod terminal-input-ready-p ((terminal stream-terminal))
+  "Return true when TERMINAL input can be consumed without blocking."
+  (or (not (terminal-interactive-p terminal))
+      (listen (stream-terminal-input-stream terminal))))
+
 (-> terminal--terminal-mode-or-nil (stream-terminal) t)
 (defun terminal--terminal-mode-or-nil (terminal)
   "Return TERMINAL's termios value, or NIL when its input is not a TTY."

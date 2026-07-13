@@ -471,6 +471,9 @@
   ()
   (:documentation "A Linux SBCL checkpoint implemented with coordinator and saver forks."))
 
+(defvar *checkpoint-thread-quiescer* nil
+  "A dynamic callback running checkpoint work without ephemeral application threads.")
+
 (-> checkpoint-create (checkpoint-backend) generation)
 (defgeneric checkpoint-create (backend)
   (:documentation "Begin a validated checkpoint and return its pending generation."))
@@ -670,6 +673,14 @@
 
 (defmethod checkpoint-create ((backend linux-sbcl-checkpoint-backend))
   "Fork a coordinator while briefly excluding live mutations, then resume the parent."
+  (when *checkpoint-thread-quiescer*
+    (let ((quiescer *checkpoint-thread-quiescer*))
+      (return-from checkpoint-create
+        (funcall
+         quiescer
+         (lambda ()
+           (let ((*checkpoint-thread-quiescer* nil))
+             (checkpoint-create backend)))))))
   (when *credentials-in-request-scope*
     (error 'checkpoint-error
            :message "A checkpoint cannot run inside a credential request scope."

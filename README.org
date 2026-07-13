@@ -111,6 +111,15 @@ Enter submits the complete input. Alt-Enter inserts a newline. Shift-Enter also
 inserts a newline when the terminal reports modified keys with CSI-u or
 modifyOtherKeys sequences.
 
+The prompt remains editable while Autolith streams a response or runs tools.
+Enter queues another message behind the active turn, and the live region shows
+how many messages are waiting. A draft that has not been submitted survives
+streaming updates unchanged. Slash commands that need modal terminal input are
+held in the editor until the current response finishes; nonmodal commands such
+as =/compact= retain responsive input while they run. Ctrl-C at an empty prompt
+cancels the active turn, discards queued messages, and prints the exact resume
+command for a durable conversation.
+
 A fresh conversation stays in memory until its first durable record. Starting
 Autolith and leaving without a message or other saved state creates no
 conversation file and adds nothing to =/resume= or =/conversations=.

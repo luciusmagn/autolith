@@ -35,6 +35,132 @@
   (setf (cursor-observing-provider-visible-during-request-p provider)
         (funcall (cursor-observing-provider-visibility-function provider))))
 
+(defclass gated-provider (scripted-provider)
+  ((gate-lock
+    :initform (make-lock "Autolith gated provider")
+    :reader gated-provider-lock
+    :type t
+    :documentation "The lock protecting deterministic provider timing.")
+   (gate-condition-variable
+    :initform (make-condition-variable :name "Autolith gated provider")
+    :reader gated-provider-condition-variable
+    :type t
+    :documentation "The wait point for first-request entry and release.")
+   (request-count
+    :initform 0
+    :accessor gated-provider-request-count
+    :type (integer 0)
+    :documentation "The number of provider requests that reached the gate.")
+   (entered-p
+    :initform nil
+    :accessor gated-provider-entered-p
+    :type boolean
+    :documentation "Whether the first provider request reached the gate.")
+   (released-p
+    :initform nil
+    :accessor gated-provider-released-p
+    :type boolean
+    :documentation "Whether the first provider request may continue."))
+  (:documentation "A scripted provider whose first request waits for terminal input."))
+
+(defmethod provider-stream-turn :around
+    ((provider gated-provider)
+     (conversation conversation)
+     (tool-namespaces vector)
+     (event-callback function)
+     &key turn-budget-state goal-context compaction-p)
+  "Hold PROVIDER's first request until its deterministic input gate opens."
+  (declare (ignore conversation tool-namespaces event-callback
+                   turn-budget-state goal-context compaction-p))
+  (let ((first-request-p nil))
+    (with-lock-held ((gated-provider-lock provider))
+      (incf (gated-provider-request-count provider))
+      (setf first-request-p (= (gated-provider-request-count provider) 1))
+      (when first-request-p
+        (setf (gated-provider-entered-p provider) t)
+        (condition-notify (gated-provider-condition-variable provider))
+        (loop until (gated-provider-released-p provider)
+              do (condition-wait
+                  (gated-provider-condition-variable provider)
+                  (gated-provider-lock provider)))))
+    (call-next-method)))
+
+(-> gated-provider-state (gated-provider) (values boolean boolean))
+(defun gated-provider-state (provider)
+  "Return PROVIDER's first-request entered and released state."
+  (with-lock-held ((gated-provider-lock provider))
+    (values (gated-provider-entered-p provider)
+            (gated-provider-released-p provider))))
+
+(-> gated-provider-release (gated-provider) null)
+(defun gated-provider-release (provider)
+  "Release PROVIDER's first waiting request."
+  (with-lock-held ((gated-provider-lock provider))
+    (setf (gated-provider-released-p provider) t)
+    (condition-notify (gated-provider-condition-variable provider)))
+  nil)
+
+(defclass responsive-scripted-terminal (scripted-terminal)
+  ((provider
+    :initarg :provider
+    :reader responsive-scripted-terminal-provider
+    :type gated-provider
+    :documentation "The provider whose first request paces later input.")
+   (conversation
+    :initarg :conversation
+    :reader responsive-scripted-terminal-conversation
+    :type conversation
+    :documentation "The conversation whose durable answers permit final EOF."))
+  (:documentation
+   "A terminal that types more input only while its provider request is active."))
+
+(-> responsive-scripted-terminal--answer-count
+    (responsive-scripted-terminal)
+    (integer 0))
+(defun responsive-scripted-terminal--answer-count (terminal)
+  "Return the number of durable provider items visible to TERMINAL."
+  (let ((conversation
+          (responsive-scripted-terminal-conversation terminal)))
+    (if (probe-file (conversation-pathname conversation))
+        (count ':provider-item
+               (rest (conversation--read-records
+                      (conversation-pathname conversation)))
+               :key #'first)
+        0)))
+
+(defmethod terminal-input-ready-p ((terminal responsive-scripted-terminal))
+  "Pace TERMINAL input around its first active request and durable answers."
+  (let* ((events (scripted-terminal-events terminal))
+         (remaining (length events))
+         (provider (responsive-scripted-terminal-provider terminal)))
+    (multiple-value-bind (entered-p released-p)
+        (gated-provider-state provider)
+      (cond
+        ((> remaining 3)
+         t)
+        ((not entered-p)
+         nil)
+        ((plusp remaining)
+         t)
+        ((not released-p)
+         (gated-provider-release provider)
+         nil)
+        (t
+         (>= (responsive-scripted-terminal--answer-count terminal) 2))))))
+
+(defmethod terminal-read-event ((terminal responsive-scripted-terminal))
+  "Return TERMINAL's next paced event, then physical EOF after durable answers."
+  (or (pop (scripted-terminal-events terminal)) ':stream-end))
+
+(defclass waiting-recording-terminal (recording-terminal)
+  ()
+  (:documentation "A recording terminal with no input ready until a test stops it."))
+
+(defmethod terminal-input-ready-p ((terminal waiting-recording-terminal))
+  "Report no pending input for TERMINAL."
+  (declare (ignore terminal))
+  nil)
+
 
 ;;;; -- Focused Presentation Tests --
 
@@ -359,7 +485,7 @@
 
 (-> test-turn-cursor-visibility () null)
 (defun test-turn-cursor-visibility ()
-  "Test model turns hide cursor motion and restore the input cursor afterward."
+  "Test model turns retain the editable cursor while updates hide motion atomically."
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration)))
     (unwind-protect
@@ -399,23 +525,145 @@
              (recording-terminal-reset terminal)
              (application--run-turn application "hello")
              (test-assert
-              (not (cursor-observing-provider-visible-during-request-p
-                    provider))
-              "the cursor is hidden before the provider starts streaming")
+              (cursor-observing-provider-visible-during-request-p provider)
+              "the editable cursor remains visible during provider work")
              (test-assert
               (live-region-cursor-visible-p (terminal-ui-live-region ui))
               "the input cursor is restored after the model turn")
              (let* ((output (recording-terminal-output terminal))
+                    (hide (format nil "~C[?25l"
+                                  +terminal-escape-character+))
                     (show (format nil "~C[?25h"
-                                  +terminal-escape-character+)))
+                                  +terminal-escape-character+))
+                    (hide-count
+                      (terminal-tests--substring-count hide output))
+                    (show-count
+                      (terminal-tests--substring-count show output)))
                (test-assert
-                (= (terminal-tests--substring-count show output) 1)
-                "one cursor reveal follows the complete model turn")
+                (and (plusp hide-count) (plusp show-count))
+                "compound model updates hide motion and restore the cursor")
                (test-assert
                 (< (or (search "finished" output) most-positive-fixnum)
                    (or (search show output :from-end t) -1))
-                "the cursor is revealed only after the final answer is painted"))))
+                "the final cursor reveal follows the completed answer"))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-responsive-model-input () null)
+(defun test-responsive-model-input ()
+  "Test typing, submission, queueing, and cursor stability during model turns."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation
+                  (conversation-create configuration
+                                       :identifier "responsive-input"))
+                (provider
+                  (make-instance
+                   'gated-provider
+                   :results
+                   (list
+                    (agent-test-result
+                     "responsive-1"
+                     (list (agent-test-message "first answer"))
+                     :turn-completion :end)
+                    (agent-test-result
+                     "responsive-2"
+                     (list (agent-test-message "second answer"))
+                     :turn-completion :end))))
+                (terminal
+                  (make-instance
+                   'responsive-scripted-terminal
+                   :columns 60
+                   :provider provider
+                   :conversation conversation
+                   :events
+                   (list '(:insert "first message")
+                         :submit
+                         '(:insert "second message")
+                         :submit
+                         '(:insert "draft survives"))))
+                (ui (terminal-ui-create :terminal terminal))
+                (registry (make-instance 'tool-registry))
+                (agent (agent-create :configuration configuration
+                                     :provider provider
+                                     :conversation conversation
+                                     :tool-registry registry
+                                     :worker nil))
+                (application (make-instance 'application
+                                            :configuration configuration
+                                            :conversation conversation
+                                            :provider provider
+                                            :tool-registry registry
+                                            :worker nil
+                                            :agent agent
+                                            :ui ui)))
+           (application-run application)
+           (test-assert
+            (string= (line-editor-text (terminal-ui-editor ui))
+                     "draft survives")
+            "draft input survives streaming and two complete model turns")
+           (let* ((records
+                    (rest (conversation--read-records
+                           (conversation-pathname conversation))))
+                  (user-messages
+                    (loop for record in records
+                          when (and (eq (first record) ':message)
+                                    (eq (getf (rest record) :role) ':user))
+                            collect (getf (rest record) :content)))
+                  (output (recording-terminal-output terminal)))
+             (test-assert (equal user-messages
+                                 '("first message" "second message"))
+                          "submitted messages run sequentially in FIFO order")
+             (test-assert (search "first answer" output)
+                          "the first queued response reaches scrollback")
+             (test-assert (search "second answer" output)
+                          "the second queued response reaches scrollback")
+             (test-assert (search "1 message queued" output)
+                          "the live region reports input waiting behind a turn")
+             (test-assert
+              (live-region-cursor-visible-p (terminal-ui-live-region ui))
+              "responsive model turns leave the input cursor visible")
+             (test-assert (not (terminal-tests--forbidden-control-p output))
+                          "concurrent input and streaming preserve scrollback")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-input-reader-quiescence () null)
+(defun test-input-reader-quiescence ()
+  "Test modal and checkpoint work can temporarily restore a single Lisp thread."
+  (test-assert (application--command-needs-terminal-owner-p "/model")
+               "argument-free picker commands take terminal ownership")
+  (test-assert (not (application--command-needs-terminal-owner-p
+                     "/model gpt-5.6-luna"))
+               "explicit picker arguments need no terminal ownership")
+  (test-assert (not (application--command-needs-terminal-owner-p "/compact"))
+               "nonmodal model commands retain responsive input")
+  (test-assert (application--command-needs-terminal-owner-p "/auth")
+               "authentication owns terminal mode while it runs")
+  (let* ((terminal (make-instance 'waiting-recording-terminal :columns 60))
+         (ui (terminal-ui-create :terminal terminal))
+         (application (make-instance 'application :ui ui))
+         (controller nil))
+    (with-terminal-ui (active-ui ui)
+      (declare (ignore active-ui))
+      (setf controller (application-input-controller-create application))
+      (unwind-protect
+           (progn
+             (test-assert
+              (thread-alive-p
+               (application-input-controller-reader-thread controller))
+              "the responsive terminal reader starts independently")
+             (test-assert
+              (application-input-controller-call-with-reader-paused
+               controller
+               #'checkpoint--single-threaded-p)
+              "pausing input leaves checkpoint work on the only Lisp thread")
+             (test-assert
+              (thread-alive-p
+               (application-input-controller-reader-thread controller))
+              "the terminal reader restarts after single-threaded work"))
+        (application-input-controller-stop controller))))
   nil)
 
 (-> test-conversation-picker () null)
@@ -793,6 +1041,8 @@
   (test-transcript-entries)
   (test-streaming-presentation)
   (test-turn-cursor-visibility)
+  (test-responsive-model-input)
+  (test-input-reader-quiescence)
   (test-conversation-picker)
   (test-effort-switch)
   (test-status-entry)

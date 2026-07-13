@@ -24,6 +24,32 @@
     :documentation "The retained generation selected for the next process."))
   (:documentation "A control condition requesting rollback to a retained generation."))
 
+(define-condition application-turn-cancelled (serious-condition)
+  ()
+  (:documentation
+   "An internal control condition unwinding a model turn during application exit.")
+  (:report (lambda (condition stream)
+             (declare (ignore condition))
+             (write-string "The active model turn was cancelled during exit."
+                           stream))))
+
+(define-condition application-input-failed (serious-condition)
+  ((original-condition
+    :initarg :original-condition
+    :reader application-input-failed-original-condition
+    :type serious-condition
+    :documentation "The terminal reader failure that ended responsive input.")
+   (backtrace
+    :initarg :backtrace
+    :reader application-input-failed-backtrace
+    :type (option string)
+    :documentation "The backtrace captured on the terminal reader thread."))
+  (:documentation
+   "An internal control condition transferring reader failure to the main thread.")
+  (:report (lambda (condition stream)
+             (format stream "Terminal input failed: ~A"
+                     (application-input-failed-original-condition condition)))))
+
 
 ;;;; -- Authentication and Provider Conditions --
 

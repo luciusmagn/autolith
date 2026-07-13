@@ -109,6 +109,18 @@ text is sanitized before trusted styling controls are added around it. Ctrl-C at
 an empty prompt exits and leaves a paste-ready resume command in scrollback only
 when the active conversation is durable.
 
+** =responsive-input.lisp=
+
+Owns the ephemeral terminal-reader thread and FIFO submitted-message queue.
+Model turns and commands remain on the application main thread, while the reader
+applies editor events through the terminal UI lock. This keeps drafts editable
+during provider streaming and tool execution without allowing concurrent model
+turns. Modal pickers temporarily join the reader and take terminal ownership.
+Checkpoint creation uses the same nested quiescence boundary, so its process
+fork still occurs with exactly one live Lisp thread. The reader restarts after
+the modal or checkpoint operation. This controller is lexical to one
+application run and is never captured in a retained generation.
+
 ** =agent.lisp=
 
 Coordinates one turn at a time: persist user input, stream a response, append

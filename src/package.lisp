@@ -41,9 +41,16 @@
                 #:live-region-resize
                 #:call-with-live-region-suspended)
   (:import-from #:bordeaux-threads
+                #:condition-notify
+                #:condition-wait
+                #:current-thread
+                #:interrupt-thread
+                #:join-thread
                 #:make-lock
+                #:make-condition-variable
                 #:make-recursive-lock
                 #:make-thread
+                #:thread-alive-p
                 #:with-recursive-lock-held
                 #:with-lock-held)
   (:import-from #:dexador.error

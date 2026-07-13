@@ -192,9 +192,10 @@
 
 (-> application-run (application) null)
 (defun application-run (application)
-  "Run APPLICATION until explicit exit, always restoring terminal and worker state."
+  "Run APPLICATION with responsive input, always restoring terminal and workers."
   (let ((ui (application-ui application))
-        (worker (application-worker application)))
+        (worker (application-worker application))
+        (input-controller nil))
     (sb-sys:enable-interrupt
      sb-unix:sigwinch
      (lambda (signal code context)
@@ -215,57 +216,46 @@
                              (namestring (first failure))
                              (rest failure)))))
            (application-render-records application)
+           (setf input-controller
+                 (application-input-controller-create application))
            ;; Entering the interactive debugger would hang the raw terminal,
            ;; so any debugger entry becomes the fatal recovery path instead.
-           (let ((*debugger-hook*
+           (let ((*checkpoint-thread-quiescer*
+                   (lambda (function)
+                     (application-input-controller-call-with-reader-paused
+                      input-controller function)))
+                 (*debugger-hook*
                    (lambda (condition hook)
                      (declare (ignore hook))
                      (application-raise-fatal application
                                               condition
                                               (application-safe-backtrace)))))
-             (loop
-               (let ((event (application-read-terminal-event ui)))
-                 (multiple-value-bind (action payload)
-                     (terminal-ui-process-event ui event)
-                   (case action
-                     (:submit
-                      (let ((signal-backtrace nil))
-                        (handler-bind
-                            ((serious-condition
-                               (lambda (condition)
-                                 (declare (ignore condition))
-                                 (setf signal-backtrace
-                                       (application-safe-backtrace)))))
-                          (handler-case
-                              (when (eq (application-handle-input application payload)
-                                        :quit)
-                                (return))
-                            (rollback-requested (condition)
-                              (error condition))
-                            ((or agent-loop-error
-                                 conversation-invariant-error
-                                 response-stream-error
-                                 active-image-corruption)
-                             (condition)
-                              (application-raise-fatal application
-                                                       condition
-                                                       signal-backtrace))
-                            (autolith-error (condition)
-                              (application-handle-expected-error application condition))
-                            (serious-condition (condition)
-                              (application-raise-fatal application
-                                                       condition
-                                                       signal-backtrace))))))
-                     (:end-of-input
-                      (return))
-                     (:interrupt
-                      (application--present-resume-instruction application)
-                      (return))))))))
+             (handler-case
+                 (loop
+                   for work =
+                     (application-input-controller--next-work input-controller)
+                   while work
+                   do (unwind-protect
+                          (application-input-controller--run-work
+                           input-controller work)
+                        (application-input-controller--finish-work
+                         input-controller)))
+               (application-turn-cancelled ()
+                 nil)
+               (application-input-failed (condition)
+                 (application-raise-fatal
+                  application
+                  (application-input-failed-original-condition condition)
+                  (application-input-failed-backtrace condition)))))
+           (when (eq (application-input-controller-exit-reason input-controller)
+                     ':interrupt)
+             (application--present-resume-instruction application)))
       (sb-sys:enable-interrupt sb-unix:sigwinch :default)
+      (when input-controller
+        (application-input-controller-stop input-controller))
       (when worker
         (lisp-worker-stop worker))))
   nil)
-
 
 ;;;; -- Command-Line Entry --
 

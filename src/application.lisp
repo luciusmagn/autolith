@@ -474,11 +474,13 @@
 (-> application-present (application (or string list)) boolean)
 (defun application-present (application entry)
   "Append non-conversation ENTRY once to APPLICATION's normal scrollback."
-  (let ((identifier (incf (application-presentation-counter application))))
-    (terminal-ui-append-finalized
-     (application-ui application)
-     (list :presentation identifier)
-     entry)))
+  (let ((ui (application-ui application)))
+    (with-terminal-ui-locked (ui)
+      (let ((identifier (incf (application-presentation-counter application))))
+        (terminal-ui-append-finalized
+         ui
+         (list :presentation identifier)
+         entry)))))
 
 (-> application--assistant-message-record-text (list) (option string))
 (defun application--assistant-message-record-text (record)
@@ -499,7 +501,8 @@
 Assistant records are suppressed only when their joined durable text exactly
 matches STREAMED-ASSISTANT-TEXT. Suppressed identifiers remain finalized so a
 later conversation replay cannot duplicate their streamed transcript rows."
-  (let* ((conversation (application-conversation application))
+  (let* ((ui (application-ui application))
+         (conversation (application-conversation application))
          (conversation-id (conversation-identifier conversation))
          (records
            (loop for record in (rest (conversation--read-records
@@ -524,14 +527,10 @@ later conversation replay cannot duplicate their streamed transcript rows."
         (let ((identifier (list :conversation conversation-id sequence)))
           (if (and stream-match-p
                    (application--assistant-message-record-text record))
-              (terminal-ui-mark-finalized (application-ui application)
-                                          identifier)
+              (terminal-ui-mark-finalized ui identifier)
               (let ((entry (conversation-record-entry application record)))
                 (when entry
-                  (terminal-ui-append-finalized
-                   (application-ui application)
-                   identifier
-                   entry)))))
+                  (terminal-ui-append-finalized ui identifier entry)))))
         (setf (application-rendered-sequence application) sequence))))
   nil)
 
@@ -768,14 +767,13 @@ later conversation replay cannot duplicate their streamed transcript rows."
     (application string &key (:continuation-p boolean))
     null)
 (defun application--run-turn (application content &key continuation-p)
-  "Persist and run one model turn for CONTENT with cursor motion hidden."
+  "Persist and run one model turn for CONTENT while retaining editable input."
   (let* ((conversation (application-conversation application))
          (ui (application-ui application))
          (sequence (conversation-next-sequence conversation))
          (identifier (list :conversation
                            (conversation-identifier conversation)
                            sequence)))
-    (terminal-ui-set-cursor-visible ui nil)
     (unwind-protect
          (progn
            (terminal-ui-append-finalized
@@ -796,12 +794,9 @@ later conversation replay cannot duplicate their streamed transcript rows."
              content
              :observer (application-agent-observer application)
              :goal-context (application-goal-context application))))
-      (unwind-protect
-           (progn
-             (terminal-ui-set-status ui nil)
-             (terminal-ui-stream-update ui :tail nil)
-             (application-render-records application))
-        (terminal-ui-set-cursor-visible ui t))))
+      (terminal-ui-set-status ui nil)
+      (terminal-ui-stream-update ui :tail nil)
+      (application-render-records application)))
   nil)
 
 (-> application--run-goal-continuations (application) null)

@@ -54,6 +54,13 @@
                     :visible-count +terminal-ui-visible-completions+
                     :arrangement ':vertical))))
 
+(defmacro with-terminal-ui-locked ((ui) &body body)
+  "Run BODY while holding UI's recursive presentation lock."
+  (let ((locked-ui (gensym "UI")))
+    `(let ((,locked-ui ,ui))
+       (with-recursive-lock-held ((terminal-ui-lock ,locked-ui))
+         ,@body))))
+
 
 ;;;; -- Terminal Presentation --
 
@@ -366,6 +373,18 @@
                       (list (terminal-span ':brand "∙ ")
                             (terminal-span ':dim (terminal-ui-status ui)))
                       row-width)))))
+    (when (plusp (terminal-ui-queued-input-count ui))
+      (setf rows
+            (append rows
+                    (list
+                     (terminal--clip-spans
+                      (list
+                       (terminal-span ':brand "∙ ")
+                       (terminal-span
+                        ':dim
+                        (format nil "~D message~:P queued"
+                                (terminal-ui-queued-input-count ui))))
+                      row-width)))))
     (when rows
       (setf rows (append rows (list nil))))
     (let ((selector (terminal-ui-selector ui)))
@@ -430,20 +449,21 @@
 Each row is a styled span list appended once without a separating blank row, so
 consecutive updates build one continuous transcript block. TAIL replaces the
 live unfinished line continuing that block, or removes it when NIL."
-  (let* ((terminal (terminal-ui-terminal ui))
-         (output (terminal-ui--stream-output terminal rows)))
-    (labels ((append-and-repaint ()
-               "Append committed rows and install the latest fluid tail."
-               (when (plusp (length output))
-                 (terminal--write-safe-text terminal output))
-               (setf (terminal-ui-stream-tail ui) tail)
-               (terminal-ui--paint-live ui)))
-      (if (terminal-interactive-p terminal)
-          (call-with-live-region-suspended
-           (terminal-ui-live-region ui)
-           #'append-and-repaint)
-          (append-and-repaint)))
-    (terminal-flush terminal))
+  (with-terminal-ui-locked (ui)
+    (let* ((terminal (terminal-ui-terminal ui))
+           (output (terminal-ui--stream-output terminal rows)))
+      (labels ((append-and-repaint ()
+                 "Append committed rows and install the latest fluid tail."
+                 (when (plusp (length output))
+                   (terminal--write-safe-text terminal output))
+                 (setf (terminal-ui-stream-tail ui) tail)
+                 (terminal-ui--paint-live ui)))
+        (if (terminal-interactive-p terminal)
+            (call-with-live-region-suspended
+             (terminal-ui-live-region ui)
+             #'append-and-repaint)
+            (append-and-repaint)))
+      (terminal-flush terminal)))
   ui)
 
 (-> terminal-ui--paint-live (terminal-ui) null)
@@ -522,32 +542,36 @@ when no resize needs to be applied."
                  (every #'terminal-completion-p items)
                  (terminal-interactive-p (terminal-ui-terminal ui)))
       (return nil))
-    (setf (terminal-ui-selector ui)
-          (make-selector
-           :items items
-           :visible-count +terminal-ui-visible-completions+
-           :arrangement ':vertical)
-          (terminal-ui-selector-title ui) title)
+    (with-terminal-ui-locked (ui)
+      (setf (terminal-ui-selector ui)
+            (make-selector
+             :items items
+             :visible-count +terminal-ui-visible-completions+
+             :arrangement ':vertical)
+            (terminal-ui-selector-title ui) title))
     (unwind-protect
          (loop
-           (unless (terminal-ui-refresh-size ui resize-callback)
-             (terminal-ui--repaint-live ui))
+           (with-terminal-ui-locked (ui)
+             (unless (terminal-ui-refresh-size ui resize-callback)
+               (terminal-ui--repaint-live ui)))
            (let ((event (terminal-read-event (terminal-ui-terminal ui))))
-             (terminal-ui-refresh-size ui resize-callback)
-             (multiple-value-bind (action item)
-                 (selector-handle-event (terminal-ui-selector ui) event)
-               (case action
-                 (:accept
-                  (return (getf item :name)))
-                 (:cancel
-                  (return nil))
-                 (:dismiss
-                  (return (getf item :name)))
-                 (t
-                  nil)))))
-      (setf (terminal-ui-selector ui) nil
-            (terminal-ui-selector-title ui) nil)
-      (terminal-ui--repaint-live ui))))
+             (with-terminal-ui-locked (ui)
+               (terminal-ui-refresh-size ui resize-callback)
+               (multiple-value-bind (action item)
+                   (selector-handle-event (terminal-ui-selector ui) event)
+                 (case action
+                   (:accept
+                    (return (getf item :name)))
+                   (:cancel
+                    (return nil))
+                   (:dismiss
+                    (return (getf item :name)))
+                   (t
+                    nil))))))
+      (with-terminal-ui-locked (ui)
+        (setf (terminal-ui-selector ui) nil
+              (terminal-ui-selector-title ui) nil)
+        (terminal-ui--repaint-live ui)))))
 
 
 ;;;; -- Public UI Lifecycle and Events --
@@ -555,20 +579,22 @@ when no resize needs to be applied."
 (-> terminal-ui-start (terminal-ui) terminal-ui)
 (defun terminal-ui-start (ui)
   "Start UI on the primary screen and render its bounded live region."
-  (unless (terminal-ui-started-p ui)
-    (terminal-start (terminal-ui-terminal ui))
-    (setf (terminal-ui-started-p ui) t)
-    (terminal-ui--paint-live ui))
+  (with-terminal-ui-locked (ui)
+    (unless (terminal-ui-started-p ui)
+      (terminal-start (terminal-ui-terminal ui))
+      (setf (terminal-ui-started-p ui) t)
+      (terminal-ui--paint-live ui)))
   ui)
 
 (-> terminal-ui-stop (terminal-ui) terminal-ui)
 (defun terminal-ui-stop (ui)
   "Erase UI's unfinished rows and restore its terminal even after partial startup."
-  (unwind-protect
-       (when (terminal-ui-started-p ui)
-         (live-region-dismiss (terminal-ui-live-region ui)))
-    (setf (terminal-ui-started-p ui) nil)
-    (terminal-stop (terminal-ui-terminal ui)))
+  (with-terminal-ui-locked (ui)
+    (unwind-protect
+         (when (terminal-ui-started-p ui)
+           (live-region-dismiss (terminal-ui-live-region ui)))
+      (setf (terminal-ui-started-p ui) nil)
+      (terminal-stop (terminal-ui-terminal ui))))
   ui)
 
 (defmacro with-terminal-ui ((variable ui-form) &body body)
@@ -584,44 +610,66 @@ when no resize needs to be applied."
 (-> terminal-ui-mark-finalized (terminal-ui t) boolean)
 (defun terminal-ui-mark-finalized (ui identifier)
   "Remember finalized IDENTIFIER and return true only on its first occurrence."
-  (block nil
-    (when (gethash identifier (terminal-ui-finalized-identifiers ui))
-      (return nil))
-    (setf (gethash identifier (terminal-ui-finalized-identifiers ui)) t)
-    t))
+  (with-terminal-ui-locked (ui)
+    (block nil
+      (when (gethash identifier (terminal-ui-finalized-identifiers ui))
+        (return nil))
+      (setf (gethash identifier (terminal-ui-finalized-identifiers ui)) t)
+      t)))
 
 (-> terminal-ui-append-finalized (terminal-ui t (or string list)) boolean)
 (defun terminal-ui-append-finalized (ui identifier entry)
   "Append finalized transcript ENTRY once for IDENTIFIER and return true when emitted."
-  (block nil
-    (unless (terminal-ui-mark-finalized ui identifier)
-      (return nil))
-    (multiple-value-bind (text display)
-        (terminal-ui--finalized-content ui entry)
-      (if (terminal-interactive-p (terminal-ui-terminal ui))
-          (live-region-append (terminal-ui-live-region ui)
-                              text
-                              :display display)
-          (progn
-            (terminal--write-safe-text (terminal-ui-terminal ui) display)
-            (terminal-flush (terminal-ui-terminal ui)))))
-    t))
+  (with-terminal-ui-locked (ui)
+    (block nil
+      (unless (terminal-ui-mark-finalized ui identifier)
+        (return nil))
+      (multiple-value-bind (text display)
+          (terminal-ui--finalized-content ui entry)
+        (if (terminal-interactive-p (terminal-ui-terminal ui))
+            (live-region-append (terminal-ui-live-region ui)
+                                text
+                                :display display)
+            (progn
+              (terminal--write-safe-text (terminal-ui-terminal ui) display)
+              (terminal-flush (terminal-ui-terminal ui)))))
+      t)))
 
 (-> terminal-ui-set-status (terminal-ui (option string)) terminal-ui)
 (defun terminal-ui-set-status (ui status)
   "Replace UI's unfinished one-row STATUS and repaint only the live region."
-  (let ((safe-status (and status
-                          (sanitize-text status :single-line-p t))))
-    (unless (equal safe-status (terminal-ui-status ui))
-      (setf (terminal-ui-status ui) safe-status)
+  (with-terminal-ui-locked (ui)
+    (let ((safe-status (and status
+                            (sanitize-text status :single-line-p t))))
+      (unless (equal safe-status (terminal-ui-status ui))
+        (setf (terminal-ui-status ui) safe-status)
+        (terminal-ui--paint-live ui))))
+  ui)
+
+(-> terminal-ui-set-queued-input-count (terminal-ui integer) terminal-ui)
+(defun terminal-ui-set-queued-input-count (ui count)
+  "Set UI's queued message COUNT and repaint when it changes."
+  (check-type count (integer 0))
+  (with-terminal-ui-locked (ui)
+    (unless (= count (terminal-ui-queued-input-count ui))
+      (setf (terminal-ui-queued-input-count ui) count)
       (terminal-ui--paint-live ui)))
+  ui)
+
+(-> terminal-ui-set-input (terminal-ui string) terminal-ui)
+(defun terminal-ui-set-input (ui text)
+  "Replace UI's editable input with TEXT and repaint it."
+  (with-terminal-ui-locked (ui)
+    (line-editor-set-text (terminal-ui-editor ui) (sanitize-text text))
+    (terminal-ui--paint-live ui))
   ui)
 
 (-> terminal-ui-set-cursor-visible (terminal-ui boolean) terminal-ui)
 (defun terminal-ui-set-cursor-visible (ui visible-p)
   "Set whether UI leaves its input cursor visible between terminal updates."
-  (when (terminal-interactive-p (terminal-ui-terminal ui))
-    (live-region-set-cursor-visible (terminal-ui-live-region ui) visible-p))
+  (with-terminal-ui-locked (ui)
+    (when (terminal-interactive-p (terminal-ui-terminal ui))
+      (live-region-set-cursor-visible (terminal-ui-live-region ui) visible-p)))
   ui)
 
 (-> terminal-ui-resize
@@ -629,19 +677,20 @@ when no resize needs to be applied."
     terminal-ui)
 (defun terminal-ui-resize (ui columns &key rows)
   "Set UI terminal dimensions and repaint only unfinished rows."
-  (let* ((new-columns (max 1 columns))
-         (new-rows (and rows (max 1 rows)))
-         (region (terminal-ui-live-region ui)))
-    (live-region-suspend region)
-    (setf (terminal-columns (terminal-ui-terminal ui)) new-columns)
-    (when new-rows
-      (setf (terminal-rows (terminal-ui-terminal ui)) new-rows))
-    (live-region-resize
-     region
-     new-columns
-     :maximum-rows
-     (terminal-ui--maximum-live-rows (terminal-ui-terminal ui)))
-    (terminal-ui--paint-live ui))
+  (with-terminal-ui-locked (ui)
+    (let* ((new-columns (max 1 columns))
+           (new-rows (and rows (max 1 rows)))
+           (region (terminal-ui-live-region ui)))
+      (live-region-suspend region)
+      (setf (terminal-columns (terminal-ui-terminal ui)) new-columns)
+      (when new-rows
+        (setf (terminal-rows (terminal-ui-terminal ui)) new-rows))
+      (live-region-resize
+       region
+       new-columns
+       :maximum-rows
+       (terminal-ui--maximum-live-rows (terminal-ui-terminal ui)))
+      (terminal-ui--paint-live ui)))
   ui)
 
 (-> terminal-ui-read-event (terminal-ui) t)
@@ -688,12 +737,13 @@ when no resize needs to be applied."
     (values keyword (option string)))
 (defun terminal-ui-process-event (ui event)
   "Apply EVENT to UI's suggestions or editor and return its action and payload."
-  (multiple-value-bind (completion-action completion-payload)
-      (terminal-ui--handle-completion-event ui event)
-    (if completion-action
-        (values completion-action completion-payload)
-        (multiple-value-bind (action payload)
-            (terminal-ui--apply-editor-event ui event)
-          (when (member action '(:changed :cleared :submit))
-            (terminal-ui--repaint-live ui))
-          (values action payload)))))
+  (with-terminal-ui-locked (ui)
+    (multiple-value-bind (completion-action completion-payload)
+        (terminal-ui--handle-completion-event ui event)
+      (if completion-action
+          (values completion-action completion-payload)
+          (multiple-value-bind (action payload)
+              (terminal-ui--apply-editor-event ui event)
+            (when (member action '(:changed :cleared :submit))
+              (terminal-ui--repaint-live ui))
+            (values action payload))))))
