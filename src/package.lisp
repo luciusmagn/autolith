@@ -13,6 +13,13 @@
                 #:line-editor-clear
                 #:line-editor-handle-event
                 #:line-editor-create
+                #:selector
+                #:make-selector
+                #:selector-items
+                #:selector-selection
+                #:selector-set-items
+                #:selector-arrange
+                #:selector-handle-event
                 #:read-event
                 #:sanitize-text
                 #:text-cell-width

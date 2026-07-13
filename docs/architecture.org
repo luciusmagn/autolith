@@ -94,11 +94,12 @@ written once and left in normal terminal scrollback. Autolith never enters the
 alternate screen and never clears scrollback. Only the bounded live region,
 holding unfinished status, the full-width multiline prompt, and any command
 completion suggestions, may be repainted. Clinedi owns Unicode-aware editor
-state, input decoding, screen geometry, and the scrollback-safe live-region
-mechanics. Autolith owns command completion, semantic styling, terminal mode,
-and application event policy. Kernel TTY rows and columns take precedence over
-environment hints. Long drafts use a cursor-following viewport capped below the
-terminal height, and each replacement is emitted as one hidden-cursor update.
+state, input decoding, screen geometry, candidate navigation and arrangement,
+and the scrollback-safe live-region mechanics. Autolith owns candidate data,
+command filtering, semantic styling, terminal mode, and application event
+policy. Kernel TTY rows and columns take precedence over environment hints.
+Long drafts use a cursor-following viewport capped below the terminal height,
+and each replacement is emitted as one hidden-cursor update.
 The startup identity uses a
 capability-checked xterm-256 green gradient with bold basic-green fallback;
 one leading blank row and a divider separate its identity from model and

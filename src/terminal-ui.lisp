@@ -48,7 +48,11 @@
                    :live-region live-region
                    :prompt prompt
                    :placeholder placeholder
-                   :completions completions)))
+                   :completions completions
+                   :completion-selector
+                   (make-selector
+                    :visible-count +terminal-ui-visible-completions+
+                    :arrangement ':vertical))))
 
 
 ;;;; -- Terminal Presentation --
@@ -142,9 +146,6 @@
 
 ;;;; -- Command Completion Suggestions --
 
-(define-constant +terminal-ui-visible-completions+ 6
-  :documentation "The maximum number of completion suggestion rows painted at once.")
-
 (-> terminal-ui--matching-completions (terminal-ui) list)
 (defun terminal-ui--matching-completions (ui)
   "Return UI completions whose names extend the command currently being typed."
@@ -163,14 +164,12 @@
 (-> terminal-ui--reconcile-completions (terminal-ui) list)
 (defun terminal-ui--reconcile-completions (ui)
   "Return UI's current matches, resetting the selection when the set changes."
-  (let* ((matches (terminal-ui--matching-completions ui))
-         (names (mapcar (lambda (entry)
-                          (getf entry :name))
-                        matches)))
-    (unless (equal names (terminal-ui-completion-names ui))
-      (setf (terminal-ui-completion-names ui) names
-            (terminal-ui-completion-selection ui) 0))
-    matches))
+  (let ((selector (terminal-ui-completion-selector ui)))
+    (if (terminal-ui-completion-active-p ui)
+        (selector-items selector)
+        (let ((matches (terminal-ui--matching-completions ui)))
+          (selector-set-items selector matches)
+          matches))))
 
 (-> terminal-completion-label (list) string)
 (defun terminal-completion-label (entry)
@@ -180,22 +179,21 @@
         (format nil "~A ~A" (getf entry :name) argument)
         (getf entry :name))))
 
-(-> terminal-ui--choice-rows (list integer integer) list)
-(defun terminal-ui--choice-rows (items selection row-width)
-  "Return selection rows for ITEMS windowed around SELECTION within ROW-WIDTH."
-  (when items
-    (let* ((selection (min selection (1- (length items))))
-           (visible-count (min +terminal-ui-visible-completions+
-                               (length items)))
-           (start (min (max 0 (- (1+ selection) visible-count))
-                       (- (length items) visible-count)))
-           (label-width
-             (loop for entry in items
-                   maximize (text-cell-width
-                             (terminal-completion-label entry)))))
-      (loop for index from start below (+ start visible-count)
-            for entry = (nth index items)
-            for selected-p = (= index selection)
+(-> terminal-ui--choice-rows (selector integer) list)
+(defun terminal-ui--choice-rows (selector row-width)
+  "Return styled candidate rows from SELECTOR within ROW-WIDTH."
+  (multiple-value-bind (index-rows column-widths)
+      (selector-arrange selector
+                        row-width
+                        :width-function
+                        (lambda (entry)
+                          (text-cell-width
+                           (terminal-completion-label entry))))
+    (let ((label-width (or (first column-widths) 0)))
+      (loop for index-row in index-rows
+            for index = (first index-row)
+            for entry = (nth index (selector-items selector))
+            for selected-p = (= index (selector-selection selector))
             collect (terminal--clip-spans
                      (list (terminal-span (if selected-p
                                               :brand
@@ -214,12 +212,11 @@
                                           (getf entry :description)))
                      row-width)))))
 
-(-> terminal-ui--completion-rows (terminal-ui list integer) list)
-(defun terminal-ui--completion-rows (ui matches row-width)
-  "Return suggestion rows for MATCHES windowed around UI's current selection."
-  (terminal-ui--choice-rows matches
-                            (terminal-ui-completion-selection ui)
-                            row-width))
+(-> terminal-ui--completion-rows (terminal-ui integer) list)
+(defun terminal-ui--completion-rows (ui row-width)
+  "Return styled rows for UI's matching command completions."
+  (terminal-ui--reconcile-completions ui)
+  (terminal-ui--choice-rows (terminal-ui-completion-selector ui) row-width))
 
 (-> terminal-ui--accept-completion (terminal-ui list) null)
 (defun terminal-ui--accept-completion (ui entry)
@@ -234,45 +231,75 @@
                      ""))))
   nil)
 
+(-> terminal-ui--begin-completion (terminal-ui) null)
+(defun terminal-ui--begin-completion (ui)
+  "Begin choosing among UI's current command completion candidates."
+  (unless (terminal-ui-completion-active-p ui)
+    (setf (terminal-ui-completion-prefix ui)
+          (line-editor-text (terminal-ui-editor ui))
+          (terminal-ui-completion-active-p ui) t))
+  nil)
+
+(-> terminal-ui--end-completion (terminal-ui) null)
+(defun terminal-ui--end-completion (ui)
+  "Leave UI's active command completion selection without changing input."
+  (setf (terminal-ui-completion-active-p ui) nil
+        (terminal-ui-completion-prefix ui) nil)
+  nil)
+
+(-> terminal-ui--cancel-completion (terminal-ui) null)
+(defun terminal-ui--cancel-completion (ui)
+  "Cancel UI's completion selection and restore its original command prefix."
+  (let ((prefix (terminal-ui-completion-prefix ui)))
+    (when prefix
+      (line-editor-set-text (terminal-ui-editor ui) prefix)))
+  (selector-set-items (terminal-ui-completion-selector ui) nil)
+  (terminal-ui--end-completion ui)
+  nil)
+
 (-> terminal-ui--handle-completion-event
     (terminal-ui t)
     (values (option keyword) (option string)))
 (defun terminal-ui--handle-completion-event (ui event)
   "Apply EVENT to UI's completion suggestions and return its action when consumed."
-  (let ((matches (terminal-ui--reconcile-completions ui)))
+  (terminal-ui--reconcile-completions ui)
+  (let ((selector (terminal-ui-completion-selector ui)))
     (block nil
-      (unless matches
+      (unless (selector-items selector)
         (return (values nil nil)))
-      (let ((selection (min (terminal-ui-completion-selection ui)
-                            (1- (length matches)))))
-        (cond
-          ((eq event :history-previous)
-           (setf (terminal-ui-completion-selection ui)
-                 (mod (1- selection) (length matches)))
+      (unless (or (terminal-ui-completion-active-p ui)
+                  (member event
+                          '(:history-previous :history-next
+                            :complete :submit)))
+        (return (values nil nil)))
+      (when (member event '(:history-previous :history-next :complete))
+        (terminal-ui--begin-completion ui))
+      (multiple-value-bind (selector-action entry)
+          (selector-handle-event selector event)
+        (case selector-action
+          (:changed
+           (terminal-ui--accept-completion ui entry)
            (terminal-ui--repaint-live ui)
            (values :changed nil))
-          ((eq event :history-next)
-           (setf (terminal-ui-completion-selection ui)
-                 (mod (1+ selection) (length matches)))
-           (terminal-ui--repaint-live ui)
-           (values :changed nil))
-          ((eq event :complete)
-           (terminal-ui--accept-completion ui (nth selection matches))
-           (terminal-ui--repaint-live ui)
-           (values :changed nil))
-          ((eq event :submit)
-           (let ((entry (nth selection matches)))
-             (cond
-               ((getf entry :argument)
-                (terminal-ui--accept-completion ui entry)
+          (:accept
+           (terminal-ui--end-completion ui)
+           (terminal-ui--accept-completion ui entry)
+           (cond
+             ((getf entry :argument)
+              (terminal-ui--repaint-live ui)
+              (values :changed nil))
+             (t
+              (multiple-value-bind (action payload)
+                  (line-editor-handle-event (terminal-ui-editor ui) :submit)
                 (terminal-ui--repaint-live ui)
-                (values :changed nil))
-               (t
-                (terminal-ui--accept-completion ui entry)
-                (multiple-value-bind (action payload)
-                    (line-editor-handle-event (terminal-ui-editor ui) :submit)
-                  (terminal-ui--repaint-live ui)
-                  (values action payload))))))
+                (values action payload)))))
+          (:cancel
+           (terminal-ui--cancel-completion ui)
+           (terminal-ui--repaint-live ui)
+           (values :changed nil))
+          (:dismiss
+           (terminal-ui--end-completion ui)
+           (values nil nil))
           (t
            (values nil nil)))))))
 
@@ -347,7 +374,8 @@
          (let ((title-spans
                  (terminal--clip-spans
                   (list (terminal-span ':brand "∙ ")
-                        (terminal-span ':plain (getf selector :title))
+                        (terminal-span ':plain
+                                       (terminal-ui-selector-title ui))
                         (terminal-span ':hint "  enter selects, esc cancels"))
                   row-width)))
            (let ((cursor-row (length rows)))
@@ -355,8 +383,7 @@
                    (append rows
                            (list title-spans)
                            (terminal-ui--choice-rows
-                            (getf selector :items)
-                            (getf selector :selection)
+                            selector
                             row-width)
                            (list nil)))
              (terminal-ui--rows-content
@@ -372,9 +399,7 @@
                    (append rows
                            (list prompt-spans)
                            (terminal-ui--completion-rows
-                            ui
-                            (terminal-ui--reconcile-completions ui)
-                            row-width)
+                            ui row-width)
                            (list nil)))
              (terminal-ui--rows-content
               terminal
@@ -484,8 +509,9 @@ live unfinished line continuing that block, or removes it when NIL."
 (defun terminal-ui-select (ui &key (title "select") items resize-callback)
   "Run a modal picker over ITEMS and return the selected name, or NIL on cancel.
 
-Items follow the completion entry shape. Up and Down move the selection,
-Enter accepts it, and Escape, Ctrl-C, or end of input cancels. Returns NIL
+Items follow the completion entry shape. Up and Down move the selection, Tab
+cycles it, and Enter accepts it. Other ordinary input dismisses the picker with
+the selected item. Escape, Ctrl-C, or end of input cancels. Returns NIL
 immediately when ITEMS is empty or the terminal is not interactive.
 
 RESIZE-CALLBACK is queried before each blocking read and immediately after the
@@ -497,28 +523,30 @@ when no resize needs to be applied."
                  (terminal-interactive-p (terminal-ui-terminal ui)))
       (return nil))
     (setf (terminal-ui-selector ui)
-          (list :title title :items items :selection 0))
+          (make-selector
+           :items items
+           :visible-count +terminal-ui-visible-completions+
+           :arrangement ':vertical)
+          (terminal-ui-selector-title ui) title)
     (unwind-protect
          (loop
            (unless (terminal-ui-refresh-size ui resize-callback)
              (terminal-ui--repaint-live ui))
            (let ((event (terminal-read-event (terminal-ui-terminal ui))))
              (terminal-ui-refresh-size ui resize-callback)
-             (let ((selection (getf (terminal-ui-selector ui) :selection)))
-               (cond
-                 ((eq event :history-previous)
-                  (setf (getf (terminal-ui-selector ui) :selection)
-                        (mod (1- selection) (length items))))
-                 ((eq event :history-next)
-                  (setf (getf (terminal-ui-selector ui) :selection)
-                        (mod (1+ selection) (length items))))
-                 ((eq event :submit)
-                  (return (getf (nth selection items) :name)))
-                 ((member event '(:escape :interrupt :end-of-input))
+             (multiple-value-bind (action item)
+                 (selector-handle-event (terminal-ui-selector ui) event)
+               (case action
+                 (:accept
+                  (return (getf item :name)))
+                 (:cancel
                   (return nil))
+                 (:dismiss
+                  (return (getf item :name)))
                  (t
                   nil)))))
-      (setf (terminal-ui-selector ui) nil)
+      (setf (terminal-ui-selector ui) nil
+            (terminal-ui-selector-title ui) nil)
       (terminal-ui--repaint-live ui))))
 
 

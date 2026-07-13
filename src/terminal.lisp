@@ -11,6 +11,9 @@
 (define-constant +terminal-history-limit+ 100
   :documentation "The maximum number of submitted inputs retained by a line editor.")
 
+(define-constant +terminal-ui-visible-completions+ 6
+  :documentation "The maximum number of candidate rows painted at once.")
+
 (define-constant +terminal-escape-character+ (code-char 27)
   :test #'char=
   :documentation "The ASCII escape character used by trusted terminal controls.")
@@ -116,21 +119,31 @@
     :reader terminal-ui-completions
     :type list
     :documentation "Completion entries offered while typing an interactive command.")
-   (completion-selection
-    :initform 0
-    :accessor terminal-ui-completion-selection
-    :type (integer 0)
-    :documentation "The selected index within the currently matching completions.")
-   (completion-names
+   (completion-selector
+    :initarg :completion-selector
+    :reader terminal-ui-completion-selector
+    :type selector
+    :documentation "Clinedi navigation state for matching command completions.")
+   (completion-active-p
     :initform nil
-    :accessor terminal-ui-completion-names
-    :type list
-    :documentation "The most recently matching completion names, detecting set changes.")
+    :accessor terminal-ui-completion-active-p
+    :type boolean
+    :documentation "Whether arrows and Tab are choosing among completion candidates.")
+   (completion-prefix
+    :initform nil
+    :accessor terminal-ui-completion-prefix
+    :type (option string)
+    :documentation "Input restored when active completion selection is cancelled.")
    (selector
     :initform nil
     :accessor terminal-ui-selector
-    :type list
-    :documentation "The modal picker title, items, and selection replacing the prompt row.")
+    :type (option selector)
+    :documentation "Clinedi navigation state for the active modal picker.")
+   (selector-title
+    :initform nil
+    :accessor terminal-ui-selector-title
+    :type (option string)
+    :documentation "The application-owned title for the active modal picker.")
    (status
     :initform nil
     :accessor terminal-ui-status

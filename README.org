@@ -127,8 +127,10 @@ calls. Reaching a spending guard leaves the application and conversation usable;
 it does not invoke image recovery.
 
 Typing =/= opens command suggestions under the prompt. Arrow keys move the
-selection, Tab fills it in, and Enter runs it, first filling in the command
-name when it still needs an argument. The commands are:
+selection, Tab cycles and previews options, and Enter runs the selected command,
+first filling in the command name when it still needs an argument. Ordinary
+input keeps the previewed option and continues editing; Escape restores the
+prefix from before selection. The commands are:
 
 #+BEGIN_EXAMPLE
 /help           show this reference
@@ -147,9 +149,11 @@ name when it still needs an argument. The commands are:
 /quit           leave Autolith
 #+END_EXAMPLE
 
-=/resume=, =/rollback=, and =/effort= open an interactive picker listing
-choices newest first; each also accepts an explicit argument. Conversations
-remember the directory they were started in, and the picker shows it.
+=/resume=, =/rollback=, =/model=, and =/effort= open a vertical interactive
+picker; each also accepts an explicit argument. Tab cycles the picker alongside
+Up and Down navigation. Conversations and generations are listed newest first.
+Conversations remember the directory they were started in, and the picker
+shows it.
 
 =/goal OBJECTIVE= sets a session goal in the spirit of Codex goals. The goal
 rides along every provider request as transient context, and after each of
