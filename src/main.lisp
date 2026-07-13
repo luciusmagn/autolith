@@ -24,7 +24,7 @@
 (defun application--banner-logo-width ()
   "Return the widest row of the embedded startup mark in terminal cells."
   (loop for entry in +application-banner-logo-lines+
-        maximize (terminal--text-width (rest entry))))
+        maximize (text-cell-width (rest entry))))
 
 (-> application--banner-columns (application) (integer 1))
 (defun application--banner-columns (application)
@@ -81,7 +81,7 @@
   (let* ((logo-width (application--banner-logo-width))
          (metadata-width (- columns
                             logo-width
-                            (terminal--text-width +application-banner-gap+))))
+                            (text-cell-width +application-banner-gap+))))
     (loop for logo-entry in +application-banner-logo-lines+
           for index from 0
           for metadata-row = (nth index metadata-rows)
@@ -119,10 +119,10 @@
          (metadata-width
            (- columns
               (application--banner-logo-width)
-              (terminal--text-width +application-banner-gap+)))
+              (text-cell-width +application-banner-gap+)))
          (side-by-side-minimum
            (+ (application--banner-logo-width)
-              (terminal--text-width +application-banner-gap+)
+              (text-cell-width +application-banner-gap+)
               +application-banner-minimum-metadata-width+))
          (header
            (if (>= columns side-by-side-minimum)
@@ -161,9 +161,9 @@
 (-> application-read-terminal-event (terminal-ui) t)
 (defun application-read-terminal-event (ui)
   "Read one UI event, applying pending resizes before and after the blocking read."
-  (terminal-ui-refresh-size ui #'application-pending-terminal-columns)
+  (terminal-ui-refresh-size ui #'application-pending-terminal-size)
   (prog1 (terminal-ui-read-event ui)
-    (terminal-ui-refresh-size ui #'application-pending-terminal-columns)))
+    (terminal-ui-refresh-size ui #'application-pending-terminal-size)))
 
 (-> application--resume-command (application) string)
 (defun application--resume-command (application)

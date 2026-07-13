@@ -130,9 +130,9 @@
 (defun terminal--spans-width (spans)
   "Return the total single-row cell width of sanitized SPANS."
   (loop for span in spans
-        sum (terminal--text-width
-             (terminal-sanitize-text (terminal-span-text span)
-                                     :single-line-p t))))
+        sum (text-cell-width
+             (sanitize-text (terminal-span-text span)
+                            :single-line-p t))))
 
 (-> terminal--clip-spans (list integer) list)
 (defun terminal--clip-spans (spans maximum-width)
@@ -141,10 +141,10 @@
         (clipped nil))
     (dolist (span spans (nreverse clipped))
       (when (plusp remaining)
-        (let* ((text (terminal-sanitize-text (terminal-span-text span)
-                                             :single-line-p t))
-               (visible (terminal--prefix-within-width text remaining)))
+        (let* ((text (sanitize-text (terminal-span-text span)
+                                    :single-line-p t))
+               (visible (text-cell-prefix text remaining)))
           (when (plusp (length visible))
-            (decf remaining (terminal--text-width visible))
+            (decf remaining (text-cell-width visible))
             (push (terminal-span (terminal-span-style span) visible)
                   clipped)))))))

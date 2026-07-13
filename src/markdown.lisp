@@ -248,7 +248,7 @@ within TEXT. Unpaired delimiters stay literal."
                                     prefix-width)))
            (rows nil)
            (cursor 0))
-      (loop for row-text in (terminal--wrap-text rendered content-width)
+      (loop for row-text in (wrap-text rendered content-width)
             for first-row-p = t then nil
             do (let ((start (if (zerop (length row-text))
                                 cursor
@@ -273,7 +273,7 @@ within TEXT. Unpaired delimiters stay literal."
     (let* ((content-width (max 8 (- (markdown-renderer-width renderer) 8)))
            (rows nil)
            (cursor 0))
-      (loop for row-text in (terminal--wrap-text line content-width)
+      (loop for row-text in (wrap-text line content-width)
             for first-row-p = t then nil
             do (let ((start (if (zerop (length row-text))
                                 cursor

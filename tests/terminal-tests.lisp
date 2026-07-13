@@ -250,60 +250,81 @@
 
 (-> test-terminal-line-editor () null)
 (defun test-terminal-line-editor ()
-  "Test editing, history draft restoration, control keys, arrows, and paste safety."
-  (let ((editor (line-editor-create :history-limit 2)))
-    (line-editor-handle-event editor '(:insert "abc"))
-    (line-editor-handle-event editor :left)
-    (line-editor-handle-event editor '(:insert "X"))
-    (test-assert (string= (line-editor-text editor) "abXc")
-                 "left arrow changes the insertion point")
-    (line-editor-handle-event editor :home)
-    (line-editor-handle-event editor '(:insert ">"))
-    (line-editor-handle-event editor :end)
-    (line-editor-handle-event editor :backspace)
-    (test-assert (string= (line-editor-text editor) ">abX")
-                 "home, end, and backspace edit the expected characters")
-    (multiple-value-bind (action submitted)
-        (line-editor-handle-event editor :submit)
-      (test-assert (eq action :submit)
-                   "enter produces a submit action")
-      (test-assert (string= submitted ">abX")
-                   "enter returns the complete input"))
-    (line-editor-handle-event editor '(:insert "draft"))
-    (line-editor-handle-event editor :history-previous)
-    (test-assert (string= (line-editor-text editor) ">abX")
-                 "up arrow recalls the newest history entry")
-    (line-editor-handle-event editor :history-next)
-    (test-assert (string= (line-editor-text editor) "draft")
-                 "down arrow restores the draft")
-    (multiple-value-bind (action payload)
-        (line-editor-handle-event editor :interrupt)
-      (declare (ignore payload))
-      (test-assert (eq action :cleared)
-                   "Ctrl-C clears non-empty editor input"))
-    (multiple-value-bind (action payload)
-        (line-editor-handle-event editor :interrupt)
-      (declare (ignore payload))
-      (test-assert (eq action :interrupt)
-                   "Ctrl-C interrupts when the editor is empty"))
-    (multiple-value-bind (action payload)
-        (line-editor-handle-event editor :end-of-input)
-      (declare (ignore payload))
-      (test-assert (eq action :end-of-input)
-                   "Ctrl-D exits when the editor is empty")))
+  "Test Clinedi editing, multiline input, history, and Autolith control policy."
+  (let* ((terminal (make-instance 'recording-terminal :columns 12))
+         (editor (line-editor-create :history-limit 2))
+         (ui (terminal-ui-create :terminal terminal
+                                 :editor editor
+                                 :prompt "❯ ")))
+    (with-terminal-ui (active-ui ui)
+      (terminal-ui-process-event active-ui '(:insert "abc"))
+      (terminal-ui-process-event active-ui :left)
+      (terminal-ui-process-event active-ui '(:insert "X"))
+      (test-assert (string= (line-editor-text editor) "abXc")
+                   "left arrow changes the insertion point")
+      (terminal-ui-process-event active-ui :home)
+      (terminal-ui-process-event active-ui '(:insert ">"))
+      (terminal-ui-process-event active-ui :end)
+      (terminal-ui-process-event active-ui :backspace)
+      (terminal-ui-process-event active-ui :insert-newline)
+      (terminal-ui-process-event active-ui '(:insert "second line"))
+      (let ((multiline (format nil ">abX~%second line")))
+        (test-assert (string= (line-editor-text editor) multiline)
+                     "modified Enter inserts a real logical input line")
+        (multiple-value-bind (text display cursor)
+            (terminal-ui--live-content active-ui)
+          (declare (ignore display cursor))
+          (test-assert (search multiline text)
+                       "the live region preserves explicit input newlines"))
+        (test-assert (> (terminal-ui-live-row-count active-ui) 2)
+                     "multiline input occupies multiple physical rows")
+        (multiple-value-bind (action submitted)
+            (terminal-ui-process-event active-ui :submit)
+          (test-assert (eq action :submit)
+                       "Enter produces a submit action")
+          (test-assert (string= submitted multiline)
+                       "Enter returns the complete multiline input")))
+      (terminal-ui-process-event active-ui '(:insert "draft"))
+      (terminal-ui-process-event active-ui :history-previous)
+      (test-assert (string= (line-editor-text editor)
+                            (format nil ">abX~%second line"))
+                   "up arrow recalls the newest multiline history entry")
+      (terminal-ui-process-event active-ui :history-next)
+      (test-assert (string= (line-editor-text editor) "draft")
+                   "down arrow restores the draft")
+      (multiple-value-bind (action payload)
+          (terminal-ui-process-event active-ui :interrupt)
+        (declare (ignore payload))
+        (test-assert (eq action :cleared)
+                     "Ctrl-C clears non-empty editor input"))
+      (multiple-value-bind (action payload)
+          (terminal-ui-process-event active-ui :interrupt)
+        (declare (ignore payload))
+        (test-assert (eq action :interrupt)
+                     "Ctrl-C interrupts when the editor is empty"))
+      (multiple-value-bind (action payload)
+          (terminal-ui-process-event active-ui :end-of-input)
+        (declare (ignore payload))
+        (test-assert (eq action :end-of-input)
+                     "Ctrl-D exits when the editor is empty"))))
   nil)
 
 (-> test-terminal-input-decoding () null)
 (defun test-terminal-input-decoding ()
   "Test production escape decoding and complete bracketed paste collection."
   (let* ((escape +terminal-escape-character+)
+         (paste-start (format nil "~C[200~~" escape))
+         (paste-end (format nil "~C[201~~" escape))
          (input
            (concatenate 'string
                         (format nil "~C[A" escape)
-                        +terminal-bracketed-paste-start+
+                        paste-start
                         "paste"
                         (format nil "~C[3J" escape)
-                        +terminal-bracketed-paste-end+))
+                        paste-end
+                        (string escape)
+                        (string #\Return)
+                        (format nil "~C[13;2u" escape)))
          (terminal
            (make-instance 'stream-terminal
                           :input-stream (make-string-input-stream input)
@@ -321,7 +342,11 @@
         (test-assert
          (not (terminal-tests--contains-control-character-p
                (line-editor-text editor)))
-         "bracketed paste terminal controls are neutralized before display"))))
+         "bracketed paste terminal controls are neutralized before display")))
+    (test-assert (eq (terminal-read-event terminal) :insert-newline)
+                 "legacy Alt-Enter inserts a newline")
+    (test-assert (eq (terminal-read-event terminal) :insert-newline)
+                 "enhanced Shift-Enter inserts a newline"))
   nil)
 
 (-> test-terminal-live-region-layout () null)
@@ -359,8 +384,8 @@
                  finalized)
          "styled finalized spans emit basic rendition controls")
         (test-assert
-         (search (format nil " ready~C~C~C~C" #\Return #\Newline
-                         #\Return #\Newline)
+         (search (format nil " ready~C~C~C~C" #\Newline #\Return
+                         #\Newline #\Return)
                  finalized)
          "finalized entries end with one separating blank row")
         (test-assert (not (terminal-tests--forbidden-control-p finalized))
@@ -383,27 +408,68 @@
            (ui (terminal-ui-create :terminal terminal :prompt "❯ ")))
       (with-terminal-ui (active-ui ui)
         (terminal-ui-process-event active-ui '(:insert "a"))
-        (multiple-value-bind (rows cursor-row cursor-column)
-            (terminal-ui--live-rows active-ui)
-          (let ((row-width (max 0 (1- columns))))
-            (test-assert
-             (every (lambda (row)
-                      (<= (terminal--spans-width row) row-width))
-                    rows)
-             (format nil "every live row fits a ~D-column terminal" columns))
-            (test-assert
-             (<= cursor-column row-width)
-             (format nil "the live cursor fits a ~D-column terminal" columns))
-            (test-assert
-             (= (terminal-ui-live-row-count active-ui) (length rows))
-             (format nil
-                     "repaint bookkeeping counts rows at ~D columns"
-                     columns))
-            (test-assert
-             (= (terminal-ui-live-cursor-row active-ui) cursor-row)
-             (format nil
-                     "repaint bookkeeping tracks the cursor at ~D columns"
-                     columns)))))))
+        (multiple-value-bind (text display cursor)
+            (terminal-ui--live-content active-ui)
+          (declare (ignore display))
+          (multiple-value-bind (cursor-row cursor-column cursor-wrap)
+              (screen-position text :columns columns :end cursor)
+            (declare (ignore cursor-wrap))
+            (multiple-value-bind (end-row end-column end-wrap)
+                (screen-position text :columns columns)
+              (declare (ignore end-column end-wrap))
+              (test-assert
+               (< cursor-column columns)
+               (format nil "the live cursor fits a ~D-column terminal" columns))
+              (test-assert
+               (= (terminal-ui-live-row-count active-ui) (1+ end-row))
+               (format nil
+                       "repaint bookkeeping counts rows at ~D columns"
+                       columns))
+              (test-assert
+               (= (terminal-ui-live-cursor-row active-ui) cursor-row)
+               (format nil
+                       "repaint bookkeeping tracks the cursor at ~D columns"
+                       columns))))))))
+  nil)
+
+(-> test-terminal-bounded-editor-repaint () null)
+(defun test-terminal-bounded-editor-repaint ()
+  "Test atomic repaint and cursor-following height bounds for long drafts."
+  (let* ((terminal (make-instance 'recording-terminal :rows 5 :columns 8))
+         (ui (terminal-ui-create :terminal terminal :prompt "❯ "))
+         (draft (make-string 160 :initial-element #\x)))
+    (with-terminal-ui (active-ui ui)
+      (terminal-ui-append-finalized active-ui :sentinel "HISTORY-SENTINEL")
+      (recording-terminal-reset terminal)
+      (terminal-ui-process-event active-ui (list :insert draft))
+      (let ((output (recording-terminal-output terminal)))
+        (test-assert (= (length (recording-terminal-chunks terminal)) 1)
+                     "one editor change is one terminal write")
+        (test-assert
+         (= (terminal-tests--substring-count
+             (format nil "~C[?25l" +terminal-escape-character+)
+             output)
+            1)
+         "one editor repaint hides the cursor once")
+        (test-assert
+         (= (terminal-tests--substring-count
+             (format nil "~C[?25h" +terminal-escape-character+)
+             output)
+            1)
+         "one editor repaint restores the cursor once")
+        (test-assert (not (search "HISTORY-SENTINEL" output))
+                     "long draft repaint never replays scrollback")
+        (test-assert (not (terminal-tests--forbidden-control-p output))
+                     "long draft repaint never erases the display"))
+      (test-assert (= (live-region-maximum-rows
+                       (terminal-ui-live-region active-ui))
+                      4)
+                   "the editor leaves one viewport row outside its live region")
+      (test-assert (<= (terminal-ui-live-row-count active-ui) 4)
+                   "a long draft remains inside its terminal-height budget")
+      (terminal-ui-process-event active-ui :home)
+      (test-assert (<= (terminal-ui-live-row-count active-ui) 4)
+                   "the bounded viewport follows the cursor to the draft start")))
   nil)
 
 (-> test-terminal-stream-update () null)
@@ -527,6 +593,7 @@
 (defun test-terminal-modal-resize ()
   "Test that a resize raised during modal input repaints before event dispatch."
   (let* ((previous-columns (uiop:getenv "COLUMNS"))
+         (previous-lines (uiop:getenv "LINES"))
          (*terminal-resize-pending-p* nil)
          (terminal
            (make-instance
@@ -536,6 +603,7 @@
             :read-callback
             (lambda ()
               (sb-posix:setenv "COLUMNS" "18" 1)
+              (sb-posix:setenv "LINES" "8" 1)
               (setf *terminal-resize-pending-p* t))))
          (ui (terminal-ui-create :terminal terminal))
          (items '((:name "alpha" :argument nil :description "first entry"))))
@@ -548,11 +616,13 @@
                       :title "pick"
                       :items items
                       :resize-callback
-                      #'application-pending-terminal-columns)
+                      #'application-pending-terminal-size)
                      "alpha")
             "submit still accepts the picker event received during resize")
            (test-assert (= (terminal-columns terminal) 18)
                         "a pending picker resize refreshes terminal columns")
+           (test-assert (= (terminal-rows terminal) 8)
+                        "a pending picker resize refreshes terminal rows")
            (test-assert (null *terminal-resize-pending-p*)
                         "the picker consumes the pending resize flag")
            (test-assert
@@ -563,13 +633,17 @@
             "the picker repaints at the new width before submit exits"))
       (if previous-columns
           (sb-posix:setenv "COLUMNS" previous-columns 1)
-          (sb-posix:unsetenv "COLUMNS"))))
+          (sb-posix:unsetenv "COLUMNS"))
+      (if previous-lines
+          (sb-posix:setenv "LINES" previous-lines 1)
+          (sb-posix:unsetenv "LINES"))))
   nil)
 
 (-> test-terminal-application-read-resize () null)
 (defun test-terminal-application-read-resize ()
   "Test that the outer application refreshes size before dispatching a read event."
   (let* ((previous-columns (uiop:getenv "COLUMNS"))
+         (previous-lines (uiop:getenv "LINES"))
          (*terminal-resize-pending-p* nil)
          (terminal
            (make-instance
@@ -579,6 +653,7 @@
             :read-callback
             (lambda ()
               (sb-posix:setenv "COLUMNS" "19" 1)
+              (sb-posix:setenv "LINES" "9" 1)
               (setf *terminal-resize-pending-p* t))))
          (ui (terminal-ui-create :terminal terminal)))
     (unwind-protect
@@ -588,11 +663,16 @@
                         "the application preserves the event read during resize")
            (test-assert (= (terminal-columns terminal) 19)
                         "the application refreshes width before event dispatch")
+           (test-assert (= (terminal-rows terminal) 9)
+                        "the application refreshes height before event dispatch")
            (test-assert (null *terminal-resize-pending-p*)
                         "the application consumes a resize raised during read"))
       (if previous-columns
           (sb-posix:setenv "COLUMNS" previous-columns 1)
-          (sb-posix:unsetenv "COLUMNS"))))
+          (sb-posix:unsetenv "COLUMNS"))
+      (if previous-lines
+          (sb-posix:setenv "LINES" previous-lines 1)
+          (sb-posix:unsetenv "LINES"))))
   nil)
 
 (-> test-terminal-styling-primitives () null)
@@ -666,10 +746,10 @@
                  ("日本語" 4 ("日本" "語")))))
     (loop for (text width expected) in cases
           do (test-assert
-              (equal (terminal--wrap-text text width) expected)
+              (equal (wrap-text text width) expected)
               (format nil "wrapping ~S at ~D produces ~S" text width expected))))
   (test-assert
-   (equal (terminal--wrap-text (format nil "alpha~%beta gamma") 5)
+   (equal (wrap-text (format nil "alpha~%beta gamma") 5)
           '("alpha" "beta" "gamma"))
    "wrapping preserves explicit line breaks before width breaks")
   nil)
@@ -720,6 +800,7 @@
   (test-terminal-input-decoding)
   (test-terminal-live-region-layout)
   (test-terminal-narrow-live-region)
+  (test-terminal-bounded-editor-repaint)
   (test-terminal-stream-update)
   (test-terminal-command-completion)
   (test-terminal-modal-selection)

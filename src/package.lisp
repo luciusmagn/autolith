@@ -4,6 +4,33 @@
                 #:define-constant)
   (:import-from #:cl-base64
                 #:base64-string-to-string)
+  (:import-from #:clinedi
+                #:line-editor
+                #:line-editor-text
+                #:line-editor-cursor
+                #:line-editor-history
+                #:line-editor-set-text
+                #:line-editor-clear
+                #:line-editor-handle-event
+                #:line-editor-create
+                #:read-event
+                #:sanitize-text
+                #:text-cell-width
+                #:text-cell-prefix
+                #:wrap-text
+                #:screen-position
+                #:live-region
+                #:make-live-region
+                #:live-region-maximum-rows
+                #:live-region-row-count
+                #:live-region-cursor-row
+                #:live-region-cursor-column
+                #:live-region-present
+                #:live-region-append
+                #:live-region-suspend
+                #:live-region-dismiss
+                #:live-region-resize
+                #:call-with-live-region-suspended)
   (:import-from #:bordeaux-threads
                 #:make-lock
                 #:make-recursive-lock

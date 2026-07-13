@@ -226,8 +226,8 @@
                        (when text
                          (setf preview text))))))))))
         (when preview
-          (terminal--prefix-within-width
-           (terminal-sanitize-text preview :single-line-p t)
+          (text-cell-prefix
+           (sanitize-text preview :single-line-p t)
            +conversation-preview-width+)))
     (error ()
       nil)))
@@ -464,7 +464,7 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        ui
        :title title
        :items items
-       :resize-callback #'application-pending-terminal-columns))))
+       :resize-callback #'application-pending-terminal-size))))
 
 (-> application-authenticate (application) null)
 (defun application-authenticate (application)

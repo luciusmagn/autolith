@@ -5,6 +5,7 @@
   :serial t
   :depends-on (#:alexandria
                #:cl-base64
+               #:clinedi
                #:closer-mop
                #:dexador
                #:bordeaux-threads
@@ -35,7 +36,6 @@
                              (:file "terminal")
                              (:file "terminal-style")
                              (:file "markdown")
-                             (:file "line-editor")
                              (:file "stream-terminal")
                              (:file "terminal-ui")
                              (:file "application")

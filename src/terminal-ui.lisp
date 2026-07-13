@@ -2,6 +2,11 @@
 
 ;;;; -- UI Construction --
 
+(-> terminal-ui--maximum-live-rows (terminal) (integer 1))
+(defun terminal-ui--maximum-live-rows (terminal)
+  "Return the viewport row budget reserved for TERMINAL's unfinished content."
+  (max 1 (1- (terminal-rows terminal))))
+
 (-> terminal-completion-p (t) boolean)
 (defun terminal-completion-p (value)
   "Return true when VALUE describes one interactive completion entry."
@@ -27,63 +32,36 @@
            :message "Every completion entry needs a name and a description."
            :operation ':create-ui
            :cause nil))
-  (make-instance 'terminal-ui
-                 :terminal terminal
-                 :editor (or editor (line-editor-create))
-                 :prompt prompt
-                 :placeholder placeholder
-                 :completions completions))
+  (let ((live-region
+          (make-live-region
+           :columns (terminal-columns terminal)
+           :maximum-rows (terminal-ui--maximum-live-rows terminal)
+           :write-function (lambda (text)
+                             (terminal--write terminal text))
+           :flush-function (lambda ()
+                             (terminal-flush terminal)))))
+    (make-instance 'terminal-ui
+                   :terminal terminal
+                   :editor (or editor
+                               (line-editor-create
+                                :history-limit +terminal-history-limit+))
+                   :live-region live-region
+                   :prompt prompt
+                   :placeholder placeholder
+                   :completions completions)))
 
 
-;;;; -- Live Region Mechanics --
+;;;; -- Terminal Presentation --
 
-(-> terminal--cursor-up (terminal integer) null)
-(defun terminal--cursor-up (terminal rows)
-  "Move TERMINAL upward by ROWS within the bounded live region."
-  (when (plusp rows)
-    (terminal--write terminal
-                     (format nil "~C[~:DA"
-                             +terminal-escape-character+
-                             rows)))
-  nil)
+(-> terminal-ui-live-row-count (terminal-ui) (integer 0))
+(defun terminal-ui-live-row-count (ui)
+  "Return the number of live physical rows currently painted for UI."
+  (live-region-row-count (terminal-ui-live-region ui)))
 
-(-> terminal--cursor-down (terminal integer) null)
-(defun terminal--cursor-down (terminal rows)
-  "Move TERMINAL downward by ROWS within the bounded live region."
-  (when (plusp rows)
-    (terminal--write terminal
-                     (format nil "~C[~:DB"
-                             +terminal-escape-character+
-                             rows)))
-  nil)
-
-(-> terminal--cursor-right (terminal integer) null)
-(defun terminal--cursor-right (terminal columns)
-  "Move TERMINAL right by COLUMNS within the current prompt row."
-  (when (plusp columns)
-    (terminal--write terminal
-                     (format nil "~C[~:DC"
-                             +terminal-escape-character+
-                             columns)))
-  nil)
-
-(-> terminal-ui--clear-live (terminal-ui) null)
-(defun terminal-ui--clear-live (ui)
-  "Erase only UI's currently painted live rows, ending at the region's top row."
-  (let ((terminal (terminal-ui-terminal ui))
-        (total (terminal-ui-live-row-count ui)))
-    (when (and (terminal-interactive-p terminal)
-               (plusp total))
-      (terminal--cursor-down terminal
-                             (- total 1 (terminal-ui-live-cursor-row ui)))
-      (loop for row from (1- total) downto 0
-            do (terminal--write terminal (string #\Return))
-               (terminal--write terminal +terminal-erase-line+)
-               (when (plusp row)
-                 (terminal--cursor-up terminal 1)))
-      (setf (terminal-ui-live-row-count ui) 0
-            (terminal-ui-live-cursor-row ui) 0)))
-  nil)
+(-> terminal-ui-live-cursor-row (terminal-ui) (integer 0))
+(defun terminal-ui-live-cursor-row (ui)
+  "Return the physical live row currently holding UI's input cursor."
+  (live-region-cursor-row (terminal-ui-live-region ui)))
 
 (-> terminal--write-newline (terminal) null)
 (defun terminal--write-newline (terminal)
@@ -96,7 +74,7 @@
 
 (-> terminal--write-safe-text (terminal string) null)
 (defun terminal--write-safe-text (terminal text)
-  "Write sanitized TEXT while making its line endings terminal-safe."
+  "Write trusted TEXT while making its line endings terminal-safe."
   (let ((line-start 0))
     (loop for newline = (position #\Newline text :start line-start)
           while newline
@@ -106,48 +84,61 @@
           finally (terminal--write terminal (subseq text line-start))))
   nil)
 
+(-> terminal--spans-text (list) string)
+(defun terminal--spans-text (spans)
+  "Return the sanitized visible text represented by SPANS."
+  (with-output-to-string (stream)
+    (dolist (span spans)
+      (write-string (sanitize-text (terminal-span-text span)) stream))))
+
+(-> terminal--render-spans (terminal list) string)
+(defun terminal--render-spans (terminal spans)
+  "Return trusted terminal presentation for sanitized semantic SPANS."
+  (with-output-to-string (stream)
+    (dolist (span spans)
+      (let* ((text (sanitize-text (terminal-span-text span)))
+             (sequence
+               (and (terminal-styled-p terminal)
+                    (terminal-style-sequence (terminal-span-style span)))))
+        (when sequence
+          (write-string sequence stream))
+        (write-string text stream)
+        (when sequence
+          (write-string +terminal-style-reset+ stream))))))
+
 (-> terminal--write-row (terminal list) null)
 (defun terminal--write-row (terminal spans)
-  "Write one live row of single-line SPANS already sanitized by their builder."
-  (dolist (span spans)
-    (let ((sequence (and (terminal-styled-p terminal)
-                         (terminal-style-sequence (terminal-span-style span)))))
-      (when sequence
-        (terminal--write terminal sequence))
-      (terminal--write terminal (terminal-span-text span))
-      (when sequence
-        (terminal--write terminal +terminal-style-reset+))))
+  "Write sanitized semantic SPANS as one trusted terminal row."
+  (terminal--write-safe-text terminal (terminal--render-spans terminal spans))
   nil)
 
-(-> terminal-ui--prompt-row (terminal-ui) (values list integer))
-(defun terminal-ui--prompt-row (ui)
-  "Return UI's prompt row spans and cursor column within the terminal width."
+(-> terminal-ui--prompt-content (terminal-ui) (values list integer))
+(defun terminal-ui--prompt-content (ui)
+  "Return UI's multiline prompt spans and cursor character offset."
   (let* ((terminal (terminal-ui-terminal ui))
          (columns (terminal-columns terminal))
-         (row-width (max 0 (1- columns)))
          (editor (terminal-ui-editor ui))
-         (safe-prompt (terminal-sanitize-text (terminal-ui-prompt ui)
-                                              :single-line-p t))
-         (visible-prompt (terminal--prefix-within-width safe-prompt row-width)))
+         (safe-prompt (sanitize-text (terminal-ui-prompt ui)
+                                     :single-line-p t)))
     (if (and (zerop (length (line-editor-text editor)))
              (non-empty-string-p (terminal-ui-placeholder ui)))
-        (values (terminal--clip-spans
-                 (list (terminal-span :brand visible-prompt)
+        (let ((spans
+                (terminal--clip-spans
+                 (list (terminal-span :brand safe-prompt)
                        (terminal-span :hint (terminal-ui-placeholder ui)))
-                 row-width)
-                (terminal--text-width visible-prompt))
-        (multiple-value-bind (row cursor-column)
-            (line-editor-render editor (terminal-ui-prompt ui) columns)
-          (let* ((content-style (if (uiop:string-prefix-p
-                                     "/" (line-editor-text editor))
-                                    :user
-                                    :plain))
-                 (spans (list (terminal-span :brand visible-prompt)
-                              (terminal-span content-style
-                                             (subseq row
-                                                     (length visible-prompt))))))
-            (values (terminal--clip-spans spans row-width)
-                    (min cursor-column row-width)))))))
+                 columns)))
+          (values spans
+                  (min (length safe-prompt)
+                       (length (terminal--spans-text spans)))))
+        (let ((content-style
+                (if (uiop:string-prefix-p "/" (line-editor-text editor))
+                    ':user
+                    ':plain)))
+          (values (list (terminal-span ':brand safe-prompt)
+                        (terminal-span content-style
+                                       (line-editor-text editor)))
+                  (+ (length safe-prompt)
+                     (line-editor-cursor editor)))))))
 
 ;;;; -- Command Completion Suggestions --
 
@@ -200,7 +191,7 @@
                        (- (length items) visible-count)))
            (label-width
              (loop for entry in items
-                   maximize (terminal--text-width
+                   maximize (text-cell-width
                              (terminal-completion-label entry)))))
       (loop for index from start below (+ start visible-count)
             for entry = (nth index items)
@@ -233,12 +224,14 @@
 (-> terminal-ui--accept-completion (terminal-ui list) null)
 (defun terminal-ui--accept-completion (ui entry)
   "Replace UI's input with ENTRY's name, adding a space when it takes an argument."
-  (line-editor-set-text (terminal-ui-editor ui)
-                        (concatenate 'string
-                                     (getf entry :name)
-                                     (if (getf entry :argument)
-                                         " "
-                                         "")))
+  (line-editor-set-text
+   (terminal-ui-editor ui)
+   (sanitize-text
+    (concatenate 'string
+                 (getf entry :name)
+                 (if (getf entry :argument)
+                     " "
+                     ""))))
   nil)
 
 (-> terminal-ui--handle-completion-event
@@ -286,60 +279,122 @@
 
 ;;;; -- Live Region Composition --
 
-(-> terminal-ui--live-rows (terminal-ui) (values list integer integer))
-(defun terminal-ui--live-rows (ui)
-  "Return UI's live rows as span lists plus the cursor row index and column."
+(-> terminal-ui--rows-content
+    (terminal list &key (:cursor-row integer) (:cursor-offset integer))
+    (values string string integer))
+(defun terminal-ui--rows-content
+    (terminal rows &key (cursor-row 0) (cursor-offset 0))
+  "Return ROWS as plain and styled text plus their cursor character index."
+  (let ((plain-stream (make-string-output-stream))
+        (display-stream (make-string-output-stream))
+        (plain-length 0)
+        (cursor-index nil))
+    (loop for row in rows
+          for index from 0
+          for plain = (terminal--spans-text row)
+          for display = (terminal--render-spans terminal row)
+          do (when (= index cursor-row)
+               (setf cursor-index
+                     (+ plain-length
+                        (min (max 0 cursor-offset) (length plain)))))
+             (write-string plain plain-stream)
+             (write-string display display-stream)
+             (incf plain-length (length plain))
+             (when (< (1+ index) (length rows))
+               (write-char #\Newline plain-stream)
+               (write-char #\Newline display-stream)
+               (incf plain-length)))
+    (unless cursor-index
+      (error 'terminal-error
+             :message "The live-region cursor row is outside its content."
+             :operation ':render
+             :cause nil))
+    (values (get-output-stream-string plain-stream)
+            (get-output-stream-string display-stream)
+            cursor-index)))
+
+(-> terminal-ui--live-content
+    (terminal-ui)
+    (values string string integer))
+(defun terminal-ui--live-content (ui)
+  "Return UI's complete plain and styled live content plus its cursor index."
   (let* ((terminal (terminal-ui-terminal ui))
-         (row-width (max 0 (1- (terminal-columns terminal))))
+         (row-width (max 1 (terminal-columns terminal)))
          (rows nil))
     (let ((tail (terminal-ui-stream-tail ui)))
       (when tail
-        (push (terminal--clip-spans
-               (if (stringp tail)
-                   (list (terminal-span :plain tail))
-                   tail)
-               row-width)
-              rows)))
+        (setf rows
+              (append rows
+                      (list
+                       (terminal--clip-spans
+                        (if (stringp tail)
+                            (list (terminal-span ':plain tail))
+                            tail)
+                        row-width))))))
     (when (terminal-ui-status ui)
-      (push (terminal--clip-spans
-             (list (terminal-span :brand "∙ ")
-                   (terminal-span :dim (terminal-ui-status ui)))
-             row-width)
-            rows))
+      (setf rows
+            (append rows
+                    (list
+                     (terminal--clip-spans
+                      (list (terminal-span ':brand "∙ ")
+                            (terminal-span ':dim (terminal-ui-status ui)))
+                      row-width)))))
     (when rows
-      (push nil rows))
-    (let ((selector (terminal-ui-selector ui))
-          (cursor-row (length rows)))
+      (setf rows (append rows (list nil))))
+    (let ((selector (terminal-ui-selector ui)))
       (cond
         (selector
          (let ((title-spans
                  (terminal--clip-spans
-                  (list (terminal-span :brand "∙ ")
-                        (terminal-span :plain (getf selector :title))
-                        (terminal-span :hint "  enter selects, esc cancels"))
+                  (list (terminal-span ':brand "∙ ")
+                        (terminal-span ':plain (getf selector :title))
+                        (terminal-span ':hint "  enter selects, esc cancels"))
                   row-width)))
-           (push title-spans rows)
-           (dolist (row (terminal-ui--choice-rows (getf selector :items)
-                                                  (getf selector :selection)
-                                                  row-width))
-             (push row rows))
-           (push nil rows)
-           (values (nreverse rows)
-                   cursor-row
-                   (terminal--spans-width title-spans))))
+           (let ((cursor-row (length rows)))
+             (setf rows
+                   (append rows
+                           (list title-spans)
+                           (terminal-ui--choice-rows
+                            (getf selector :items)
+                            (getf selector :selection)
+                            row-width)
+                           (list nil)))
+             (terminal-ui--rows-content
+              terminal
+              rows
+              :cursor-row cursor-row
+              :cursor-offset (length (terminal--spans-text title-spans))))))
         (t
-         (multiple-value-bind (prompt-spans cursor-column)
-             (terminal-ui--prompt-row ui)
-           (push prompt-spans rows)
-           (dolist (row (terminal-ui--completion-rows
-                         ui
-                         (terminal-ui--reconcile-completions ui)
-                         row-width))
-             (push row rows))
-           (push nil rows)
-           (values (nreverse rows)
-                   cursor-row
-                   (min cursor-column row-width))))))))
+         (multiple-value-bind (prompt-spans cursor-offset)
+             (terminal-ui--prompt-content ui)
+           (let ((cursor-row (length rows)))
+             (setf rows
+                   (append rows
+                           (list prompt-spans)
+                           (terminal-ui--completion-rows
+                            ui
+                            (terminal-ui--reconcile-completions ui)
+                            row-width)
+                           (list nil)))
+             (terminal-ui--rows-content
+              terminal
+              rows
+              :cursor-row cursor-row
+              :cursor-offset cursor-offset))))))))
+
+(-> terminal-ui--stream-output (terminal list) string)
+(defun terminal-ui--stream-output (terminal rows)
+  "Return streamed ROWS as trusted styled output ending on a fresh line."
+  (with-output-to-string (stream)
+    (dolist (row rows)
+      (let ((safe-row
+              (loop for span in row
+                    collect (terminal-span
+                             (terminal-span-style span)
+                             (sanitize-text (terminal-span-text span)
+                                            :single-line-p t)))))
+        (write-string (terminal--render-spans terminal safe-row) stream)
+        (write-char #\Newline stream)))))
 
 (-> terminal-ui-stream-update
     (terminal-ui &key (:rows list) (:tail (or null string list)))
@@ -350,97 +405,75 @@
 Each row is a styled span list appended once without a separating blank row, so
 consecutive updates build one continuous transcript block. TAIL replaces the
 live unfinished line continuing that block, or removes it when NIL."
-  (terminal-ui--clear-live ui)
-  (let ((terminal (terminal-ui-terminal ui)))
-    (dolist (row rows)
-      (terminal--write-row terminal
-                           (loop for span in row
-                                 collect (terminal-span
-                                          (terminal-span-style span)
-                                          (terminal-sanitize-text
-                                           (terminal-span-text span)
-                                           :single-line-p t))))
-      (terminal--write-newline terminal))
-    (setf (terminal-ui-stream-tail ui) tail)
-    (terminal-ui--paint-live ui)
+  (let* ((terminal (terminal-ui-terminal ui))
+         (output (terminal-ui--stream-output terminal rows)))
+    (labels ((append-and-repaint ()
+               "Append committed rows and install the latest fluid tail."
+               (when (plusp (length output))
+                 (terminal--write-safe-text terminal output))
+               (setf (terminal-ui-stream-tail ui) tail)
+               (terminal-ui--paint-live ui)))
+      (if (terminal-interactive-p terminal)
+          (call-with-live-region-suspended
+           (terminal-ui-live-region ui)
+           #'append-and-repaint)
+          (append-and-repaint)))
     (terminal-flush terminal))
   ui)
 
 (-> terminal-ui--paint-live (terminal-ui) null)
 (defun terminal-ui--paint-live (ui)
-  "Paint UI's bounded live rows below the transcript without touching scrollback."
+  "Present UI's unfinished content below ordinary terminal scrollback."
   (let ((terminal (terminal-ui-terminal ui)))
     (when (terminal-interactive-p terminal)
-      (multiple-value-bind (rows cursor-row cursor-column)
-          (terminal-ui--live-rows ui)
-        (loop for row in rows
-              for index from 0
-              do (terminal--write terminal (string #\Return))
-                 (terminal--write terminal +terminal-erase-line+)
-                 (terminal--write-row terminal row)
-                 (when (< (1+ index) (length rows))
-                   (terminal--write-newline terminal)))
-        (terminal--cursor-up terminal (- (length rows) 1 cursor-row))
-        (terminal--write terminal (string #\Return))
-        (terminal--cursor-right terminal cursor-column)
-        (setf (terminal-ui-live-row-count ui) (length rows)
-              (terminal-ui-live-cursor-row ui) cursor-row))
-      (terminal-flush terminal)))
+      (multiple-value-bind (text display cursor)
+          (terminal-ui--live-content ui)
+        (live-region-present (terminal-ui-live-region ui)
+                             text
+                             :cursor cursor
+                             :display display))))
   nil)
 
 (-> terminal-ui--repaint-live (terminal-ui) null)
 (defun terminal-ui--repaint-live (ui)
-  "Clear and repaint only UI's bounded live region."
-  (terminal-ui--clear-live ui)
+  "Recompose and repaint only UI's bounded live region."
   (terminal-ui--paint-live ui)
   nil)
 
-(-> terminal-ui--write-finalized (terminal-ui (or string list)) null)
-(defun terminal-ui--write-finalized (ui entry)
-  "Write sanitized finalized ENTRY once, followed by one separating blank row."
+(-> terminal-ui--finalized-content
+    (terminal-ui (or string list))
+    (values string string))
+(defun terminal-ui--finalized-content (ui entry)
+  "Return finalized ENTRY as plain and styled text with a blank separator."
   (let* ((terminal (terminal-ui-terminal ui))
-         (spans (loop for span in (if (stringp entry)
-                                      (list (terminal-span :plain entry))
-                                      entry)
-                      collect (terminal-span
-                               (terminal-span-style span)
-                               (terminal-sanitize-text
-                                (terminal-span-text span))))))
-    (dolist (span spans)
-      (let ((sequence (and (terminal-styled-p terminal)
-                           (terminal-style-sequence
-                            (terminal-span-style span)))))
-        (when sequence
-          (terminal--write terminal sequence))
-        (terminal--write-safe-text terminal (terminal-span-text span))
-        (when sequence
-          (terminal--write terminal +terminal-style-reset+))))
-    (let ((last-text (if spans
-                         (terminal-span-text (first (last spans)))
-                         "")))
-      (unless (and (plusp (length last-text))
-                   (char= (char last-text (1- (length last-text))) #\Newline))
-        (terminal--write-newline terminal)))
-    (terminal--write-newline terminal)
-    (terminal-flush terminal))
-  nil)
+         (spans (if (stringp entry)
+                    (list (terminal-span ':plain entry))
+                    entry))
+         (plain (terminal--spans-text spans))
+         (display (terminal--render-spans terminal spans)))
+    (unless (and (plusp (length plain))
+                 (char= (char plain (1- (length plain))) #\Newline))
+      (setf plain (concatenate 'string plain (string #\Newline))
+            display (concatenate 'string display (string #\Newline))))
+    (values (concatenate 'string plain (string #\Newline))
+            (concatenate 'string display (string #\Newline)))))
 
 
 (-> terminal-ui-refresh-size
     (terminal-ui (option function))
     boolean)
 (defun terminal-ui-refresh-size (ui callback)
-  "Apply CALLBACK's pending terminal width to UI and report whether it repainted."
-  (let ((columns (and callback (funcall callback))))
+  "Apply CALLBACK's pending terminal size to UI and report whether it repainted."
+  (let ((size (and callback (funcall callback))))
     (cond
-      ((null columns)
+      ((null size)
        nil)
-      ((typep columns '(integer 1))
-       (terminal-ui-resize ui columns)
+      ((typep size '(cons (integer 1) (integer 1)))
+       (terminal-ui-resize ui (rest size) :rows (first size))
        t)
       (t
        (error 'terminal-error
-              :message "A terminal resize callback returned an invalid width."
+              :message "A terminal resize callback returned an invalid size."
               :operation ':resize
               :cause nil)))))
 
@@ -456,8 +489,8 @@ Enter accepts it, and Escape, Ctrl-C, or end of input cancels. Returns NIL
 immediately when ITEMS is empty or the terminal is not interactive.
 
 RESIZE-CALLBACK is queried before each blocking read and immediately after the
-read returns. It returns a positive pending width, or NIL when no resize needs
-to be applied."
+read returns. It returns positive pending rows and columns as a cons, or NIL
+when no resize needs to be applied."
   (block nil
     (unless (and items
                  (every #'terminal-completion-p items)
@@ -505,8 +538,7 @@ to be applied."
   "Erase UI's unfinished rows and restore its terminal even after partial startup."
   (unwind-protect
        (when (terminal-ui-started-p ui)
-         (terminal-ui--clear-live ui)
-         (terminal-flush (terminal-ui-terminal ui)))
+         (live-region-dismiss (terminal-ui-live-region ui)))
     (setf (terminal-ui-started-p ui) nil)
     (terminal-stop (terminal-ui-terminal ui)))
   ui)
@@ -536,28 +568,44 @@ to be applied."
   (block nil
     (unless (terminal-ui-mark-finalized ui identifier)
       (return nil))
-    (terminal-ui--clear-live ui)
-    (terminal-ui--write-finalized ui entry)
-    (terminal-ui--paint-live ui)
+    (multiple-value-bind (text display)
+        (terminal-ui--finalized-content ui entry)
+      (if (terminal-interactive-p (terminal-ui-terminal ui))
+          (live-region-append (terminal-ui-live-region ui)
+                              text
+                              :display display)
+          (progn
+            (terminal--write-safe-text (terminal-ui-terminal ui) display)
+            (terminal-flush (terminal-ui-terminal ui)))))
     t))
 
 (-> terminal-ui-set-status (terminal-ui (option string)) terminal-ui)
 (defun terminal-ui-set-status (ui status)
   "Replace UI's unfinished one-row STATUS and repaint only the live region."
   (let ((safe-status (and status
-                          (terminal-sanitize-text status :single-line-p t))))
+                          (sanitize-text status :single-line-p t))))
     (unless (equal safe-status (terminal-ui-status ui))
-      (terminal-ui--clear-live ui)
       (setf (terminal-ui-status ui) safe-status)
       (terminal-ui--paint-live ui)))
   ui)
 
-(-> terminal-ui-resize (terminal-ui integer) terminal-ui)
-(defun terminal-ui-resize (ui columns)
-  "Set UI terminal width to positive COLUMNS and repaint only unfinished rows."
-  (let ((new-columns (max 1 columns)))
-    (terminal-ui--clear-live ui)
+(-> terminal-ui-resize
+    (terminal-ui integer &key (:rows (option integer)))
+    terminal-ui)
+(defun terminal-ui-resize (ui columns &key rows)
+  "Set UI terminal dimensions and repaint only unfinished rows."
+  (let* ((new-columns (max 1 columns))
+         (new-rows (and rows (max 1 rows)))
+         (region (terminal-ui-live-region ui)))
+    (live-region-suspend region)
     (setf (terminal-columns (terminal-ui-terminal ui)) new-columns)
+    (when new-rows
+      (setf (terminal-rows (terminal-ui-terminal ui)) new-rows))
+    (live-region-resize
+     region
+     new-columns
+     :maximum-rows
+     (terminal-ui--maximum-live-rows (terminal-ui-terminal ui)))
     (terminal-ui--paint-live ui))
   ui)
 
@@ -565,6 +613,40 @@ to be applied."
 (defun terminal-ui-read-event (ui)
   "Read one semantic input event for UI without emitting fallback prompt controls."
   (terminal-read-event (terminal-ui-terminal ui)))
+
+(-> terminal-ui--safe-editor-event (t) t)
+(defun terminal-ui--safe-editor-event (event)
+  "Return EVENT with direct text input sanitized for terminal presentation."
+  (if (and (consp event)
+           (member (first event) '(:insert :paste :line))
+           (consp (rest event))
+           (stringp (second event)))
+      (list (first event) (sanitize-text (second event)))
+      event))
+
+(-> terminal-ui--apply-editor-event
+    (terminal-ui t)
+    (values keyword (option string)))
+(defun terminal-ui--apply-editor-event (ui event)
+  "Apply EVENT through Clinedi while preserving Autolith interaction policy."
+  (let ((editor (terminal-ui-editor ui)))
+    (cond
+      ((and (eq event :interrupt)
+            (plusp (length (line-editor-text editor))))
+       (line-editor-clear editor)
+       (values :cleared nil))
+      ((eq event :complete)
+       (line-editor-handle-event editor '(:insert "    "))
+       (values :changed nil))
+      ((eq event :clear-screen)
+       (values :changed nil))
+      (t
+       (multiple-value-bind (action payload)
+           (line-editor-handle-event
+            editor
+            (terminal-ui--safe-editor-event event))
+         (values (if (eq action :continue) ':changed action)
+                 payload))))))
 
 (-> terminal-ui-process-event
     (terminal-ui t)
@@ -576,7 +658,7 @@ to be applied."
     (if completion-action
         (values completion-action completion-payload)
         (multiple-value-bind (action payload)
-            (line-editor-handle-event (terminal-ui-editor ui) event)
+            (terminal-ui--apply-editor-event ui event)
           (when (member action '(:changed :cleared :submit))
             (terminal-ui--repaint-live ui))
           (values action payload)))))

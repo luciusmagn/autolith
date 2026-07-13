@@ -64,7 +64,7 @@
   "The live application root retained in saved generations.")
 
 (defvar *terminal-resize-pending-p* nil
-  "True after SIGWINCH until the active UI recomputes its width.")
+  "True after SIGWINCH until the active UI recomputes its dimensions.")
 
 
 ;;;; -- Interactive Command Table --
@@ -90,34 +90,53 @@
 
 ;;;; -- Construction and Reconnection --
 
-(-> terminal-current-columns () integer)
-(defun terminal-current-columns ()
-  "Return the current terminal width, falling back to the restrained default."
-  (labels ((positive-integer-or-nil (value)
-             "Parse VALUE as a positive integer, returning NIL on failure."
-             (handler-case
-                 (let ((parsed (and (non-empty-string-p value)
-                                    (parse-integer value :junk-allowed t))))
-                   (and parsed (plusp parsed) parsed))
-               (error ()
-                 nil))))
-    (or (positive-integer-or-nil (uiop:getenv "COLUMNS"))
-        (and (interactive-stream-p *terminal-io*)
-             (handler-case
-                 (positive-integer-or-nil
-                  (uiop:run-program '("tput" "cols")
-                                    :output :string
-                                    :error-output :output))
-               (error ()
-                 nil)))
-        +terminal-default-columns+)))
+(-> terminal--positive-integer-or-nil ((option string)) (option integer))
+(defun terminal--positive-integer-or-nil (value)
+  "Parse VALUE as a positive integer, returning NIL on failure."
+  (handler-case
+      (let ((parsed (and (non-empty-string-p value)
+                         (parse-integer value :junk-allowed t))))
+        (and parsed (plusp parsed) parsed))
+    (error ()
+      nil)))
 
-(-> application-pending-terminal-columns () (option integer))
-(defun application-pending-terminal-columns ()
-  "Consume a pending SIGWINCH and return the refreshed terminal width."
+(-> terminal--query-dimension (string) (option integer))
+(defun terminal--query-dimension (capability)
+  "Return positive TPUT CAPABILITY output when a terminal is attached."
+  (when (interactive-stream-p *terminal-io*)
+    (handler-case
+        (terminal--positive-integer-or-nil
+         (uiop:run-program (list "tput" capability)
+                           :output :string
+                           :error-output :output))
+      (error ()
+        nil))))
+
+(-> terminal-current-size () (values integer integer))
+(defun terminal-current-size ()
+  "Return current terminal rows and columns, preferring its kernel dimensions."
+  (multiple-value-bind (terminal-rows terminal-columns)
+      (terminal-file-descriptor-size 0)
+    (values
+     (or terminal-rows
+         (terminal--query-dimension "lines")
+         (terminal--positive-integer-or-nil (uiop:getenv "LINES"))
+         +terminal-default-rows+)
+     (or terminal-columns
+         (terminal--query-dimension "cols")
+         (terminal--positive-integer-or-nil (uiop:getenv "COLUMNS"))
+         +terminal-default-columns+))))
+
+(-> application-pending-terminal-size
+    ()
+    (option (cons (integer 1) (integer 1))))
+(defun application-pending-terminal-size ()
+  "Consume a pending SIGWINCH and return refreshed rows and columns."
   (when *terminal-resize-pending-p*
     (setf *terminal-resize-pending-p* nil)
-    (terminal-current-columns)))
+    (multiple-value-bind (rows columns)
+        (terminal-current-size)
+      (cons rows columns))))
 
 (define-constant +application-prompt+ "❯ "
   :test #'string=
@@ -130,12 +149,14 @@
 
 (-> application-terminal-ui-create () terminal-ui)
 (defun application-terminal-ui-create ()
-  "Create the standard interactive terminal UI at the current terminal width."
-  (terminal-ui-create
-   :terminal (stream-terminal-create :columns (terminal-current-columns))
-   :prompt +application-prompt+
-   :placeholder +application-placeholder+
-   :completions +application-commands+))
+  "Create the standard interactive terminal UI at the current terminal size."
+  (multiple-value-bind (rows columns)
+      (terminal-current-size)
+    (terminal-ui-create
+     :terminal (stream-terminal-create :rows rows :columns columns)
+     :prompt +application-prompt+
+     :placeholder +application-placeholder+
+     :completions +application-commands+)))
 
 (-> application-create
     (configuration &key (:conversation-id (option string)))
@@ -270,10 +291,10 @@
 (defun application--indented-body (application text)
   "Return sanitized TEXT wrapped and indented under its transcript header."
   (format nil "~{  ~A~^~%~}"
-          (terminal--wrap-text (string-right-trim
-                                '(#\Space #\Tab #\Newline #\Return)
-                                (terminal-sanitize-text text))
-                               (application--transcript-width application))))
+          (wrap-text (string-right-trim
+                      '(#\Space #\Tab #\Newline #\Return)
+                      (sanitize-text text))
+                     (application--transcript-width application))))
 
 (-> application--markdown-renderer (application) markdown-renderer)
 (defun application--markdown-renderer (application)
@@ -288,7 +309,7 @@
   "Return sanitized TEXT rendered as markdown transcript spans."
   (let ((renderer (application--markdown-renderer application))
         (trimmed (string-right-trim '(#\Space #\Tab #\Newline #\Return)
-                                    (terminal-sanitize-text text))))
+                                    (sanitize-text text))))
     (loop for line in (or (uiop:split-string trimmed :separator '(#\Newline))
                           (list ""))
           append (loop for row in (markdown-render-line renderer line)
@@ -311,11 +332,10 @@
       (let ((available (- (terminal-columns
                            (terminal-ui-terminal (application-ui application)))
                           3
-                          (terminal--text-width header)))
-            (safe-detail (terminal-sanitize-text detail :single-line-p t)))
+                          (text-cell-width header)))
+            (safe-detail (sanitize-text detail :single-line-p t)))
         (when (> available 1)
-          (let ((visible (terminal--prefix-within-width safe-detail
-                                                        (1- available))))
+          (let ((visible (text-cell-prefix safe-detail (1- available))))
             (setf spans
                   (append spans
                           (list (terminal-span
@@ -614,7 +634,7 @@ later conversation replay cannot duplicate their streamed transcript rows."
 (-> application-stream-status (application string string) null)
 (defun application-stream-status (application label text)
   "Show LABEL and the bounded single-line tail of streaming TEXT."
-  (let* ((safe (terminal-sanitize-text text :single-line-p t))
+  (let* ((safe (sanitize-text text :single-line-p t))
          (start (max 0 (- (length safe) 240))))
     (terminal-ui-set-status
      (application-ui application)
@@ -637,7 +657,7 @@ later conversation replay cannot duplicate their streamed transcript rows."
                  (setf stream-text
                        (concatenate 'string stream-text delta)
                        stream-pending
-                       (terminal-sanitize-text
+                       (sanitize-text
                         (concatenate 'string stream-pending delta)))
                  (let ((rows nil))
                    (unless stream-open-p
