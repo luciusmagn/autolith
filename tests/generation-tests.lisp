@@ -269,6 +269,7 @@
          (previous-pointer (uiop:getenv "AUTOLITH_CRASH_POINTER")))
     (unwind-protect
          (progn
+           (conversation-append-user-message conversation "preserve crash context")
            (setf (application-rendered-sequence application) 42)
            (sb-posix:setenv "AUTOLITH_CRASH_POINTER" (namestring pointer) 1)
            (test-assert (string= (uiop:getenv "AUTOLITH_CRASH_POINTER")
@@ -296,10 +297,28 @@
              (test-assert (= (getf (rest record) :rendered-sequence) 42)
                           "crash capsules retain scrollback presentation progress")
              (test-assert
+              (string= (getf (rest record) :conversation-id) "crash-capsule")
+              "crash capsules correlate persisted conversations")
+             (test-assert
               (string= (string-trim '(#\Space #\Tab #\Newline #\Return)
                                     (uiop:read-file-string pointer))
                        (namestring capsule))
-              "the exact launch pointer names its own crash capsule")))
+              "the exact launch pointer names its own crash capsule"))
+           (let* ((empty (conversation-create configuration
+                                              :identifier "empty-crash"))
+                  (empty-capsule
+                    (progn
+                      (setf (application-conversation application) empty)
+                      (application-write-crash-capsule
+                       application
+                       (make-condition 'simple-error
+                                       :format-control "empty crash"
+                                       :format-arguments nil))))
+                  (empty-record (read-portable-form empty-capsule)))
+             (test-assert (null (getf (rest empty-record) :conversation-id))
+                          "crashes do not advertise an unpersisted conversation")
+             (test-assert (not (probe-file (conversation-pathname empty)))
+                          "crash reporting does not materialize an empty conversation")))
       (if previous-pointer
           (sb-posix:setenv "AUTOLITH_CRASH_POINTER" previous-pointer 1)
           (sb-posix:unsetenv "AUTOLITH_CRASH_POINTER"))

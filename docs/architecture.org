@@ -53,8 +53,10 @@ publication into Autolith's private credential store.
 ** =conversation.lisp=
 
 Owns append-only portable records and their projection into provider input.
-It persists each user message before network work begins and treats completed
-provider output items as authoritative history.
+Fresh conversations remain in memory until the first durable record atomically
+publishes the header and that record together. Empty sessions therefore create
+no conversation file. It persists each user message before network work begins
+and treats completed provider output items as authoritative history.
 
 ** =provider.lisp=
 

@@ -56,6 +56,7 @@
            (test-assert (string= (conversation-origin-directory conversation)
                                  expected)
                         "a new conversation records its origin directory")
+           (conversation-append-user-message conversation "remember this workspace")
            (test-assert (string= (conversation-origin-directory
                                   (conversation-load-by-id configuration
                                                            "origin"))
@@ -74,7 +75,10 @@
              (test-assert (null (conversation-origin-directory
                                  (conversation-load-by-id configuration
                                                           "legacy")))
-                          "legacy conversations without an origin still load")))
+                          "legacy conversations without an origin still load")
+             (test-assert
+              (not (find legacy (conversation-list configuration) :test #'equal))
+              "header-only legacy conversations stay out of saved listings")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -91,7 +95,21 @@
                    "role" "assistant"
                    "content" (json-array
                               (json-object "type" "output_text" "text" "hello")))))
+           (test-assert (not (conversation-persisted-p conversation))
+                        "a new conversation begins only in memory")
+           (test-assert (not (probe-file (conversation-pathname conversation)))
+                        "an empty conversation has no file")
+           (test-assert (null (conversation-list configuration))
+                        "empty conversations never appear in saved listings")
            (conversation-append-user-message conversation "hi")
+           (test-assert (conversation-persisted-p conversation)
+                        "the first durable record publishes the conversation")
+           (let ((records (conversation--read-records
+                           (conversation-pathname conversation))))
+             (test-assert (and (= (length records) 2)
+                               (eq (first (first records)) :conversation)
+                               (eq (first (second records)) :message))
+                          "first persistence atomically publishes header and record"))
            (conversation-append-provider-item conversation assistant-item)
            (conversation-append-tool-result
             conversation "call-1" "lisp.eval" "42" t)

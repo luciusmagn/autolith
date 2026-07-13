@@ -299,6 +299,10 @@ Autolith persists four kinds of state:
 
 Each conversation is stored in a separate =.sexp= file.
 
+A fresh conversation remains in memory until it has a durable record. The
+header and first record are published together atomically, so starting and
+leaving an empty conversation does not create a conversation file.
+
 A conversation file is an append-only sequence of top-level
 S-expressions. It is not wrapped in one enclosing list.
 

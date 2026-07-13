@@ -95,7 +95,9 @@
            :condition (application-crash-condition-report condition)
            :backtrace safe-backtrace
            :conversation-id
-           (conversation-identifier (application-conversation application))
+           (let ((conversation (application-conversation application)))
+             (and (conversation-persisted-p conversation)
+                  (conversation-identifier conversation)))
            :rendered-sequence (application-rendered-sequence application)
            :git-commit commit
            :journal-position

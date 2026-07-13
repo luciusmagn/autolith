@@ -175,24 +175,28 @@
 (defun application-reconnect (application &key conversation-id)
   "Reconnect retained APPLICATION resources, optionally selecting CONVERSATION-ID."
   (let* ((previous (application-configuration application))
+         (retained-conversation (application-conversation application))
          (configuration
            (configuration-create
             :working-directory (uiop:getcwd)
             :model (configuration-model previous)
             :reasoning-effort (configuration-reasoning-effort previous)))
          (recovery-conversation-id
-           (uiop:getenv "AUTOLITH_RECOVERY_CONVERSATION_ID"))
-         (selected-conversation-id
-           (or conversation-id
-               (and (non-empty-string-p recovery-conversation-id)
-                    recovery-conversation-id)
-               (conversation-identifier
-                (application-conversation application))))
+           (let ((value (uiop:getenv "AUTOLITH_RECOVERY_CONVERSATION_ID")))
+             (and (non-empty-string-p value) value)))
          (overlay-failures (overlay-load-all configuration))
          (conversation
-           (conversation-load-by-id
-            configuration
-            selected-conversation-id))
+           (cond
+             (conversation-id
+              (conversation-load-by-id configuration conversation-id))
+             (recovery-conversation-id
+              (conversation-load-by-id configuration recovery-conversation-id))
+             ((conversation-persisted-p retained-conversation)
+              (conversation-load-by-id
+               configuration
+               (conversation-identifier retained-conversation)))
+             (t
+              (conversation-create configuration))))
          (provider (provider-create configuration))
          (worker (lisp-worker-create configuration))
          (registry (application-tool-registry application))
@@ -217,7 +221,7 @@
           (application-ui application) ui
           (application-rendered-sequence application)
           (if (and recovery-rendered-sequence
-                   (string= selected-conversation-id
+                   (string= (conversation-identifier conversation)
                             (or recovery-conversation-id "")))
               recovery-rendered-sequence
               0)

@@ -103,6 +103,10 @@ beside the mark above the model and workspace; internal conversation identifiers
 stay out of the header. Other styles use the basic terminal palette and
 emphasis. Set =NO_COLOR= to disable styling entirely.
 
+A fresh conversation stays in memory until its first durable record. Starting
+Autolith and leaving without a message or other saved state creates no
+conversation file and adds nothing to =/resume= or =/conversations=.
+
 Long agent turns are allowed to continue well beyond eight tool batches. Autolith
 warns the model as provider step 48 approaches, reserves step 64 for a
 tools-disabled text summary, and separately caps a turn at 256 individual tool

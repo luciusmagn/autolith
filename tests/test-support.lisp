@@ -21,6 +21,7 @@
                  (format nil "autolith-tests-~A/" (make-identifier))
                  (uiop:temporary-directory))))
          (source-root (asdf:system-source-directory :autolith)))
+    (uiop:ensure-all-directories-exist (list root))
     (make-instance 'configuration
                    :source-root source-root
                    :working-directory source-root

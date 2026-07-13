@@ -303,7 +303,8 @@
                                             :conversation active
                                             :ui (terminal-ui-create
                                                  :terminal terminal))))
-           (declare (ignore older))
+           (conversation-append-user-message older "older saved conversation")
+           (conversation-append-user-message active "active saved conversation")
            (let ((items (application--conversation-items application)))
              (test-assert (= (length items) 2)
                           "every saved conversation is offered")
