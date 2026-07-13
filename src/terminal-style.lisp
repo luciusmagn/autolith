@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Semantic Terminal Styles --
 
@@ -7,7 +7,7 @@
   '(member :plain :brand :user :tool :success :failure :notice :dim :hint
            :selected :strong :emphasis :code))
 
-;; Only basic ANSI palette entries and emphasis appear here, so Frob follows
+;; Only basic ANSI palette entries and emphasis appear here, so Autolith follows
 ;; the user's terminal theme instead of imposing absolute colors.
 (define-constant +terminal-style-table+
   '((:brand    . "1;35")

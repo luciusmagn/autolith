@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Active Application --
 
@@ -58,7 +58,7 @@
     :accessor application-presentation-counter
     :type integer
     :documentation "The identifier source for non-conversation terminal notices."))
-  (:documentation "The globally rooted logical state and reconnectable resources of Frob."))
+  (:documentation "The globally rooted logical state and reconnectable resources of Autolith."))
 
 (defvar *active-application* nil
   "The live application root retained in saved generations.")
@@ -74,7 +74,7 @@
     (:name "/new"           :argument nil :description "start a new conversation")
     (:name "/resume"        :argument nil :description "pick a saved conversation to resume")
     (:name "/conversations" :argument nil :description "list saved conversations")
-    (:name "/auth"          :argument nil :description "authenticate Frob with ChatGPT")
+    (:name "/auth"          :argument nil :description "authenticate Autolith with ChatGPT")
     (:name "/model"         :argument nil :description "pick the 5.6 model")
     (:name "/effort"        :argument nil :description "pick the reasoning effort")
     (:name "/goal"          :argument "OBJECTIVE" :description "set or view the session goal")
@@ -83,7 +83,7 @@
     (:name "/rollback"      :argument nil :description "pick a generation for recovery")
     (:name "/status"        :argument nil :description "show usage and rate limits")
     (:name "/compact"       :argument nil :description "summarize earlier context now")
-    (:name "/quit"          :argument nil :description "leave Frob"))
+    (:name "/quit"          :argument nil :description "leave Autolith"))
   :test #'equal
   :documentation "The interactive commands offered by completion and /help.")
 
@@ -124,7 +124,7 @@
   :documentation "The styled input prompt shown on the live editor row.")
 
 (define-constant +application-placeholder+
-  "Ask Frob anything. Type /help for commands."
+  "Ask Autolith anything. Type /help for commands."
   :test #'string=
   :documentation "The dim hint shown on the prompt row while input is empty.")
 
@@ -181,7 +181,7 @@
             :model (configuration-model previous)
             :reasoning-effort (configuration-reasoning-effort previous)))
          (recovery-conversation-id
-           (uiop:getenv "FROB_RECOVERY_CONVERSATION_ID"))
+           (uiop:getenv "AUTOLITH_RECOVERY_CONVERSATION_ID"))
          (selected-conversation-id
            (or conversation-id
                (and (non-empty-string-p recovery-conversation-id)
@@ -204,7 +204,7 @@
          (ui (application-terminal-ui-create))
          (recovery-rendered-sequence
            (handler-case
-               (let ((value (uiop:getenv "FROB_RECOVERY_RENDERED_SEQUENCE")))
+               (let ((value (uiop:getenv "AUTOLITH_RECOVERY_RENDERED_SEQUENCE")))
                  (and (non-empty-string-p value)
                       (parse-integer value :junk-allowed nil)))
              (error ()
@@ -388,7 +388,7 @@
             (string= (or (json-get item "role") "") "assistant"))
        (let ((text (response-item-assistant-text item)))
          (when text
-           (append (list (terminal-span ':brand "● frob")
+           (append (list (terminal-span ':brand "● autolith")
                          (terminal-span ':plain (string #\Newline)))
                    (application--markdown-body application text)))))
       ((string= (or type "") "function_call")
@@ -642,7 +642,7 @@ later conversation replay cannot duplicate their streamed transcript rows."
                            stream-renderer (application--markdown-renderer
                                             application))
                      (terminal-ui-set-status ui nil)
-                     (push (list (terminal-span ':brand "● frob")) rows))
+                     (push (list (terminal-span ':brand "● autolith")) rows))
                    (loop for newline = (position #\Newline stream-pending)
                          while newline
                          do (setf rows

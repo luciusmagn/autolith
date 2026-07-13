@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- OAuth Credentials --
 
@@ -104,9 +104,9 @@
     :documentation "The credential file read by this source."))
   (:documentation "A replaceable source of OAuth credentials."))
 
-(defclass frob-credential-source (credential-source)
+(defclass autolith-credential-source (credential-source)
   ()
-  (:documentation "Frob's private, writable S-expression credential store."))
+  (:documentation "Autolith's private, writable S-expression credential store."))
 
 (defclass codex-bootstrap-credential-source (credential-source)
   ()
@@ -144,14 +144,14 @@
                  (error condition))
                (sleep 0.02)))))
 
-(defmethod credential-source-load ((source frob-credential-source))
-  "Load Frob's private OAuth record from SOURCE."
+(defmethod credential-source-load ((source autolith-credential-source))
+  "Load Autolith's private OAuth record from SOURCE."
   (let ((pathname (credential-source-pathname source)))
     (when (probe-file pathname)
       (let ((record (read-portable-form pathname)))
         (unless (and (listp record) (eq (first record) :oauth))
           (error 'authentication-error
-                 :message (format nil "Invalid Frob credential record at ~A." pathname)))
+                 :message (format nil "Invalid Autolith credential record at ~A." pathname)))
         (let ((access-token (getf (rest record) :access-token))
               (account-id (getf (rest record) :account-id)))
           (when (and (non-empty-string-p access-token)
@@ -195,9 +195,9 @@
         (error ()
           nil)))))
 
-(defmethod credential-source-save ((source frob-credential-source)
+(defmethod credential-source-save ((source autolith-credential-source)
                                    (credentials oauth-credentials))
-  "Atomically save CREDENTIALS to Frob's private store with mode 0600."
+  "Atomically save CREDENTIALS to Autolith's private store with mode 0600."
   (let* ((pathname (credential-source-pathname source))
          (directory (uiop:pathname-directory-pathname pathname))
          (temporary (merge-pathnames
@@ -240,15 +240,15 @@
   ((primary-source
     :initarg :primary-source
     :reader credential-manager-primary-source
-    :type frob-credential-source
-    :documentation "Frob's writable credential source.")
+    :type autolith-credential-source
+    :documentation "Autolith's writable credential source.")
    (bootstrap-source
     :initarg :bootstrap-source
     :reader credential-manager-bootstrap-source
     :type codex-bootstrap-credential-source
     :documentation "The optional read-only Codex bootstrap source.")
    (refresh-lock
-    :initform (make-lock "Frob OAuth refresh")
+    :initform (make-lock "Autolith OAuth refresh")
     :reader credential-manager-refresh-lock
     :documentation "The in-process serialization lock for token rotation.")
    (account-id
@@ -263,7 +263,7 @@
   "Create a credential manager using CONFIGURATION's private and bootstrap paths."
   (make-instance 'credential-manager
                  :primary-source (make-instance
-                                  'frob-credential-source
+                                  'autolith-credential-source
                                   :pathname (configuration-auth-path configuration))
                  :bootstrap-source (make-instance
                                     'codex-bootstrap-credential-source
@@ -280,7 +280,7 @@
                (not allow-change)
                (not (string= expected actual)))
       (error 'authentication-error
-             :message "The ChatGPT credential account changed during this Frob session."))
+             :message "The ChatGPT credential account changed during this Autolith session."))
     (setf (credential-manager-account-id manager) actual)
     credentials))
 
@@ -288,10 +288,10 @@
     (credential-manager oauth-credentials)
     oauth-credentials)
 (defun credential-manager-import-bootstrap (manager bootstrap)
-  "Copy BOOTSTRAP's bounded access token once into Frob's private store."
+  "Copy BOOTSTRAP's bounded access token once into Autolith's private store."
   (when (credentials-needs-refresh-p bootstrap :window 0)
     (error 'credentials-unavailable
-           :message "The Codex bootstrap access token expired; run frob --auth."
+           :message "The Codex bootstrap access token expired; run autolith --auth."
            :searched-paths
            (list (credential-source-pathname
                   (credential-manager-bootstrap-source manager)))))
@@ -313,7 +313,7 @@
 
 (-> credential-manager-load (credential-manager) oauth-credentials)
 (defun credential-manager-load (manager)
-  "Load only Frob-owned credentials, importing Codex once when no store exists."
+  "Load only Autolith-owned credentials, importing Codex once when no store exists."
   (let ((primary (credential-source-load
                   (credential-manager-primary-source manager))))
     (cond
@@ -327,7 +327,7 @@
              (credential-manager-import-bootstrap manager bootstrap)
              (error 'credentials-unavailable
                     :message
-                    "No ChatGPT OAuth credentials are available; run frob --auth."
+                    "No ChatGPT OAuth credentials are available; run autolith --auth."
                     :searched-paths
                     (list (credential-source-pathname
                            (credential-manager-primary-source manager))
@@ -354,7 +354,7 @@
     (credential-manager oauth-credentials string)
     oauth-credentials)
 (defun oauth-refresh-response-credentials (manager credentials body)
-  "Validate refresh BODY and return account-continuous Frob credentials."
+  "Validate refresh BODY and return account-continuous Autolith credentials."
   (handler-case
       (let ((response (json-decode body)))
         (unless (json-object-p response)
@@ -403,7 +403,7 @@
 
 (-> credential-manager-refresh (credential-manager oauth-credentials) oauth-credentials)
 (defun credential-manager-refresh (manager stale-credentials)
-  "Refresh STALE-CREDENTIALS, publishing rotated tokens only to Frob's store."
+  "Refresh STALE-CREDENTIALS, publishing rotated tokens only to Autolith's store."
   (with-lock-held ((credential-manager-refresh-lock manager))
     (let* ((primary-source (credential-manager-primary-source manager))
            (bootstrap-pathname
@@ -420,7 +420,7 @@
       (when (equal (oauth-credentials-source-path credentials)
                    bootstrap-pathname)
         (error 'token-refresh-failed
-               :message "Codex bootstrap credentials are never refreshed by Frob."
+               :message "Codex bootstrap credentials are never refreshed by Autolith."
                :status nil
                :response nil))
       (when (and latest
@@ -430,7 +430,7 @@
         (return-from credential-manager-refresh credentials))
       (unless (non-empty-string-p refresh-token)
         (error 'token-refresh-failed
-               :message "These credentials cannot refresh; run frob --auth."
+               :message "These credentials cannot refresh; run autolith --auth."
                :status nil
                :response nil))
       (handler-case

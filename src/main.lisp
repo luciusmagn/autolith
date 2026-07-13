@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Application Lifecycle --
 
@@ -8,9 +8,8 @@
   (let ((configuration (application-configuration application))
         (conversation (application-conversation application)))
     (append
-     (list (terminal-span :brand "█▀▀ █▀█ █▀█ █▄▄")
-           (terminal-span :dim (format nil "  v~A~%" +frob-version+))
-           (terminal-span :brand (format nil "█▀  █▀▄ █▄█ █▄█~%"))
+     (list (terminal-span :brand "AUTOLITH")
+           (terminal-span :dim (format nil "  v~A~%" +autolith-version+))
            (terminal-span :plain (format nil "~%")))
      (application--field-spans "model"
                                (format nil "~A (effort ~A)"
@@ -25,10 +24,10 @@
                                  configuration)))
      (list (terminal-span
             :notice
-            (format nil "~%  Frob executes model-generated code with your ~
+            (format nil "~%  Autolith executes model-generated code with your ~
                          user privileges.~%  It is not a security sandbox."))))))
 
-(-> application-handle-expected-error (application frob-error) null)
+(-> application-handle-expected-error (application autolith-error) null)
 (defun application-handle-expected-error (application condition)
   "Present expected CONDITION without abandoning APPLICATION's active path."
   (terminal-ui-set-status (application-ui application) nil)
@@ -40,7 +39,7 @@
     :style ':failure
     :header "✗ error"
     :body (if (typep condition 'credentials-unavailable)
-              (format nil "~A~%Use /auth to authenticate Frob directly."
+              (format nil "~A~%Use /auth to authenticate Autolith directly."
                       condition)
               (format nil "~A" condition))))
   nil)
@@ -112,7 +111,7 @@
                               (application-raise-fatal application
                                                        condition
                                                        signal-backtrace))
-                            (frob-error (condition)
+                            (autolith-error (condition)
                               (application-handle-expected-error application condition))
                             (serious-condition (condition)
                               (application-raise-fatal application
@@ -137,31 +136,31 @@
 (-> main-usage () string)
 (defun main-usage ()
   "Return the command-line usage text."
-  "Usage: frob [--resume ID]
-       frob --auth
-       frob --version
-       frob --recovery [--generation ID | --list]")
+  "Usage: autolith [--resume ID]
+       autolith --auth
+       autolith --version
+       autolith --recovery [--generation ID | --list]")
 
 (-> main-authenticate (configuration) null)
 (defun main-authenticate (configuration)
-  "Run Frob-owned device authentication without starting the conversation UI."
+  "Run Autolith-owned device authentication without starting the conversation UI."
   (configuration-ensure-directories configuration)
   (device-authentication-login
    (device-authentication-client-create)
    (credential-manager-create configuration)
    :stream *standard-output*
    :open-browser-p t)
-  (format t "~&ChatGPT authentication was saved by Frob.~%")
+  (format t "~&ChatGPT authentication was saved by Autolith.~%")
   nil)
 
 (-> main-dispatch (list) null)
 (defun main-dispatch (arguments)
-  "Dispatch validated Frob ARGUMENTS inside the active process."
+  "Dispatch validated Autolith ARGUMENTS inside the active process."
   (cond
     ((member "--worker" arguments :test #'string=)
      (worker-main))
     ((member "--version" arguments :test #'string=)
-     (format t "frob ~A~%" +frob-version+))
+     (format t "autolith ~A~%" +autolith-version+))
     ((or (member "--help" arguments :test #'string=)
          (member "-h" arguments :test #'string=))
      (format t "~A~%" (main-usage)))
@@ -182,7 +181,7 @@
                                            :conversation-id resume-id)
                     (application-create configuration :conversation-id resume-id)))
           (when (and (member "--simulate-crash" arguments :test #'string=)
-                     (not (non-empty-string-p (uiop:getenv "FROB_RECOVERED"))))
+                     (not (non-empty-string-p (uiop:getenv "AUTOLITH_RECOVERED"))))
             (let ((capsule
                     (application-write-crash-capsule
                      *active-application*
@@ -195,22 +194,22 @@
               (application-run *active-application*)
             (rollback-requested (condition)
               (format *error-output*
-                      "Frob is rolling back to retained generation ~A.~%"
+                      "Autolith is rolling back to retained generation ~A.~%"
                       (rollback-requested-generation-id condition))
               (uiop:quit +main-rollback-recovery-status+))
             (fatal-control-path-error (condition)
               (format *error-output*
-                      "Frob entered recovery after a fatal error. Capsule: ~A~%"
+                      "Autolith entered recovery after a fatal error. Capsule: ~A~%"
                       (fatal-control-path-error-capsule-pathname condition))
               (uiop:quit +main-fatal-recovery-status+))))))))
   nil)
 
 (-> main (list) null)
 (defun main (arguments)
-  "Run the Frob command described by ARGUMENTS with stable exit classification."
+  "Run the Autolith command described by ARGUMENTS with stable exit classification."
   (handler-case
       (main-dispatch arguments)
-    (frob-error (condition)
-      (format *error-output* "Frob could not start: ~A~%" condition)
+    (autolith-error (condition)
+      (format *error-output* "Autolith could not start: ~A~%" condition)
       (uiop:quit 64)))
   nil)

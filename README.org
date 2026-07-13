@@ -1,10 +1,10 @@
-#+TITLE: Frob
+#+TITLE: Autolith
 #+SUBTITLE: A live, self-modifying Common Lisp agent
 #+STARTUP: content
 
 * What works
 
-Frob is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
+Autolith is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
 
 - talks directly to the ChatGPT Codex subscription Responses service;
 - defaults to =gpt-5.6-sol= with user-visible reasoning effort =ultra=;
@@ -17,15 +17,15 @@ Frob is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
 - keeps a separate pristine recovery core; and
 - can boot a retained generation against its exact Git revision with fallback.
 
-The implementation follows [[file:frob-minimal-technical-spec.org][the technical specification]]. The object and
+The implementation follows [[file:autolith-minimal-technical-spec.org][the technical specification]]. The object and
 file boundaries are summarized in [[file:docs/architecture.org][the architecture note]].
 
 * Requirements and setup
 
 The supported target is Linux x86-64 with SBCL, Git, OpenSSL, and Quicklisp.
-The tracked =sbcl.version= pins SBCL 2.6.4. The launcher honors =FROB_SBCL=;
+The tracked =sbcl.version= pins SBCL 2.6.4. The launcher honors =AUTOLITH_SBCL=;
 when selecting another executable, invoke setup as
-="$FROB_SBCL" --script bootstrap= so the same runtime performs validation.
+="$AUTOLITH_SBCL" --script bootstrap= so the same runtime performs validation.
 
 Dependencies are pinned by =qlfile= and =qlfile.lock=. With Quicklisp already
 installed at =~/quicklisp=, run:
@@ -37,57 +37,57 @@ installed at =~/quicklisp=, run:
 
 =bootstrap= installs Qlot through Quicklisp, materializes the locked project
 dependencies under the ignored =.qlot/= directory, and builds a small pristine
-recovery core under =${XDG_DATA_HOME:-~/.local/share}/frob/recovery/=. The core
+recovery core under =${XDG_DATA_HOME:-~/.local/share}/autolith/recovery/=. The core
 and its manifest are installed read-only. The launcher and check script prefer
 the project-local dependency environment, then fall back to the user's Quicklisp.
 
 On systems where OpenSSL is outside the dynamic loader's normal search path,
-make its library directory visible to CFFI. Frob automatically adds
+make its library directory visible to CFFI. Autolith automatically adds
 =~/.guix-profile/lib/= when it exists.
 
 To make the development checkout available in =PATH=:
 
 #+BEGIN_SRC sh
 mkdir -p ~/.local/bin
-ln -sfn "$PWD/bin/frob" ~/.local/bin/frob
+ln -sfn "$PWD/bin/autolith" ~/.local/bin/autolith
 #+END_SRC
 
 * Authentication
 
-Frob stores its own credentials in
-=${XDG_STATE_HOME:-~/.local/state}/frob/auth.sexp= with mode 0600.
+Autolith stores its own credentials in
+=${XDG_STATE_HOME:-~/.local/state}/autolith/auth.sexp= with mode 0600.
 
-For the initial transition, Frob may read =~/.codex/auth.json= once as a read-only
+For the initial transition, Autolith may read =~/.codex/auth.json= once as a read-only
 bootstrap source when its private store is absent. It copies only the bounded
-access token and account ID into Frob state. It never imports or spends Codex's
+access token and account ID into Autolith state. It never imports or spends Codex's
 refresh token, never reads Codex again while its private store exists, never
 writes that file, and never launches Codex. The imported access token cannot be
-renewed. To perform Frob's proper device flow, run:
+renewed. To perform Autolith's proper device flow, run:
 
 #+BEGIN_SRC sh
-frob --auth
+autolith --auth
 #+END_SRC
 
-The same flow is available as =/auth= inside the application. Frob prints the
+The same flow is available as =/auth= inside the application. Autolith prints the
 public verification URL and one-time code, tries to open a browser, polls the
 device endpoint, performs the PKCE exchange, and writes only its private store.
 
-* Using Frob
+* Using Autolith
 
 Start a new conversation with:
 
 #+BEGIN_SRC sh
-frob
+autolith
 #+END_SRC
 
 The interface stays on the primary screen. Completed transcript rows are emitted
 once and remain in ordinary terminal scrollback. Only the bounded live region,
 holding the unfinished status row, the padded prompt, and command suggestions,
 is repainted. Model and pasted text are sanitized before they reach the
-terminal. Styling uses only the basic terminal palette and emphasis, so Frob
+terminal. Styling uses only the basic terminal palette and emphasis, so Autolith
 follows the terminal theme; set =NO_COLOR= to disable styling entirely.
 
-Long agent turns are allowed to continue well beyond eight tool batches. Frob
+Long agent turns are allowed to continue well beyond eight tool batches. Autolith
 warns the model as provider step 48 approaches, reserves step 64 for a
 tools-disabled text summary, and separately caps a turn at 256 individual tool
 calls. Reaching a spending guard leaves the application and conversation usable;
@@ -102,7 +102,7 @@ name when it still needs an argument. The commands are:
 /new            start a new conversation
 /resume         pick a saved conversation to resume
 /conversations  list saved conversations
-/auth           authenticate Frob with ChatGPT
+/auth           authenticate Autolith with ChatGPT
 /model          pick the 5.6 model
 /effort         pick the reasoning effort
 /goal OBJECTIVE set or view the session goal
@@ -111,7 +111,7 @@ name when it still needs an argument. The commands are:
 /rollback       start a retained generation through recovery
 /status         show usage and rate limits
 /compact        summarize earlier context now
-/quit           leave Frob
+/quit           leave Autolith
 #+END_EXAMPLE
 
 =/resume=, =/rollback=, and =/effort= open an interactive picker listing
@@ -120,37 +120,37 @@ remember the directory they were started in, and the picker shows it.
 
 =/goal OBJECTIVE= sets a session goal in the spirit of Codex goals. The goal
 rides along every provider request as transient context, and after each of
-your messages Frob automatically continues working toward it for up to eight
+your messages Autolith automatically continues working toward it for up to eight
 extra turns before pausing. The model marks genuine completion with a literal
 =[GOAL-COMPLETE]= token. =/goal= alone shows the state, =/goal pause= and
 =/goal resume= control automatic continuation, and =/goal clear= removes the
 goal. Goals persist with their conversation across =/resume=.
 
 =/model= switches between the 5.6 family models (sol, luna, terra) for the
-current session; =FROB_MODEL= still selects any model at startup.
+current session; =AUTOLITH_MODEL= still selects any model at startup.
 
 Context compaction keeps long conversations going. When the newest provider
-step reports total token usage at or beyond the compaction limit, Frob asks
+step reports total token usage at or beyond the compaction limit, Autolith asks
 the model for a context checkpoint summary, appends it as a durable
 =(:summary ...)= record, and replaces the request projection with one bridge
 message carrying that summary; the durable conversation file keeps everything.
 The 5.6 family models have a 372000 token context window (read from the live
 model catalog), and compaction triggers at 80 percent of the window by
-default. Set =FROB_COMPACTION_THRESHOLD= to a percentage between 1 and 95 to
-compact earlier or later, and =FROB_CONTEXT_WINDOW= to override the window
+default. Set =AUTOLITH_COMPACTION_THRESHOLD= to a percentage between 1 and 95 to
+compact earlier or later, and =AUTOLITH_CONTEXT_WINDOW= to override the window
 for unlisted models. =/compact= forces a compaction immediately, and
 =/status= shows how full the context currently is.
 
 =/status= reports the model, token usage, and subscription rate limit windows
 parsed from provider responses. Requests never ask for the provider's priority
-service tier, so Frob always uses the standard path that drains rate limits
+service tier, so Autolith always uses the standard path that drains rate limits
 slowest. Hosted web search is requested in cached mode by default; set
-=FROB_WEB_SEARCH= to =live= or =disabled= to change it.
+=AUTOLITH_WEB_SEARCH= to =live= or =disabled= to change it.
 
 Use a double slash to send a user message that begins with a literal slash.
 
 Conversations are append-only readable forms under
-=${XDG_DATA_HOME:-~/.local/share}/frob/conversations/=. A truncated final form is
+=${XDG_DATA_HOME:-~/.local/share}/autolith/conversations/=. A truncated final form is
 ignored after a crash; malformed complete records are rejected.
 
 * Workspace, Lisp, and self tools
@@ -164,7 +164,7 @@ They run in the active process but touch only files and subprocesses, never
 the Lisp heap, so the model does not need =self.eval= to look around. The
 stable launcher and recovery artifacts stay read-only through these tools.
 
-=AGENTS.md= files are discovered the way Codex discovers them: Frob walks up
+=AGENTS.md= files are discovered the way Codex discovers them: Autolith walks up
 from the workspace to the nearest =.git= project root, then includes every
 =AGENTS.md= from the root down to the workspace, root first, bounded and
 refreshed on every request. Without a project root only the workspace file
@@ -181,18 +181,18 @@ checkpoint, list generations, and request immediate rollback.
 
 Durable self-modifications never patch the tracked repository. Instead,
 =self.persist-definition= writes each complete top-level definition to an
-overlay file under =${XDG_DATA_HOME:-~/.local/share}/frob/overlays/=, and every
+overlay file under =${XDG_DATA_HOME:-~/.local/share}/autolith/overlays/=, and every
 startup loads the overlays after the tracked system. A broken overlay is
 skipped with a visible notice instead of blocking startup.
 
-Running Frob with its own repository as the workspace turns it into an
-ordinary development agent for Frob: =fs.write= and =fs.edit= then work on
+Running Autolith with its own repository as the workspace turns it into an
+ordinary development agent for Autolith: =fs.write= and =fs.edit= then work on
 the tracked source like on any project, with only the stable launcher and
 recovery artifacts read-only. From any other workspace those tools refuse
-Frob's own source entirely. Repository commits stay with the user;
+Autolith's own source entirely. Repository commits stay with the user;
 =self.commit= remains for explicitly user-directed commits.
 
-Frob keeps all project definitions in one =FROB= package. Files and CLOS
+Autolith keeps all project definitions in one =AUTOLITH= package. Files and CLOS
 protocols express subsystem boundaries without scoped packages.
 
 * Generations and recovery
@@ -211,8 +211,8 @@ matching core and source revision immediately.
 List or boot retained generations with:
 
 #+BEGIN_SRC sh
-frob --recovery --list
-frob --recovery --generation GENERATION-ID
+autolith --recovery --list
+autolith --recovery --generation GENERATION-ID
 #+END_SRC
 
 Recovery normally runs from the separately built pristine core without loading
@@ -239,7 +239,7 @@ build, and architecture. Source remains authoritative for clean rebuilds.
 
 * Security status
 
-Frob is not a security sandbox. It executes model-generated Lisp and external
+Autolith is not a security sandbox. It executes model-generated Lisp and external
 commands with the privileges of the user running it. Process boundaries,
 restricted tool surfaces, append-only records, Git, and retained generations
 reduce accidental permanent damage; they do not contain malicious code.

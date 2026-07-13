@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Fundamental Types --
 
@@ -43,5 +43,5 @@
   '(satisfies json-object-p))
 
 (deftype json-value ()
-  "A value accepted by Frob's JSON codec."
+  "A value accepted by Autolith's JSON codec."
   '(or null string number symbol vector list json-object))

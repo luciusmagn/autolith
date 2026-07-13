@@ -1,14 +1,14 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Test Entry --
 
 (-> run-tests () boolean)
 (defun run-tests ()
-  "Run Frob's dependency-free unit tests and return true on success."
+  "Run Autolith's dependency-free unit tests and return true on success."
   (setf *test-count* 0)
   (let ((configuration (configuration-create
-                        :source-root (asdf:system-source-directory :frob)
-                        :working-directory (asdf:system-source-directory :frob))))
+                        :source-root (asdf:system-source-directory :autolith)
+                        :working-directory (asdf:system-source-directory :autolith))))
     (test-assert (string= (configuration-model configuration) "gpt-5.6-sol")
                  "the default model is gpt-5.6-sol")
     (test-assert (string= (configuration-model
@@ -64,5 +64,5 @@
     (run-terminal-tests)
     (run-markdown-tests)
     (run-application-tests))
-  (format t "~&~:D Frob tests passed.~%" *test-count*)
+  (format t "~&~:D Autolith tests passed.~%" *test-count*)
   t)

@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Workspace Tool Classes --
 
@@ -56,9 +56,9 @@
   "Return true when PATH is off limits to workspace writes.
 
 The stable launcher and recovery artifacts are always read-only. The rest
-of Frob's tracked source is writable only when the workspace itself is
-inside the source root, meaning the user deliberately runs Frob as a
-development agent on its own repository. From any other workspace Frob
+of Autolith's tracked source is writable only when the workspace itself is
+inside the source root, meaning the user deliberately runs Autolith as a
+development agent on its own repository. From any other workspace Autolith
 never reaches into its own source, and live self-modification persists
 through overlays instead."
   (let* ((configuration (tool-context-configuration context))
@@ -87,7 +87,7 @@ through overlays instead."
         (format nil "~A is a stable launcher or recovery artifact and stays ~
                      read-only."
                 path)
-        (format nil "~A is Frob's own source repository. Run Frob with that ~
+        (format nil "~A is Autolith's own source repository. Run Autolith with that ~
                      repository as the workspace to develop it, and use ~
                      self.persist-definition for live self changes."
                 path))))
@@ -308,7 +308,7 @@ through overlays instead."
       (error 'tool-error
              :message "shell.run requires a non-empty command."
              :tool-name "shell.run"))
-    (uiop:with-temporary-file (:pathname output-path :prefix "frob-shell")
+    (uiop:with-temporary-file (:pathname output-path :prefix "autolith-shell")
       (let* ((process (uiop:launch-program
                        command
                        :output output-path

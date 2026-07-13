@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Provider Events --
 
@@ -205,7 +205,7 @@
      nil)))
 
 ;; Modeled on the Codex context checkpoint compaction instructions at
-;; reference commit 5c19155c, restated for Frob.
+;; reference commit 5c19155c, restated for Autolith.
 (define-constant +compaction-instructions+
   "You are performing a context checkpoint compaction. Write a handoff summary for another model that will resume this conversation. Include the current progress and key decisions, important context, constraints, and user preferences, what remains to be done as clear next steps, and any critical data or references needed to continue. Be concise, structured, and complete enough that no earlier context is required."
   :test #'string=
@@ -274,7 +274,7 @@ at reference commit 5c19155c."
      &key (turn-budget-state :normal) goal-context compaction-p)
   "Build the complete stateless Sol Responses Lite request for CONVERSATION.
 
-The request never carries a service_tier, keeping Frob on the standard path.
+The request never carries a service_tier, keeping Autolith on the standard path.
 GOAL-CONTEXT rides as one transient developer message that is never persisted
 in the durable conversation, mirroring the budget reminders. COMPACTION-P
 builds a tool-free summarization request whose trailing developer message
@@ -328,9 +328,9 @@ asks for a context checkpoint handoff."
 
 (-> provider-user-agent () string)
 (defun provider-user-agent ()
-  "Return an honest, stable user agent for direct Frob provider requests."
-  (format nil "frob/~A (~A ~A; ~A)"
-          +frob-version+
+  "Return an honest, stable user agent for direct Autolith provider requests."
+  (format nil "autolith/~A (~A ~A; ~A)"
+          +autolith-version+
           (software-type)
           (software-version)
           (machine-type)))
@@ -355,7 +355,7 @@ asks for a context checkpoint handoff."
              (cons "Content-Type" "application/json")
              (cons "Accept" "text/event-stream")
              (cons "x-openai-internal-codex-responses-lite" "true")
-             (cons "originator" "frob")
+             (cons "originator" "autolith")
              (cons "User-Agent" (provider-user-agent))
              (cons "session-id" (provider-session-id provider))
              (cons "thread-id" thread-id)
@@ -758,6 +758,6 @@ asks for a context checkpoint handoff."
                (when (= attempt-number 3)
                  (error 'authentication-error
                         :message
-                        "ChatGPT rejected Frob's credentials after a bounded refresh.")))))
+                        "ChatGPT rejected Autolith's credentials after a bounded refresh.")))))
   (error 'authentication-error
          :message "ChatGPT authentication retry ended unexpectedly."))

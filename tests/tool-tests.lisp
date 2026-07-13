@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Subsystem Tests --
 
@@ -106,12 +106,12 @@
                (test-assert (search "sample.txt" (tool-result-content result))
                             "fs.list shows files with their sizes"))
              (let ((result (run "shell" "run"
-                                "command" "echo frob-shell-works && exit 3")))
+                                "command" "echo autolith-shell-works && exit 3")))
                (test-assert (tool-result-success-p result)
                             "shell.run reports command completion")
                (test-assert (search "exit 3" (tool-result-content result))
                             "shell.run reports nonzero exit codes")
-               (test-assert (search "frob-shell-works"
+               (test-assert (search "autolith-shell-works"
                                     (tool-result-content result))
                             "shell.run captures combined output"))
              (let ((result (run "shell" "run"
@@ -157,7 +157,7 @@
                                 (run "fs" "write"
                                      "path" (namestring
                                              (merge-pathnames
-                                              "bin/frob"
+                                              "bin/autolith"
                                               (configuration-source-root
                                                configuration)))
                                      "content" "overwritten")))
@@ -169,7 +169,7 @@
                                               "recovery/runtime.lisp"
                                               (configuration-source-root
                                                configuration)))
-                                     "old-text" "frob"
+                                     "old-text" "autolith"
                                      "new-text" "borf")))
                           "fs.edit refuses recovery artifacts")
              (let ((repo-root (merge-pathnames "fake-repo/" root))
@@ -200,17 +200,17 @@
                    (write-via repo-root
                               (namestring (merge-pathnames "note.txt"
                                                            repo-root))))
-                  "Frob develops its own repository from inside it")
+                  "Autolith develops its own repository from inside it")
                  (test-assert
                   (not (tool-result-success-p
                         (write-via outside-root
                                    (namestring (merge-pathnames "reach.txt"
                                                                 repo-root)))))
-                  "other workspaces cannot reach into Frob's repository")
+                  "other workspaces cannot reach into Autolith's repository")
                  (test-assert
                   (not (tool-result-success-p
                         (write-via repo-root
-                                   (namestring (merge-pathnames "bin/frob"
+                                   (namestring (merge-pathnames "bin/autolith"
                                                                 repo-root)))))
                   "launcher artifacts stay read-only even while developing")))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))

@@ -1,10 +1,10 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Device Authentication Constants --
 
 (define-constant +openai-oauth-issuer+ "https://auth.openai.com"
   :test #'string=
-  :documentation "The issuer for Frob-owned ChatGPT device authentication.")
+  :documentation "The issuer for Autolith-owned ChatGPT device authentication.")
 
 (defconstant +device-authentication-timeout+ 900
   "The maximum number of seconds allowed for device authorization.")
@@ -262,7 +262,7 @@
 (defun device-authentication-display-code (authorization stream)
   "Display AUTHORIZATION's public URL and code on STREAM, then flush it."
   (format stream
-          "~&Sign in with ChatGPT:~%  Open: ~A~%  Code: ~A~%~%The code expires in 15 minutes. Continue only if you started this login in Frob.~%"
+          "~&Sign in with ChatGPT:~%  Open: ~A~%  Code: ~A~%~%The code expires in 15 minutes. Continue only if you started this login in Autolith.~%"
           (device-authorization-verification-url authorization)
           (device-authorization-user-code authorization))
   (finish-output stream)
@@ -319,9 +319,9 @@
 
 (-> device-authentication--user-agent () string)
 (defun device-authentication--user-agent ()
-  "Return the honest Frob user agent sent to device endpoints."
-  (format nil "frob/~A (~A ~A; ~A)"
-          +frob-version+
+  "Return the honest Autolith user agent sent to device endpoints."
+  (format nil "autolith/~A (~A ~A; ~A)"
+          +autolith-version+
           (software-type)
           (software-version)
           (machine-type)))

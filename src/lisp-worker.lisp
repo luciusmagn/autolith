@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Worker Process --
 
@@ -29,7 +29,7 @@
     :type integer
     :documentation "The next protocol request identifier.")
    (lock
-    :initform (make-lock "Frob Lisp worker")
+    :initform (make-lock "Autolith Lisp worker")
     :reader lisp-worker-lock
     :documentation "The lock serializing worker protocol requests."))
   (:documentation "A persistent but disposable, heap-isolated SBCL worker."))
@@ -51,7 +51,7 @@
   (unless (lisp-worker-running-p worker)
     (let* ((configuration (lisp-worker-configuration worker))
            (worker-launcher (merge-pathnames
-                             "bin/frob-active"
+                             "bin/autolith-active"
                              (configuration-source-root configuration)))
            (process
              (uiop:launch-program
@@ -69,7 +69,7 @@
                  (error 'worker-error
                         :message "The Lisp worker exited before its handshake."
                         :tool-name "lisp.worker"))
-            until (string= line "(:FROB-WORKER :VERSION 1)"))))
+            until (string= line "(:AUTOLITH-WORKER :VERSION 1)"))))
   worker)
 
 (-> lisp-worker-stop (lisp-worker) null)
@@ -225,7 +225,7 @@
 (defun worker-read-form (source)
   "Read exactly one executable Common Lisp form from SOURCE."
   (let ((*read-eval* t)
-        (*package* (find-package '#:frob))
+        (*package* (find-package '#:autolith))
         (end-marker (cons nil nil)))
     (multiple-value-bind (form position)
         (read-from-string source t nil)
@@ -254,7 +254,7 @@
                     (*error-output* stream)
                     (*trace-output* stream)
                     (*debug-io* stream)
-                    (*package* (find-package '#:frob)))
+                    (*package* (find-package '#:autolith)))
                 (setf result-values
                       (multiple-value-list (funcall function)))))))
       (values (mapcar #'worker-render-value result-values) output))))
@@ -321,11 +321,11 @@
 (-> worker-main () null)
 (defun worker-main ()
   "Run the isolated worker's line-oriented S-expression protocol until EOF."
-  (let ((*package* (find-package '#:frob))
+  (let ((*package* (find-package '#:autolith))
         (*read-eval* nil)
         (*print-readably* t)
         (*print-circle* t))
-    (prin1 '(:frob-worker :version 1))
+    (prin1 '(:autolith-worker :version 1))
     (terpri)
     (finish-output)
     (loop for request = (read *standard-input* nil :end)

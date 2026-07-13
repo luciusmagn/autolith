@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Minimal Test Harness --
 
@@ -18,9 +18,9 @@
   "Return an isolated configuration rooted in a fresh temporary directory."
   (let* ((root (uiop:ensure-directory-pathname
                 (merge-pathnames
-                 (format nil "frob-tests-~A/" (make-identifier))
+                 (format nil "autolith-tests-~A/" (make-identifier))
                  (uiop:temporary-directory))))
-         (source-root (asdf:system-source-directory :frob)))
+         (source-root (asdf:system-source-directory :autolith)))
     (make-instance 'configuration
                    :source-root source-root
                    :working-directory source-root
@@ -40,7 +40,7 @@
 (-> test-configuration-for-source-root (pathname) configuration)
 (defun test-configuration-for-source-root (source-root)
   "Return an isolated configuration whose tracked source is SOURCE-ROOT."
-  (let ((state-root (merge-pathnames ".frob-test-state/" source-root)))
+  (let ((state-root (merge-pathnames ".autolith-test-state/" source-root)))
     (make-instance 'configuration
                    :source-root source-root
                    :working-directory source-root

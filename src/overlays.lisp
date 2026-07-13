@@ -1,10 +1,10 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Self-Modification Overlays --
 
 ;;; Durable self-modifications persist here as complete top-level definitions
 ;;; in one file per definition, loaded at startup after the tracked system.
-;;; The tracked source repository is never patched by Frob itself.
+;;; The tracked source repository is never patched by Autolith itself.
 
 (-> overlay-pathname (configuration string) pathname)
 (defun overlay-pathname (configuration target)
@@ -67,7 +67,7 @@ inside this wrapper's dynamic extent."
                             :if-exists :supersede
                             :if-does-not-exist :create
                             :external-format :utf-8)
-      (format stream ";;;; Frob overlay for ~A~%" target)
+      (format stream ";;;; Autolith overlay for ~A~%" target)
       (format stream ";;;; Written ~D. Loaded at startup after the system.~2%"
               (get-universal-time))
       (if (overlay--constant-target-p target)
@@ -91,7 +91,7 @@ skipped so the remaining overlays and the application still start."
                               #'string<
                               :key #'namestring))
         (handler-case
-            (let ((*package* (find-package '#:frob)))
+            (let ((*package* (find-package '#:autolith)))
               (load pathname))
           (error (condition)
             (push (cons pathname (format nil "~A" condition))

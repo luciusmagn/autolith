@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Subsystem Tests --
 
@@ -114,7 +114,7 @@
                             "cached web search forbids live web access"))
              (test-assert
               (string= (json-get (aref input 1) "role") "developer")
-              "the Frob system prompt is the second input item")
+              "the Autolith system prompt is the second input item")
              (test-assert (string= (json-get (aref input 2) "role") "user")
                           "conversation history follows the developer prefix"))
            (let* ((warning-request

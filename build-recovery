@@ -16,7 +16,7 @@
           (or (uiop:getenv "XDG_DATA_HOME")
               (merge-pathnames ".local/share/" home))))
        (default-core
-         (merge-pathnames "frob/recovery/frob-recovery.core" data-home))
+         (merge-pathnames "autolith/recovery/autolith-recovery.core" data-home))
        (core-pathname
          (pathname
           (or (if child-p (second arguments) (first arguments))
@@ -39,8 +39,8 @@
                (error "Recovery build needs Quicklisp at ~A." quicklisp-setup))
              (load quicklisp-setup)
              (uiop:symbol-call '#:ql '#:quickload :serapeum :silent t)
-             (let ((package (or (find-package "FROB")
-                                (make-package "FROB" :use '("CL")))))
+             (let ((package (or (find-package "AUTOLITH")
+                                (make-package "AUTOLITH" :use '("CL")))))
                (export (mapcar (lambda (name) (intern name package))
                                '("RECOVERY-MAIN" "RECOVERY-IMAGE-SAVE"))
                        package))
@@ -64,7 +64,7 @@
              (let* ((paths '("build-recovery"
                              "recovery/runtime.lisp"
                              "recovery/launcher.lisp"
-                             "bin/frob"
+                             "bin/autolith"
                              "check"
                              "qlfile.lock"
                              "sbcl.version"))
@@ -78,7 +78,7 @@
                      :builder-blob (source-blob "build-recovery")
                      :source-launcher-blob
                      (source-blob "recovery/launcher.lisp")
-                     :stable-launcher-blob (source-blob "bin/frob")
+                     :stable-launcher-blob (source-blob "bin/autolith")
                      :check-blob (source-blob "check")
                      :dependency-lock-blob (source-blob "qlfile.lock")
                      :sbcl-version-blob (source-blob "sbcl.version"))))
@@ -152,13 +152,13 @@
     (if child-p
         (progn
           (load-recovery-source)
-          (uiop:symbol-call '#:frob '#:recovery-image-save core-pathname))
+          (uiop:symbol-call '#:autolith '#:recovery-image-save core-pathname))
         (let* ((directory (uiop:pathname-directory-pathname core-pathname))
                (temporary
                  (merge-pathnames
-                  (format nil ".frob-recovery.~D.core" (sb-posix:getpid))
+                  (format nil ".autolith-recovery.~D.core" (sb-posix:getpid))
                   directory))
-               (sbcl-command (or (uiop:getenv "FROB_SBCL") "sbcl"))
+               (sbcl-command (or (uiop:getenv "AUTOLITH_SBCL") "sbcl"))
                (identity-before (source-identity)))
           (ensure-directories-exist core-pathname)
           (when (probe-file temporary)

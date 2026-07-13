@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Agent Events --
 
@@ -6,7 +6,7 @@
   :documentation "The final, tools-disabled provider step available to one user turn.")
 
 (define-constant +default-provider-step-warning+ 48
-  :documentation "The provider step at which Frob starts reminding the model to finish.")
+  :documentation "The provider step at which Autolith starts reminding the model to finish.")
 
 (define-constant +default-maximum-tool-calls+ 256
   :documentation "The maximum number of individual tool calls executed in one user turn.")
@@ -78,7 +78,7 @@
     :type (integer 1)
     :documentation "The maximum individual tool calls executed for one user message.")
    (turn-lock
-    :initform (make-lock "Frob agent turn")
+    :initform (make-lock "Autolith agent turn")
     :reader agent-turn-lock
     :documentation "The lock preventing concurrent mutation of conversation turn state."))
   (:documentation "A model-driven conversation loop with namespaced Common Lisp tools."))
@@ -86,7 +86,7 @@
 
 ;;;; -- Agent Conditions --
 
-(define-condition agent-loop-error (frob-error)
+(define-condition agent-loop-error (autolith-error)
   ((conversation-id
     :initarg :conversation-id
     :reader agent-loop-error-conversation-id
@@ -99,7 +99,7 @@
     :documentation "The provider request number within the user turn, if known."))
   (:documentation "A malformed response or invariant violation in the main agent loop."))
 
-(define-condition agent-turn-budget-exhausted (frob-error)
+(define-condition agent-turn-budget-exhausted (autolith-error)
   ((maximum-provider-steps
     :initarg :maximum-provider-steps
     :reader agent-turn-budget-exhausted-maximum-provider-steps
@@ -120,7 +120,7 @@
     :reader agent-turn-budget-exhausted-reason
     :type keyword
     :documentation "The deterministic budget rule that stopped the turn."))
-  (:documentation "A long turn reached a configured spending guard without corrupting Frob."))
+  (:documentation "A long turn reached a configured spending guard without corrupting Autolith."))
 
 
 ;;;; -- Observer Protocol --

@@ -1,4 +1,4 @@
-(defpackage #:frob
+(defpackage #:autolith
   (:use #:cl)
   (:import-from #:alexandria
                 #:define-constant)
@@ -25,4 +25,4 @@
            #:run-tests
            #:worker-main))
 
-(in-package #:frob)
+(in-package #:autolith)

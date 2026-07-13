@@ -1,13 +1,13 @@
-#+TITLE: Frob Architecture
+#+TITLE: Autolith Architecture
 #+STARTUP: content
 
 * Intent
 
-Frob is designed to understand and modify itself while it is running. The
+Autolith is designed to understand and modify itself while it is running. The
 architecture therefore optimizes for semantic boundaries that are easy to
 inspect, document, replace, and test independently.
 
-Every application definition lives in the single =frob= package. Files
+Every application definition lives in the single =autolith= package. Files
 separate responsibilities; packages do not.
 
 * Object graph
@@ -43,12 +43,12 @@ locations, never credential values.
 Defines credential sources and OAuth refresh. Credentials enter memory only
 inside the dynamic scope of a provider request. The Codex credential file is
 an optional one-time, access-token-only import, not a runtime dependency on
-Codex. Renewable credentials come only from Frob's own device flow.
+Codex. Renewable credentials come only from Autolith's own device flow.
 
 ** =device-authentication.lisp=
 
-Owns Frob's browser-assisted device authorization, polling, PKCE exchange, and
-publication into Frob's private credential store.
+Owns Autolith's browser-assisted device authorization, polling, PKCE exchange, and
+publication into Autolith's private credential store.
 
 ** =conversation.lisp=
 
@@ -88,7 +88,7 @@ artifacts.
 ** =terminal.lisp=
 
 Owns a restrained primary-screen interface. Finalized transcript output is
-written once and left in normal terminal scrollback. Frob never enters the
+written once and left in normal terminal scrollback. Autolith never enters the
 alternate screen and never clears scrollback. Only the bounded live region,
 holding the unfinished status row, the padded prompt row, and any command
 completion suggestions, may be repainted. Semantic styles resolve to basic

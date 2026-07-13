@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Presentation Test Support --
 
@@ -15,7 +15,7 @@
 
 (-> test-application-banner-version () null)
 (defun test-application-banner-version ()
-  "Test that the startup banner presents Frob's configured version."
+  "Test that the startup banner presents Autolith's name and configured version."
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (conversation (conversation-create configuration :identifier "banner"))
@@ -26,7 +26,9 @@
          (let ((text (format nil "~{~A~}"
                              (mapcar #'terminal-span-text
                                      (application-banner application)))))
-           (test-assert (search (format nil "v~A" +frob-version+) text)
+           (test-assert (search "AUTOLITH" text)
+                        "the startup banner names Autolith")
+           (test-assert (search (format nil "v~A" +autolith-version+) text)
                         "the startup banner uses the configured version")
            (test-assert (not (search "v6.6.6" text))
                         "the startup banner contains no stale display version"))
@@ -78,8 +80,8 @@
                   (json-decode
                    "{\"type\":\"message\",\"role\":\"assistant\",
                      \"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}"))))
-      (test-assert (equal (first entry) (terminal-span :brand "● frob"))
-                   "assistant items present a styled frob header"))
+      (test-assert (equal (first entry) (terminal-span :brand "● autolith"))
+                   "assistant items present a styled autolith header"))
     (let ((entry (response-item-entry
                   application
                   (json-decode
@@ -169,8 +171,8 @@
                                       "The quick brown fox jumps over~%"))
            (funcall send-text "the lazy dog")
            (let ((streamed (recording-terminal-output terminal)))
-             (test-assert (search "● frob" streamed)
-                          "streaming opens a frob transcript block")
+             (test-assert (search "● autolith" streamed)
+                          "streaming opens a autolith transcript block")
              (test-assert (search "The quick brown fox" streamed)
                           "newline-terminated logical lines commit while streaming"))
            (conversation-append-provider-item
@@ -186,7 +188,7 @@
            (let ((completion (recording-terminal-output terminal)))
              (test-assert (search "the lazy dog" completion)
                           "completing a request commits the fluid tail")
-             (test-assert (not (search "● frob" completion))
+             (test-assert (not (search "● autolith" completion))
                           "streamed message records do not render again"))
            (setf (application-rendered-sequence application) 0)
            (recording-terminal-reset terminal)

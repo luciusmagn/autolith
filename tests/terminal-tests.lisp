@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Recording Terminal --
 
@@ -167,7 +167,7 @@
 (defun test-terminal-primary-screen-controls ()
   "Test primary-screen rendering, bounded live updates, and finalized deduplication."
   (let* ((terminal (make-instance 'recording-terminal :columns 24))
-         (ui (terminal-ui-create :terminal terminal :prompt "frob> ")))
+         (ui (terminal-ui-create :terminal terminal :prompt "autolith> ")))
     (with-terminal-ui (active-ui ui)
       (terminal-ui-set-status active-ui "working")
       (terminal-ui-process-event active-ui '(:insert "hello"))
@@ -351,11 +351,11 @@
       (terminal-ui-append-finalized
        active-ui
        :styled
-       (list (terminal-span :brand "frob")
+       (list (terminal-span :brand "autolith")
              (terminal-span :plain " ready")))
       (let ((finalized (recording-terminal-output terminal)))
         (test-assert
-         (search (format nil "~C[1;35mfrob" +terminal-escape-character+)
+         (search (format nil "~C[1;35mautolith" +terminal-escape-character+)
                  finalized)
          "styled finalized spans emit basic rendition controls")
         (test-assert
@@ -370,7 +370,7 @@
     (with-terminal-ui (active-ui plain-ui)
       (terminal-ui-append-finalized active-ui
                                     :styled
-                                    (list (terminal-span :brand "frob"))))
+                                    (list (terminal-span :brand "autolith"))))
     (test-assert (not (search "[1;35m" (recording-terminal-output plain-terminal)))
                  "styling is omitted when the terminal does not permit it"))
   nil)
@@ -415,11 +415,11 @@
       (recording-terminal-reset terminal)
       (terminal-ui-stream-update
        active-ui
-       :rows (list (list (terminal-span :brand "● frob"))
+       :rows (list (list (terminal-span :brand "● autolith"))
                    (list (terminal-span :plain "  first line")))
        :tail "  partial")
       (let ((output (recording-terminal-output terminal)))
-        (test-assert (search "● frob" output)
+        (test-assert (search "● autolith" output)
                      "streamed rows append the block header")
         (test-assert (search "  first line" output)
                      "streamed rows append committed lines")
@@ -443,7 +443,7 @@
            '((:name "/help" :argument nil :description "show this reference")
              (:name "/resume" :argument "ID" :description "load a conversation")
              (:name "/rollback" :argument "ID" :description "select a generation")
-             (:name "/quit" :argument nil :description "leave Frob")))
+             (:name "/quit" :argument nil :description "leave Autolith")))
          (ui (terminal-ui-create :terminal terminal
                                  :completions completions)))
     (with-terminal-ui (active-ui ui)
@@ -607,7 +607,7 @@
   (test-assert (null (terminal-style-sequence :plain))
                "the plain style resolves to no control sequence")
   (test-assert
-   (terminal-styled-text-p (list (terminal-span :brand "frob")
+   (terminal-styled-text-p (list (terminal-span :brand "autolith")
                                  (terminal-span :plain " ready")))
    "lists of spans form styled text")
   (test-assert (not (terminal-styled-text-p (list "bare string")))

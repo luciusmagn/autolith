@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Retained Generations --
 
@@ -69,7 +69,7 @@
   (:documentation "A core probe runner implemented by a separate SBCL process."))
 
 (define-constant +checkpoint-core-probe-argument+
-  "--frob-internal-checkpoint-probe"
+  "--autolith-internal-checkpoint-probe"
   :test #'string=
   :documentation "The exact private argument that requests a retained-core identity probe.")
 
@@ -109,7 +109,7 @@
 (-> generation-core-probe-runner-create () generation-core-probe-runner)
 (defun generation-core-probe-runner-create ()
   "Create the production subprocess runner for unpublished generation cores."
-  (let ((configured-command (uiop:getenv "FROB_SBCL")))
+  (let ((configured-command (uiop:getenv "AUTOLITH_SBCL")))
     (make-instance 'sbcl-generation-core-probe-runner
                    :command (if (non-empty-string-p configured-command)
                                 configured-command
@@ -138,8 +138,8 @@
     (make-instance 'generation
                    :identifier identifier
                    :directory directory
-                   :core-pathname (merge-pathnames "frob.core" directory)
-                   :temporary-core-pathname (merge-pathnames ".frob.core.tmp" directory)
+                   :core-pathname (merge-pathnames "autolith.core" directory)
+                   :temporary-core-pathname (merge-pathnames ".autolith.core.tmp" directory)
                    :manifest-pathname (merge-pathnames "manifest.sexp" directory)
                    :git-commit (or git-commit
                                    (string-trim
@@ -176,7 +176,7 @@
 (-> generation-core-probe-record (generation) list)
 (defun generation-core-probe-record (generation)
   "Return the exact portable identity expected from GENERATION's saved core."
-  (list :frob-checkpoint-core
+  (list :autolith-checkpoint-core
         :version 1
         :generation-id (generation-identifier generation)
         :git-commit (generation-git-commit generation)))
@@ -318,7 +318,7 @@
                      :directory directory
                      :core-pathname core-pathname
                      :temporary-core-pathname
-                     (merge-pathnames ".frob.core.tmp" directory)
+                     (merge-pathnames ".autolith.core.tmp" directory)
                      :manifest-pathname pathname
                      :git-commit (getf (rest form) :git-commit)
                      :journal-position
@@ -573,7 +573,7 @@
 
 (-> checkpoint-resume-main () null)
 (defun checkpoint-resume-main ()
-  "Run a retained core's exact identity probe or Frob's normal entry point."
+  "Run a retained core's exact identity probe or Autolith's normal entry point."
   (sb-ext:disable-debugger)
   (let ((arguments (uiop:command-line-arguments)))
     (if (equal arguments (list +checkpoint-core-probe-argument+))
@@ -585,7 +585,7 @@
         (restart-case
             (main arguments)
           (abort ()
-            :report "Exit the retained Frob core."
+            :report "Exit the retained Autolith core."
             nil))))
   nil)
 
@@ -719,7 +719,7 @@
           (make-thread
            (lambda ()
              (checkpoint--watch-coordinator generation coordinator-pid))
-           :name (format nil "Frob checkpoint ~A"
+           :name (format nil "Autolith checkpoint ~A"
                          (generation-identifier generation)))
           generation))))
 

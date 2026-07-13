@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Terminal Constants --
 
@@ -211,7 +211,7 @@
 
 ;;;; -- Terminal Conditions --
 
-(define-condition terminal-error (frob-error)
+(define-condition terminal-error (autolith-error)
   ((operation
     :initarg :operation
     :reader terminal-error-operation

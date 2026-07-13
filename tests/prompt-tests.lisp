@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Dynamic Prompt Context --
 
@@ -41,7 +41,7 @@
     (test-assert (search "Workspace instructions from" prompt)
                  "workspace instructions identify their source file")
     (let* ((root (uiop:ensure-directory-pathname
-                  (merge-pathnames (format nil "frob-agents-~A/"
+                  (merge-pathnames (format nil "autolith-agents-~A/"
                                            (make-identifier))
                                    (uiop:temporary-directory))))
            (nested (merge-pathnames "sub/deep/" root)))

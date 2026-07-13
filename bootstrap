@@ -11,11 +11,11 @@
           (string-trim '(#\Space #\Tab #\Newline #\Return)
                        (uiop:read-file-string version-pathname))))
     (unless (string= expected-version (lisp-implementation-version))
-      (error "Frob pins SBCL ~A, but this process is ~A. Set FROB_SBCL to the pinned executable."
+      (error "Autolith pins SBCL ~A, but this process is ~A. Set AUTOLITH_SBCL to the pinned executable."
              expected-version
              (lisp-implementation-version))))
   (unless (probe-file quicklisp-setup)
-    (error "Frob bootstrap needs Quicklisp at ~A" quicklisp-setup))
+    (error "Autolith bootstrap needs Quicklisp at ~A" quicklisp-setup))
   (load quicklisp-setup)
   (uiop:symbol-call '#:ql '#:quickload :cffi :silent t)
   (let ((profile-library-directory
@@ -34,4 +34,4 @@
                     :input :interactive
                     :output :interactive
                     :error-output :interactive)
-  (format t "~&Frob dependencies and recovery image are installed.~%"))
+  (format t "~&Autolith dependencies and recovery image are installed.~%"))

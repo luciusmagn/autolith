@@ -1,8 +1,8 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Fatal Control Path --
 
-(define-condition fatal-control-path-error (frob-error)
+(define-condition fatal-control-path-error (autolith-error)
   ((cause
     :initarg :cause
     :reader fatal-control-path-error-cause
@@ -29,14 +29,14 @@
 (-> application-crash-condition-report (serious-condition) string)
 (defun application-crash-condition-report (condition)
   "Return an allowlisted, secret-free report for crash CONDITION."
-  (if (typep condition 'frob-error)
-      (frob-error-message condition)
+  (if (typep condition 'autolith-error)
+      (autolith-error-message condition)
       (format nil "Unexpected condition of type ~S." (type-of condition))))
 
 (-> application-publish-crash-pointer (application pathname) null)
 (defun application-publish-crash-pointer (application capsule-pathname)
   "Publish CAPSULE-PATHNAME to this launcher's private pointer, when configured."
-  (let ((pointer-value (uiop:getenv "FROB_CRASH_POINTER")))
+  (let ((pointer-value (uiop:getenv "AUTOLITH_CRASH_POINTER")))
     (when (non-empty-string-p pointer-value)
       (let* ((configuration (application-configuration application))
              (pointer-pathname (pathname pointer-value))

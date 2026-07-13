@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Durable Mutation Checks --
 
@@ -41,13 +41,13 @@
     ((checker standard-mutation-checker)
      (configuration configuration)
      (definition-source string))
-  "Run Frob's ASDF tests against the installed active-image definition."
+  "Run Autolith's ASDF tests against the installed active-image definition."
   (declare (ignore checker configuration definition-source))
   (with-output-to-string (stream)
     (let ((*standard-output* stream)
           (*error-output* stream)
           (*trace-output* stream))
-      (asdf:test-system :frob))))
+      (asdf:test-system :autolith))))
 
 (defmethod mutation-checker-check-source
     ((checker standard-mutation-checker)
@@ -633,7 +633,7 @@ an overlay file under the data root and loaded again at every startup."
 (defmethod tool-execute ((tool self-diff-tool)
                          (context tool-context)
                          (arguments hash-table))
-  "Return the active Frob source diff."
+  "Return the active Autolith source diff."
   (declare (ignore tool arguments))
   (let ((output (self-git-command
                  (tool-context-configuration context)

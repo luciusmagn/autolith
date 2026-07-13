@@ -1,10 +1,10 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Defaults --
 
-(define-constant +frob-version+ "0.1.0"
+(define-constant +autolith-version+ "0.1.0"
   :test #'string=
-  :documentation "The user-visible Frob version.")
+  :documentation "The user-visible Autolith version.")
 
 (define-constant +default-model+ "gpt-5.6-sol"
   :test #'string=
@@ -30,11 +30,11 @@
 
 (defparameter +supported-reasoning-efforts+
   '("low" "medium" "high" "xhigh" "max" "ultra")
-  "Reasoning effort names accepted by Frob configuration.")
+  "Reasoning effort names accepted by Autolith configuration.")
 
 (defparameter +supported-web-search-modes+
   '("cached" "live" "disabled")
-  "Hosted web search modes accepted by Frob configuration.")
+  "Hosted web search modes accepted by Autolith configuration.")
 
 (defparameter +supported-models+
   '("gpt-5.6-sol" "gpt-5.6-luna" "gpt-5.6-terra")
@@ -62,7 +62,7 @@
     :initarg :source-root
     :reader configuration-source-root
     :type pathname
-    :documentation "The tracked Frob source root.")
+    :documentation "The tracked Autolith source root.")
    (working-directory
     :initarg :working-directory
     :reader configuration-working-directory
@@ -121,12 +121,12 @@
     :reader configuration-provider-endpoint
     :type non-empty-string
     :documentation "The streaming Responses endpoint."))
-  (:documentation "Immutable paths and model choices for one Frob process."))
+  (:documentation "Immutable paths and model choices for one Autolith process."))
 
 (-> configuration--context-window-for (string) integer)
 (defun configuration--context-window-for (model)
   "Return MODEL's context window from the environment, table, or fallback."
-  (let ((override (uiop:getenv "FROB_CONTEXT_WINDOW")))
+  (let ((override (uiop:getenv "AUTOLITH_CONTEXT_WINDOW")))
     (or (and (non-empty-string-p override)
              (let ((parsed (parse-integer override :junk-allowed t)))
                (and parsed (plusp parsed) parsed)))
@@ -136,12 +136,12 @@
 (-> configuration--compaction-threshold () integer)
 (defun configuration--compaction-threshold ()
   "Return the validated compaction threshold percentage from the environment."
-  (let ((override (uiop:getenv "FROB_COMPACTION_THRESHOLD")))
+  (let ((override (uiop:getenv "AUTOLITH_COMPACTION_THRESHOLD")))
     (if (non-empty-string-p override)
         (let ((parsed (parse-integer override :junk-allowed t)))
           (unless (and parsed (<= 1 parsed 95))
             (error 'configuration-error
-                   :message (format nil "FROB_COMPACTION_THRESHOLD must be ~
+                   :message (format nil "AUTOLITH_COMPACTION_THRESHOLD must be ~
                                          a percentage between 1 and 95, not ~S."
                                     override)))
           parsed)
@@ -184,12 +184,12 @@
          (codex-home (environment-directory
                       "CODEX_HOME"
                       (merge-pathnames ".codex/" home)))
-         (environment-source-root (uiop:getenv "FROB_SOURCE_ROOT"))
-         (selected-model (or model (uiop:getenv "FROB_MODEL") +default-model+))
+         (environment-source-root (uiop:getenv "AUTOLITH_SOURCE_ROOT"))
+         (selected-model (or model (uiop:getenv "AUTOLITH_MODEL") +default-model+))
          (selected-effort (or reasoning-effort
-                              (uiop:getenv "FROB_REASONING_EFFORT")
+                              (uiop:getenv "AUTOLITH_REASONING_EFFORT")
                               +default-reasoning-effort+))
-         (selected-web-search (let ((mode (uiop:getenv "FROB_WEB_SEARCH")))
+         (selected-web-search (let ((mode (uiop:getenv "AUTOLITH_WEB_SEARCH")))
                                 (if (non-empty-string-p mode)
                                     (string-downcase mode)
                                     "cached"))))
@@ -206,12 +206,12 @@
                                  (or source-root
                                      (and (non-empty-string-p environment-source-root)
                                           (pathname environment-source-root))
-                                     (asdf:system-source-directory :frob)))
+                                     (asdf:system-source-directory :autolith)))
                    :working-directory (uiop:ensure-directory-pathname
                                        (or working-directory (uiop:getcwd)))
-                   :data-root (merge-pathnames "frob/" data-home)
-                   :state-root (merge-pathnames "frob/" state-home)
-                   :cache-root (merge-pathnames "frob/" cache-home)
+                   :data-root (merge-pathnames "autolith/" data-home)
+                   :state-root (merge-pathnames "autolith/" state-home)
+                   :cache-root (merge-pathnames "autolith/" cache-home)
                    :codex-auth-path (merge-pathnames "auth.json" codex-home)
                    :model selected-model
                    :reasoning-effort selected-effort
@@ -220,7 +220,7 @@
                                     selected-model)
                    :compaction-threshold-percent
                    (configuration--compaction-threshold)
-                   :provider-endpoint (or (uiop:getenv "FROB_PROVIDER_ENDPOINT")
+                   :provider-endpoint (or (uiop:getenv "AUTOLITH_PROVIDER_ENDPOINT")
                                           +codex-responses-endpoint+))))
 
 (-> configuration--clone
@@ -293,7 +293,7 @@ Selecting a different model recomputes the context window for that model."
 
 (-> configuration-auth-path (configuration) pathname)
 (defun configuration-auth-path (configuration)
-  "Return Frob's private OAuth credential pathname."
+  "Return Autolith's private OAuth credential pathname."
   (merge-pathnames "auth.sexp" (configuration-state-root configuration)))
 
 (-> configuration-journal-path (configuration) pathname)

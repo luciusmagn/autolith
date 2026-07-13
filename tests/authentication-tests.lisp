@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Subsystem Tests --
 
@@ -7,7 +7,7 @@
   "Test private credential storage without exposing real authentication data."
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
-         (source (make-instance 'frob-credential-source
+         (source (make-instance 'autolith-credential-source
                                 :pathname (configuration-auth-path configuration)))
          (credentials (make-instance 'oauth-credentials
                                      :access-token "test-access-token"
@@ -92,7 +92,7 @@
              (test-assert
               (equal (oauth-credentials-source-path imported)
                      (configuration-auth-path configuration))
-              "bootstrap access is copied into Frob's private store"))
+              "bootstrap access is copied into Autolith's private store"))
            (test-write-codex-auth bootstrap-pathname
                                   :auth-mode "chatgpt"
                                   :account-id "account-b"
@@ -103,7 +103,7 @@
               "subsequent loads ignore changes to the Codex bootstrap store")
              (test-assert
               (string= (oauth-credentials-access-token loaded) "bootstrap-a")
-              "Frob requests depend only on the imported private credential"))
+              "Autolith requests depend only on the imported private credential"))
            (test-assert
             (handler-case
                 (progn
@@ -112,7 +112,7 @@
                   nil)
               (token-refresh-failed ()
                 t))
-            "non-renewable bootstrap credentials require Frob's device flow")
+            "non-renewable bootstrap credentials require Autolith's device flow")
            (let* ((primary-source (credential-manager-primary-source manager))
                   (renewable
                     (make-instance 'oauth-credentials

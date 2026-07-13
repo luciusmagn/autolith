@@ -1,4 +1,4 @@
-#+TITLE: Frob — Minimal Technical Specification
+#+TITLE: Autolith - Minimal Technical Specification
 #+SUBTITLE: A live, self-modifying Common Lisp agent
 #+STARTUP: content
 #+OPTIONS: toc:2 num:nil
@@ -18,11 +18,11 @@ additional Linux architectures.
 
 * 1. Purpose
 
-Frob is a small Common Lisp agent that can inspect and modify its own
+Autolith is a small Common Lisp agent that can inspect and modify its own
 running image.
 
 Ordinary changes take effect immediately without restarting the agent.
-Frob saves working generations so that it can resume or roll back after
+Autolith saves working generations so that it can resume or roll back after
 a damaging change. A separate pristine recovery image remains available
 when the active agent can no longer repair itself.
 
@@ -41,11 +41,11 @@ scratch.
 
 * 3. Runtime Layout
 
-Frob consists of four principal parts.
+Autolith consists of four principal parts.
 
 ** 3.1 Launcher
 
-The executable command is =frob=.
+The executable command is =autolith=.
 
 The launcher is small, stable, and outside the mutable agent image. It:
 
@@ -99,13 +99,13 @@ It is not the normal execution environment.
 
 * 4. Model Access
 
-Frob implements its own model client and agent loop.
+Autolith implements its own model client and agent loop.
 
 The initial provider supports Codex subscription access through the
 user's ChatGPT authentication without bundling or launching the Codex
 CLI.
 
-Frob owns:
+Autolith owns:
 
 - System instructions.
 - Conversation state.
@@ -147,7 +147,7 @@ Initial operations should include:
 
 ** 5.2 =self.*=
 
-=self.*= tools operate on the active Frob image.
+=self.*= tools operate on the active Autolith image.
 
 Initial operations should include:
 
@@ -176,7 +176,7 @@ This is an accidental-damage boundary, not a hostile-code sandbox.
 
 * 6. Live Self-Modification
 
-Frob may redefine functions, methods, classes, macros, and mutable
+Autolith may redefine functions, methods, classes, macros, and mutable
 global state while running.
 
 A restart is not required for ordinary modification.
@@ -215,7 +215,7 @@ state of a working generation.
 
 * 7. Conditions and Restarts
 
-Frob uses the Common Lisp condition and restart system for recoverable
+Autolith uses the Common Lisp condition and restart system for recoverable
 failures.
 
 Operations should establish useful restarts where practical, such as:
@@ -229,7 +229,7 @@ Operations should establish useful restarts where practical, such as:
 
 ** 7.1 LLM-Assisted Handling
 
-When the general model path is healthy, Frob may present a condition to
+When the general model path is healthy, Autolith may present a condition to
 the LLM together with:
 
 - The condition type and report.
@@ -272,12 +272,12 @@ LLM-assisted condition handling must have a recursion guard. A serious
 condition raised while another condition is already being handled by
 the LLM is fatal.
 
-Before exiting, Frob writes a best-effort crash capsule and terminates
+Before exiting, Autolith writes a best-effort crash capsule and terminates
 with a distinguished recovery status.
 
 * 8. Persistence
 
-Frob persists four kinds of state:
+Autolith persists four kinds of state:
 
 - Source in Git.
 - Conversations as S-expression files.
@@ -390,7 +390,7 @@ operating systems, or architectures.
 
 ** 9.1 Linux Checkpointing
 
-On Linux, Frob creates a checkpoint without stopping the active agent:
+On Linux, Autolith creates a checkpoint without stopping the active agent:
 
 1. Briefly block live mutation.
 2. Flush source, conversation, and journal output.
@@ -428,7 +428,7 @@ recoverable in the live image.
 
 Recovery may begin through:
 
-- =frob --recovery=
+- =autolith --recovery=
 - A fatal recovery exit status.
 - An unexpected process failure detected by the launcher.
 
@@ -462,7 +462,7 @@ Recovery must remain possible without loading the damaged active core.
 
 * 11. Dependencies and External Tools
 
-Frob should include or locate:
+Autolith should include or locate:
 
 - A pinned SBCL runtime.
 - A local, pinned Quicklisp distribution or equivalent dependency set.
@@ -475,7 +475,7 @@ through a capability registry.
 Ordinary filesystem, process, networking, and build operations should
 prefer Common Lisp, ASDF, and UIOP.
 
-Frob should not generate ad hoc Python or shell files unless a
+Autolith should not generate ad hoc Python or shell files unless a
 non-Lisp dependency genuinely requires them.
 
 * 12. Terminal Interface
@@ -500,7 +500,7 @@ out of scope.
 
 * 13. Security Status
 
-Frob is not a security sandbox.
+Autolith is not a security sandbox.
 
 It executes model-generated Lisp and external commands with the
 privileges of the user running it.
@@ -524,6 +524,6 @@ The first dogfoodable version is complete when it can:
 6. Persist that definition to source and commit it to Git.
 7. Create a Linux checkpoint without stopping the active agent.
 8. Recover from an intentionally broken agent loop.
-9. Boot a retained generation through =frob --recovery=.
+9. Boot a retained generation through =autolith --recovery=.
 10. Rebuild a working image from the tracked source and pinned
     dependencies.

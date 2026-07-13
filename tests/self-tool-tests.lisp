@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Subsystem Tests --
 
@@ -36,7 +36,7 @@
                                      :if-does-not-exist :create
                                      :external-format :utf-8)
                (format stream
-                       "(in-package #:frob)~%~%(defun test-self-target () ~
+                       "(in-package #:autolith)~%~%(defun test-self-target () ~
                         \"Tracked source documentation.\" 0)~%"))
              (let* ((definitions
                       (self-tracked-definitions source-configuration
@@ -196,7 +196,7 @@
   (let* ((source-root
            (uiop:ensure-directory-pathname
             (merge-pathnames
-             (format nil "frob-durable-tests-~A/" (make-identifier))
+             (format nil "autolith-durable-tests-~A/" (make-identifier))
              (uiop:temporary-directory))))
          (configuration (test-configuration-for-source-root source-root))
          (source-pathname (merge-pathnames "src/definitions.lisp" source-root))
@@ -225,11 +225,11 @@
                                    :if-does-not-exist :create
                                    :external-format :utf-8)
              (format stream
-                     "(in-package #:frob)~%~%(defun test-self-target () \"Return the durable baseline.\" 0)~%"))
+                     "(in-package #:autolith)~%~%(defun test-self-target () \"Return the durable baseline.\" 0)~%"))
            (self-git-command configuration '("init" "--quiet"))
-           (self-git-command configuration '("config" "user.name" "Frob Test"))
+           (self-git-command configuration '("config" "user.name" "Autolith Test"))
            (self-git-command configuration
-                             '("config" "user.email" "frob-test@example.invalid"))
+                             '("config" "user.email" "autolith-test@example.invalid"))
            (self-git-command configuration '("add" "src/definitions.lisp"))
            (self-git-command configuration
                              '("commit" "--quiet" "-m" "Create baseline"))

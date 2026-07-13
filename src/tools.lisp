@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Tool Metadata --
 
@@ -31,7 +31,7 @@
 
 (defclass self-tool (tool)
   ()
-  (:documentation "A tool whose operation targets the active Frob image."))
+  (:documentation "A tool whose operation targets the active Autolith image."))
 
 (defclass lisp-eval-tool (lisp-tool)
   ()
@@ -83,11 +83,11 @@
 
 (defclass self-diff-tool (self-tool)
   ()
-  (:documentation "Show tracked source changes in the Frob repository."))
+  (:documentation "Show tracked source changes in the Autolith repository."))
 
 (defclass self-commit-tool (self-tool)
   ()
-  (:documentation "Commit an explicit set of checked Frob source paths."))
+  (:documentation "Commit an explicit set of checked Autolith source paths."))
 
 (defclass self-checkpoint-tool (self-tool)
   ()
@@ -161,9 +161,9 @@
     ((string= namespace "lisp")
      "Operations in a separate disposable Common Lisp worker.")
     ((string= namespace "self")
-     "Operations on the active Frob Common Lisp image.")
+     "Operations on the active Autolith Common Lisp image.")
     (t
-     "Frob operations.")))
+     "Autolith operations.")))
 
 (-> tool-provider-schema (tool) json-object)
 (defun tool-provider-schema (tool)

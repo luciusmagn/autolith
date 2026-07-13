@@ -4,13 +4,13 @@ set -u
 
 launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
 source_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
-sbcl_command=${FROB_SBCL:-sbcl}
+sbcl_command=${AUTOLITH_SBCL:-sbcl}
 terminal_state=
 recovery_requested=false
 remaining_arguments=()
 state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 data_home=${XDG_DATA_HOME:-$HOME/.local/share}
-recovery_core=${FROB_RECOVERY_CORE:-$data_home/frob/recovery/frob-recovery.core}
+recovery_core=${AUTOLITH_RECOVERY_CORE:-$data_home/autolith/recovery/autolith-recovery.core}
 recovery_manifest=$(dirname -- "$recovery_core")/manifest.sexp
 crash_pointer=
 
@@ -65,14 +65,14 @@ if [[ "$recovery_requested" == true ]]; then
   exit $?
 fi
 
-crash_pointer_directory="$state_home/frob/crash-pointers"
+crash_pointer_directory="$state_home/autolith/crash-pointers"
 mkdir -p -- "$crash_pointer_directory"
 chmod 700 -- "$crash_pointer_directory"
 crash_pointer="$crash_pointer_directory/launcher-$$.path"
 rm -f -- "$crash_pointer"
-export FROB_CRASH_POINTER="$crash_pointer"
+export AUTOLITH_CRASH_POINTER="$crash_pointer"
 
-if "$sbcl_command" --script "$source_root/bin/frob-active" "$@"; then
+if "$sbcl_command" --script "$source_root/bin/autolith-active" "$@"; then
   exit 0
 else
   status=$?
@@ -85,7 +85,7 @@ if [[ "$status" -ne 64 && "$status" -ne 130 && "$status" -ne 143 ]]; then
   if [[ -f "$crash_pointer" ]]; then
     IFS= read -r capsule < "$crash_pointer" || capsule=
     case "$capsule" in
-      "$state_home/frob/crashes/"*.sexp)
+      "$state_home/autolith/crashes/"*.sexp)
         if [[ ! -f "$capsule" ]]; then
           capsule=
         fi

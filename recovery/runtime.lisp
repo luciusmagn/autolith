@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Recovery State --
 
@@ -10,7 +10,7 @@
     :initarg :source-root
     :reader recovery-context-source-root
     :type pathname
-    :documentation "The stable Frob source checkout containing Git history.")
+    :documentation "The stable Autolith source checkout containing Git history.")
    (generation-root
     :initarg :generation-root
     :reader recovery-context-generation-root
@@ -25,7 +25,7 @@
     :initarg :state-root
     :reader recovery-context-state-root
     :type pathname
-    :documentation "The Frob state directory containing selection and journals.")
+    :documentation "The Autolith state directory containing selection and journals.")
    (current-pathname
     :initarg :current-pathname
     :reader recovery-context-current-pathname
@@ -101,12 +101,12 @@
            (uiop:ensure-directory-pathname
             (or (uiop:getenv "XDG_STATE_HOME")
                 (merge-pathnames ".local/state/" home))))
-         (state-root (merge-pathnames "frob/" state-home)))
+         (state-root (merge-pathnames "autolith/" state-home)))
     (make-instance
      'recovery-context
      :source-root (uiop:ensure-directory-pathname source-root)
-     :generation-root (merge-pathnames "frob/generations/" data-home)
-     :worktree-root (merge-pathnames "frob/recovery-worktrees/" data-home)
+     :generation-root (merge-pathnames "autolith/generations/" data-home)
+     :worktree-root (merge-pathnames "autolith/recovery-worktrees/" data-home)
      :state-root state-root
      :current-pathname (merge-pathnames "current-generation.sexp" state-root))))
 
@@ -428,8 +428,8 @@
 (serapeum:-> recovery-clear-reconnection-environment () null)
 (defun recovery-clear-reconnection-environment ()
   "Remove retained crash reconnection metadata from the recovery environment."
-  (sb-posix:unsetenv "FROB_RECOVERY_CONVERSATION_ID")
-  (sb-posix:unsetenv "FROB_RECOVERY_RENDERED_SEQUENCE")
+  (sb-posix:unsetenv "AUTOLITH_RECOVERY_CONVERSATION_ID")
+  (sb-posix:unsetenv "AUTOLITH_RECOVERY_RENDERED_SEQUENCE")
   nil)
 
 (serapeum:-> recovery-report-crash-capsule
@@ -444,7 +444,7 @@
                                             (recovery-context-state-root context))))
           (unless (and (uiop:subpathp capsule-pathname crash-root)
                        (probe-file capsule-pathname))
-            (error "The crash capsule is absent or outside private Frob state."))
+            (error "The crash capsule is absent or outside private Autolith state."))
           (let* ((record (recovery-read-form capsule-pathname))
                  (properties (and (listp record) (rest record)))
                  (conversation-id (and properties
@@ -462,12 +462,12 @@
                     (recovery-sanitize-text (or conversation-id "unknown")))
             (when (and (stringp conversation-id)
                        (recovery-identifier-p conversation-id))
-              (sb-posix:setenv "FROB_RECOVERY_CONVERSATION_ID"
+              (sb-posix:setenv "AUTOLITH_RECOVERY_CONVERSATION_ID"
                                conversation-id
                                1))
             (when (and (integerp rendered-sequence)
                        (not (minusp rendered-sequence)))
-              (sb-posix:setenv "FROB_RECOVERY_RENDERED_SEQUENCE"
+              (sb-posix:setenv "AUTOLITH_RECOVERY_RENDERED_SEQUENCE"
                                (write-to-string rendered-sequence)
                                1))
             (namestring capsule-pathname)))
@@ -482,7 +482,7 @@
     (or null string))
 (defun recovery-read-crash-pointer (context)
   "Return the contained capsule named by this launcher's current pointer."
-  (let ((pointer-value (uiop:getenv "FROB_CRASH_POINTER")))
+  (let ((pointer-value (uiop:getenv "AUTOLITH_CRASH_POINTER")))
     (when (and (stringp pointer-value) (plusp (length pointer-value)))
       (let* ((pointer-pathname (pathname pointer-value))
              (pointer-root (merge-pathnames "crash-pointers/"
@@ -490,7 +490,7 @@
              (crash-root (merge-pathnames "crashes/"
                                           (recovery-context-state-root context))))
         (unless (uiop:subpathp pointer-pathname pointer-root)
-          (error "The crash pointer is outside private Frob state."))
+          (error "The crash pointer is outside private Autolith state."))
         (when (probe-file pointer-pathname)
           (with-open-file (stream pointer-pathname
                                   :direction :input
@@ -539,7 +539,7 @@
   "Report bounded crash context and publish safe reconnection metadata."
   (recovery-clear-reconnection-environment)
   (when status
-    (format *error-output* "Active Frob exited with status ~A.~%"
+    (format *error-output* "Active Autolith exited with status ~A.~%"
             (recovery-sanitize-text status)))
   (let ((reported-capsule (recovery-report-crash-capsule context capsule)))
     (when original-arguments
@@ -601,9 +601,9 @@
            (recovery-sanitize-text
             (recovery-generation-identifier generation))))
   (let* ((worktree (recovery-source-worktree context generation))
-         (sbcl-command (or (uiop:getenv "FROB_SBCL") "sbcl")))
-    (sb-posix:setenv "FROB_SOURCE_ROOT" (namestring worktree) 1)
-    (sb-posix:setenv "FROB_RECOVERED" "1" 1)
+         (sbcl-command (or (uiop:getenv "AUTOLITH_SBCL") "sbcl")))
+    (sb-posix:setenv "AUTOLITH_SOURCE_ROOT" (namestring worktree) 1)
+    (sb-posix:setenv "AUTOLITH_RECOVERED" "1" 1)
     (let ((process
             (uiop:launch-program
              (append
@@ -780,7 +780,7 @@
                   (recovery-sanitize-text condition))
           (uiop:quit 1)))
     (abort ()
-      :report "Exit the pristine Frob recovery image."
+      :report "Exit the pristine Autolith recovery image."
       (uiop:quit 1)))
   nil)
 

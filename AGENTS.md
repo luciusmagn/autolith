@@ -2,8 +2,8 @@
 
 ## Purpose and Sources of Truth
 
-Frob is a small, live, self-modifying Common Lisp agent. Read
-`frob-minimal-technical-spec.org` before making architectural changes. The
+Autolith is a small, live, self-modifying Common Lisp agent. Read
+`autolith-minimal-technical-spec.org` before making architectural changes. The
 specification defines product behavior and runtime boundaries; this file
 defines repository, Common Lisp, testing, and commit policy.
 
@@ -27,7 +27,7 @@ checkouts outside this Git worktree:
   at `9976269ab1accfc9f9dc98a4a688c516934de422`
 
 Use these checkouts to study established agent behavior and implementation
-details. They are references, not Frob dependencies. Do not edit them or copy
+details. They are references, not Autolith dependencies. Do not edit them or copy
 their architecture wholesale. Record the inspected commit when a conclusion
 depends on upstream behavior, and refresh a checkout before making claims
 about current upstream code.
@@ -63,7 +63,7 @@ For a durable live mutation, preserve the specified order:
 4. Persist the complete definition to an overlay file under the data root.
 5. Mark the journal entry durable.
 
-Frob's runtime never patches its own tracked repository; overlays load at
+Autolith's runtime never patches its own tracked repository; overlays load at
 startup after the tracked system, and repository changes remain with the
 user and their development tools.
 
@@ -75,13 +75,13 @@ must remain possible without loading a damaged active core.
 
 ## Package Policy
 
-Use one project package, `#:frob`. Do not create scoped, subsystem, feature,
+Use one project package, `#:autolith`. Do not create scoped, subsystem, feature,
 file-local, or test packages unless the user explicitly changes this policy.
 Split the implementation into focused files while keeping those files in the
 single project package. The runtime component boundaries in the specification
 are not package boundaries.
 
-- Define the package once and use `(in-package #:frob)` in project source.
+- Define the package once and use `(in-package #:autolith)` in project source.
 - `:use` only `#:cl`.
 - Import individual third-party symbols with `:import-from`; do not wholesale
   `:use` third-party packages.

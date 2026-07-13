@@ -12,7 +12,7 @@
                            project-setup
                            user-setup)))
   (unless (probe-file quicklisp-setup)
-    (error "Frob needs Quicklisp at ~A" quicklisp-setup))
+    (error "Autolith needs Quicklisp at ~A" quicklisp-setup))
   (load quicklisp-setup)
   (uiop:symbol-call '#:ql '#:quickload :cffi :silent t)
   (let ((profile-library-directory
@@ -23,6 +23,6 @@
       (pushnew profile-library-directory
                (symbol-value library-directories)
                :test #'equal)))
-  (asdf:load-asd (merge-pathnames "frob.asd" source-root))
-  (asdf:load-system :frob)
-  (uiop:symbol-call '#:frob '#:main (uiop:command-line-arguments)))
+  (asdf:load-asd (merge-pathnames "autolith.asd" source-root))
+  (asdf:load-system :autolith)
+  (uiop:symbol-call '#:autolith '#:main (uiop:command-line-arguments)))

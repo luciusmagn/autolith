@@ -1,4 +1,4 @@
-(asdf:defsystem #:frob
+(asdf:defsystem #:autolith
   :description "A live, self-modifying Common Lisp agent."
   :author "Lukáš Hozda"
   :version "0.1.0"
@@ -42,11 +42,11 @@
                              (:file "application-recovery")
                              (:file "commands")
                              (:file "main"))))
-  :in-order-to ((asdf:test-op (asdf:test-op #:frob/tests))))
+  :in-order-to ((asdf:test-op (asdf:test-op #:autolith/tests))))
 
-(asdf:defsystem #:frob/tests
-  :description "Tests for Frob."
-  :depends-on (#:frob)
+(asdf:defsystem #:autolith/tests
+  :description "Tests for Autolith."
+  :depends-on (#:autolith)
   :serial t
   :components ((:module "tests"
                 :serial t
@@ -67,4 +67,4 @@
                              (:file "tests"))))
   :perform (asdf:test-op (operation component)
              (declare (ignore operation component))
-             (uiop:symbol-call '#:frob '#:run-tests)))
+             (uiop:symbol-call '#:autolith '#:run-tests)))

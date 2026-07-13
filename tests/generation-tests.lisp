@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Probe Test Boundary --
 
@@ -24,9 +24,9 @@
     (make-instance 'generation
                    :identifier identifier
                    :directory directory
-                   :core-pathname (merge-pathnames "frob.core" directory)
+                   :core-pathname (merge-pathnames "autolith.core" directory)
                    :temporary-core-pathname
-                   (merge-pathnames ".frob.core.tmp" directory)
+                   (merge-pathnames ".autolith.core.tmp" directory)
                    :manifest-pathname
                    (merge-pathnames "manifest.sexp" directory)
                    :git-commit git-commit
@@ -187,7 +187,7 @@
                       nil)
                   (checkpoint-error (condition)
                     (search "while a checkpoint publishes"
-                            (frob-error-message condition)))))
+                            (autolith-error-message condition)))))
               "rollback selection cannot race asynchronous publication")
              (test-assert (= (generation-journal-position loaded) 27)
                           "generation manifests preserve mutation journal position")
@@ -266,17 +266,17 @@
                           :ui nil))
          (pointer (merge-pathnames "crash-pointers/test-launch.path"
                                    (configuration-state-root configuration)))
-         (previous-pointer (uiop:getenv "FROB_CRASH_POINTER")))
+         (previous-pointer (uiop:getenv "AUTOLITH_CRASH_POINTER")))
     (unwind-protect
          (progn
            (setf (application-rendered-sequence application) 42)
-           (sb-posix:setenv "FROB_CRASH_POINTER" (namestring pointer) 1)
-           (test-assert (string= (uiop:getenv "FROB_CRASH_POINTER")
+           (sb-posix:setenv "AUTOLITH_CRASH_POINTER" (namestring pointer) 1)
+           (test-assert (string= (uiop:getenv "AUTOLITH_CRASH_POINTER")
                                  (namestring pointer))
                         "the launch pointer is visible in the active environment")
            (test-assert (uiop:subpathp pointer
                                        (configuration-state-root configuration))
-                        "the launch pointer is contained by private Frob state")
+                        "the launch pointer is contained by private Autolith state")
            (let* ((capsule
                     (application-write-crash-capsule
                      application
@@ -301,7 +301,7 @@
                        (namestring capsule))
               "the exact launch pointer names its own crash capsule")))
       (if previous-pointer
-          (sb-posix:setenv "FROB_CRASH_POINTER" previous-pointer 1)
-          (sb-posix:unsetenv "FROB_CRASH_POINTER"))
+          (sb-posix:setenv "AUTOLITH_CRASH_POINTER" previous-pointer 1)
+          (sb-posix:unsetenv "AUTOLITH_CRASH_POINTER"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

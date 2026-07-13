@@ -1,22 +1,22 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Base Conditions --
 
-(define-condition frob-error (error)
+(define-condition autolith-error (error)
   ((message
     :initarg :message
-    :reader frob-error-message
+    :reader autolith-error-message
     :type string
     :documentation "A concise explanation suitable for the terminal."))
-  (:documentation "The base condition for expected Frob failures.")
+  (:documentation "The base condition for expected Autolith failures.")
   (:report (lambda (condition stream)
-             (write-string (frob-error-message condition) stream))))
+             (write-string (autolith-error-message condition) stream))))
 
-(define-condition configuration-error (frob-error)
+(define-condition configuration-error (autolith-error)
   ()
   (:documentation "A failure caused by invalid or unavailable configuration."))
 
-(define-condition rollback-requested (frob-error)
+(define-condition rollback-requested (autolith-error)
   ((generation-id
     :initarg :generation-id
     :reader rollback-requested-generation-id
@@ -27,7 +27,7 @@
 
 ;;;; -- Authentication and Provider Conditions --
 
-(define-condition authentication-error (frob-error)
+(define-condition authentication-error (autolith-error)
   ()
   (:documentation "The base condition for authentication failures."))
 
@@ -52,7 +52,7 @@
     :documentation "A bounded, non-secret OAuth error response."))
   (:documentation "Refreshing a ChatGPT OAuth access token failed."))
 
-(define-condition provider-error (frob-error)
+(define-condition provider-error (autolith-error)
   ((status
     :initarg :status
     :reader provider-error-status
@@ -81,7 +81,7 @@
 
 ;;;; -- Persistence and Tool Conditions --
 
-(define-condition conversation-error (frob-error)
+(define-condition conversation-error (autolith-error)
   ((pathname
     :initarg :pathname
     :reader conversation-error-pathname
@@ -98,7 +98,7 @@
   ()
   (:documentation "Conversation persistence or replay violated a critical invariant."))
 
-(define-condition tool-error (frob-error)
+(define-condition tool-error (autolith-error)
   ((tool-name
     :initarg :tool-name
     :reader tool-error-tool-name
@@ -118,7 +118,7 @@
     :documentation "The source file involved in the failed mutation."))
   (:documentation "An active-image or durable source mutation failed."))
 
-(define-condition self-correctable-error (frob-error)
+(define-condition self-correctable-error (autolith-error)
   ((restart-names
     :initarg :restart-names
     :reader self-correctable-error-restart-names
@@ -127,7 +127,7 @@
   (:documentation
    "An active-image operation failed while offering selectable restarts."))
 
-(define-condition active-image-corruption (frob-error)
+(define-condition active-image-corruption (autolith-error)
   ((original-condition
     :initarg :original-condition
     :reader active-image-corruption-original-condition
@@ -140,7 +140,7 @@
     :documentation "The second failure that prevented image restoration."))
   (:documentation "A failed mutation could not restore the preceding active definition."))
 
-(define-condition checkpoint-error (frob-error)
+(define-condition checkpoint-error (autolith-error)
   ((stage
     :initarg :stage
     :reader checkpoint-error-stage

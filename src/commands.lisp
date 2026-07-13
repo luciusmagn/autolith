@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Interactive Commands --
 
@@ -122,8 +122,8 @@
          (snapshot (and provider (provider-rate-limits provider)))
          (usage (application--conversation-usage application)))
     (append
-     (list (terminal-span :brand "frob")
-           (terminal-span :dim (format nil " v~A~%" +frob-version+)))
+     (list (terminal-span :brand "autolith")
+           (terminal-span :dim (format nil " v~A~%" +autolith-version+)))
      (application--field-spans "model"
                                (format nil "~A (effort ~A)"
                                        (configuration-model configuration)
@@ -424,7 +424,7 @@
        (application-present
         application
         (format nil
-                "Goal set: ~A~%Frob keeps working toward it after every ~
+                "Goal set: ~A~%Autolith keeps working toward it after every ~
                  message. Use /goal to inspect it and /goal clear to stop."
                 remainder)))))
   nil)
@@ -468,7 +468,7 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
 
 (-> application-authenticate (application) null)
 (defun application-authenticate (application)
-  "Run Frob-owned device authentication outside raw terminal mode."
+  "Run Autolith-owned device authentication outside raw terminal mode."
   (let* ((ui (application-ui application))
          (provider (application-provider application)))
     (unless (typep provider 'codex-subscription-provider)
@@ -482,7 +482,7 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
           :stream *standard-output*
           :open-browser-p t)
       (terminal-ui-start ui))
-    (application-present application "ChatGPT authentication was saved by Frob."))
+    (application-present application "ChatGPT authentication was saved by Autolith."))
   nil)
 
 (-> application-checkpoint (application) null)

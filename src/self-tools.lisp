@@ -1,4 +1,4 @@
-(in-package #:frob)
+(in-package #:autolith)
 
 ;;;; -- Active Image Inspection --
 
@@ -9,7 +9,7 @@
 (defun self-read-form (source &key (read-eval t))
   "Read exactly one Common Lisp form from SOURCE."
   (let ((*read-eval* read-eval)
-        (*package* (find-package '#:frob))
+        (*package* (find-package '#:autolith))
         (end-marker (cons nil nil)))
     (multiple-value-bind (form position)
         (read-from-string source t nil)
@@ -22,7 +22,7 @@
 
 (-> self-resolve-symbol (string) symbol)
 (defun self-resolve-symbol (name)
-  "Resolve readable symbol NAME relative to the FROB package."
+  "Resolve readable symbol NAME relative to the AUTOLITH package."
   (let ((value (self-read-form name :read-eval nil)))
     (unless (symbolp value)
       (error "~S does not name a symbol." name))
@@ -87,7 +87,7 @@
 
 ;;;; -- Mutation Journal --
 
-(defvar *live-mutation-lock* (make-recursive-lock "Frob live mutation")
+(defvar *live-mutation-lock* (make-recursive-lock "Autolith live mutation")
   "The process-wide lock serializing active-image and durable mutations.")
 
 (defmacro with-live-mutation (&body body)
@@ -127,7 +127,7 @@
               (let ((*standard-output* stream)
                     (*error-output* stream)
                     (*trace-output* stream)
-                    (*package* (find-package '#:frob)))
+                    (*package* (find-package '#:autolith)))
                 (setf result-values
                       (multiple-value-list (funcall function)))))))
       (values (mapcar #'worker-render-value result-values) output))))
@@ -147,7 +147,7 @@
 (defun self--selectable-restarts (condition)
   "Return (NAME . REPORT) pairs for CONDITION's invokable restarts.
 
-The ABORT restart is excluded because invoking it would unwind Frob's own
+The ABORT restart is excluded because invoking it would unwind Autolith's own
 event loop instead of correcting the failed operation."
   (loop for restart in (compute-restarts condition)
         for name = (restart-name restart)
@@ -470,7 +470,7 @@ protocol."
     :initarg :relative-pathname
     :reader tracked-definition-relative-pathname
     :type non-empty-string
-    :documentation "The definition file relative to Frob's source root.")
+    :documentation "The definition file relative to Autolith's source root.")
    (source-form
     :initarg :source-form
     :reader tracked-definition-source-form
@@ -535,7 +535,7 @@ protocol."
         (position 0)
         (forms nil)
         (*read-eval* nil)
-        (*package* (find-package '#:frob)))
+        (*package* (find-package '#:autolith)))
     (loop
       (setf position (source--next-form-start source position))
       (when (>= position (length source))
@@ -627,7 +627,7 @@ protocol."
 
 (-> self-source-pathname (configuration string) pathname)
 (defun self-source-pathname (configuration relative-name)
-  "Resolve RELATIVE-NAME to an existing editable file beneath Frob's src directory."
+  "Resolve RELATIVE-NAME to an existing editable file beneath Autolith's src directory."
   (let* ((source-root (configuration-source-root configuration))
          (editable-root (merge-pathnames "src/" source-root))
          (pathname (merge-pathnames relative-name source-root)))
