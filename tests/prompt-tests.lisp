@@ -36,6 +36,8 @@
            (json-decode (system-prompt--context-value oversized))))
     (test-assert (search (system-prompt--current-date) prompt)
                  "the system prompt carries the current date")
+    (test-assert (search "Autolith may be shortened to AL." prompt)
+                 "the system prompt introduces Autolith's short name")
     (test-assert (search "Repository Guidelines" prompt)
                  "the system prompt carries the workspace AGENTS.md")
     (test-assert (search "Workspace instructions from" prompt)
