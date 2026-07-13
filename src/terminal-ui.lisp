@@ -277,9 +277,10 @@
       (unless (or (terminal-ui-completion-active-p ui)
                   (member event
                           '(:history-previous :history-next
-                            :complete :submit)))
+                            :complete :complete-previous :submit)))
         (return (values nil nil)))
-      (when (member event '(:history-previous :history-next :complete))
+      (when (member event '(:history-previous :history-next
+                            :complete :complete-previous))
         (terminal-ui--begin-completion ui))
       (multiple-value-bind (selector-action entry)
           (selector-handle-event selector event)
@@ -529,10 +530,11 @@ live unfinished line continuing that block, or removes it when NIL."
 (defun terminal-ui-select (ui &key (title "select") items resize-callback)
   "Run a modal picker over ITEMS and return the selected name, or NIL on cancel.
 
-Items follow the completion entry shape. Up and Down move the selection, Tab
-cycles it, and Enter accepts it. Other ordinary input dismisses the picker with
-the selected item. Escape, Ctrl-C, or end of input cancels. Returns NIL
-immediately when ITEMS is empty or the terminal is not interactive.
+Items follow the completion entry shape. Up and Down move the selection. Tab
+and Shift-Tab cycle it forward and backward, and Enter accepts it. Other
+ordinary input dismisses the picker with the selected item. Escape, Ctrl-C, or
+end of input cancels. Returns NIL immediately when ITEMS is empty or the
+terminal is not interactive.
 
 RESIZE-CALLBACK is queried before each blocking read and immediately after the
 read returns. It returns positive pending rows and columns as a cons, or NIL
