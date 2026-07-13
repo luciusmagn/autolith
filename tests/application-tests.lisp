@@ -13,6 +13,28 @@
 
 ;;;; -- Focused Presentation Tests --
 
+(-> test-application-banner-version () null)
+(defun test-application-banner-version ()
+  "Test that the startup banner presents Frob's configured version."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation (conversation-create configuration :identifier "banner"))
+         (application (make-instance 'application
+                                     :configuration configuration
+                                     :conversation conversation)))
+    (unwind-protect
+         (let ((text (format nil "~{~A~}"
+                             (mapcar #'terminal-span-text
+                                     (application-banner application)))))
+           (test-assert (search (format nil "v~A" +frob-version+) text)
+                        "the startup banner uses the configured version")
+           (test-assert (not (search "v6.6.6" text))
+                        "the startup banner contains no stale display version"))
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-thinking-label-selection () null)
 (defun test-thinking-label-selection ()
   "Test provider activity uses one self-modifiable word from the configured set."
@@ -589,6 +611,7 @@
 (-> run-application-tests () boolean)
 (defun run-application-tests ()
   "Run focused application presentation tests and return true on success."
+  (test-application-banner-version)
   (test-thinking-label-selection)
   (test-transcript-entries)
   (test-streaming-presentation)

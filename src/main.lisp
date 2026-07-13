@@ -9,7 +9,7 @@
         (conversation (application-conversation application)))
     (append
      (list (terminal-span :brand "█▀▀ █▀█ █▀█ █▄▄")
-           (terminal-span :dim (format nil "  v6.6.6~%"))
+           (terminal-span :dim (format nil "  v~A~%" +frob-version+))
            (terminal-span :brand (format nil "█▀  █▀▄ █▄█ █▄█~%"))
            (terminal-span :plain (format nil "~%")))
      (application--field-spans "model"
