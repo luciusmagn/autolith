@@ -792,4 +792,4 @@
                             :toplevel #'recovery-main
                             :executable nil
                             :purify t
-                            :compression t))
+                            :compression nil))
