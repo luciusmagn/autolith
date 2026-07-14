@@ -379,6 +379,14 @@
                                (configuration-image-commit-root configuration))
                 "the reconstruction script stays under private Autolith data")
                (test-assert
+                (= (logand #o777
+                           (sb-posix:stat-mode
+                            (sb-posix:stat
+                             (namestring
+                              (image-commit-script-pathname first-commit)))))
+                   #o444)
+                "published private replay scripts are read-only")
+               (test-assert
                 (search "Return the durable value."
                         (uiop:read-file-string
                          (image-commit-script-pathname first-commit)))

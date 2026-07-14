@@ -225,6 +225,14 @@
                     (generation-directory generation)))
               "a generation receives a contained full replay script")
              (test-assert
+              (= (logand #o777
+                         (sb-posix:stat-mode
+                          (sb-posix:stat
+                           (namestring
+                            (generation-reconstruction-pathname generation)))))
+                 #o444)
+              "generation replay scripts are published read-only")
+             (test-assert
               (null (image-commit-pending-records configuration))
               "checkpoint capture consumes staged reconstructible mutations")))
       (setf (symbol-function 'test-generation-replay-target) previous-function
