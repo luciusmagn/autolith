@@ -338,6 +338,91 @@
           (application-agent application) agent))
   nil)
 
+(-> application--working-directory-failure
+    (&key (:requested-path t)
+          (:previous-directory pathname)
+          (:stage keyword)
+          (:cause t)
+          (:rollback-cause t))
+    null)
+(defun application--working-directory-failure
+    (&key requested-path previous-directory stage cause rollback-cause)
+  "Signal a structured workspace change failure and include any rollback failure."
+  (error 'working-directory-error
+         :message
+         (format nil
+                 "Could not change working directory from ~A to ~S during ~(~A~): ~A~@[ Rollback also failed: ~A~]"
+                 previous-directory
+                 requested-path
+                 stage
+                 cause
+                 rollback-cause)
+         :requested-path requested-path
+         :previous-directory previous-directory
+         :stage stage
+         :cause cause
+         :rollback-cause rollback-cause))
+
+(-> application-set-working-directory
+    (application (or pathname string))
+    pathname)
+(defun application-set-working-directory (application location)
+  "Move APPLICATION and its Lisp workers to existing directory LOCATION."
+  (let* ((previous-configuration (application-configuration application))
+         (configuration
+           (configuration-with-working-directory previous-configuration location))
+         (previous-directory
+           (configuration-working-directory previous-configuration))
+         (directory (configuration-working-directory configuration))
+         (manager (application-worker application))
+         (previous-process-directory (uiop:getcwd))
+         (previous-defaults *default-pathname-defaults*)
+         (workers-moved-p nil)
+         (process-moved-p nil))
+    (labels ((restore-previous-workspace ()
+               "Restore changed process and worker state, returning rollback failures."
+               (let ((failures nil))
+                 (when process-moved-p
+                   (handler-case
+                       (progn
+                         (uiop:chdir previous-process-directory)
+                         (setf *default-pathname-defaults* previous-defaults))
+                     (error (condition)
+                       (push condition failures))))
+                 (when workers-moved-p
+                   (handler-case
+                       (lisp-worker-manager-change-working-directory
+                        manager previous-configuration)
+                     (error (condition)
+                       (push condition failures))))
+                 (nreverse failures)))
+
+             (fail (stage cause)
+               "Restore prior state and signal the failure at STAGE caused by CAUSE."
+               (application--working-directory-failure
+                :requested-path location
+                :previous-directory previous-directory
+                :stage stage
+                :cause cause
+                :rollback-cause (restore-previous-workspace))))
+      (handler-case
+          (lisp-worker-manager-change-working-directory manager configuration)
+        (error (condition)
+          (fail ':workers condition)))
+      (setf workers-moved-p t)
+      (handler-case
+          (progn
+            (uiop:chdir directory)
+            (setf process-moved-p t
+                  *default-pathname-defaults* directory))
+        (error (condition)
+          (fail ':process condition)))
+      (handler-case
+          (application--install-configuration application configuration)
+        (error (condition)
+          (fail ':application condition)))
+      directory)))
+
 (-> application-install-conversation (application conversation) application)
 (defun application-install-conversation (application conversation)
   "Make CONVERSATION active and restore its model selection."

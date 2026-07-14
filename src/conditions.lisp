@@ -16,6 +16,35 @@
   ()
   (:documentation "A failure caused by invalid or unavailable configuration."))
 
+(define-condition working-directory-error (configuration-error)
+  ((requested-path
+    :initarg :requested-path
+    :reader working-directory-error-requested-path
+    :type t
+    :documentation "The user-supplied location that could not become the workspace.")
+   (previous-directory
+    :initarg :previous-directory
+    :reader working-directory-error-previous-directory
+    :type pathname
+    :documentation "The workspace that was active before the failed change.")
+   (stage
+    :initarg :stage
+    :reader working-directory-error-stage
+    :type keyword
+    :documentation "The validation, worker, process, or application stage that failed.")
+   (cause
+    :initarg :cause
+    :reader working-directory-error-cause
+    :type t
+    :documentation "The underlying failure that prevented the directory change.")
+   (rollback-cause
+    :initarg :rollback-cause
+    :initform nil
+    :reader working-directory-error-rollback-cause
+    :type t
+    :documentation "A secondary failure while restoring the previous workspace."))
+  (:documentation "Changing the active process and tool workspace failed."))
+
 (define-condition rollback-requested (autolith-error)
   ((generation-id
     :initarg :generation-id

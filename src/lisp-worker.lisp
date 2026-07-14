@@ -8,9 +8,9 @@
 (defclass lisp-worker ()
   ((configuration
     :initarg :configuration
-    :reader lisp-worker-configuration
+    :accessor lisp-worker-configuration
     :type configuration
-    :documentation "The source and workspace paths inherited by the worker.")
+    :documentation "The source and current workspace paths used by the worker.")
    (name
     :initarg :name
     :reader lisp-worker-name
@@ -212,15 +212,48 @@
   (lisp-worker-stop worker)
   (lisp-worker-start worker))
 
+(-> lisp-worker--working-directory-form (pathname) string)
+(defun lisp-worker--working-directory-form (directory)
+  "Return a readable worker form that changes to DIRECTORY."
+  (format nil
+          "(progn (uiop:chdir ~S) ~
+                  (setf *default-pathname-defaults* (uiop:getcwd)) ~
+                  (namestring (uiop:getcwd)))"
+          (namestring directory)))
+
+(-> lisp-worker-change-working-directory
+    (lisp-worker configuration)
+    lisp-worker)
+(defun lisp-worker-change-working-directory (worker configuration)
+  "Move WORKER to CONFIGURATION's workspace without discarding its heap."
+  (when (lisp-worker-running-p worker)
+    (let* ((directory (configuration-working-directory configuration))
+           (response
+             (lisp-worker-request
+              worker
+              :eval
+              (list :form (lisp-worker--working-directory-form directory))))
+           (properties (rest response)))
+      (unless (eq (getf properties :status) :ok)
+        (error 'worker-error
+               :message
+               (format nil "Lisp REPL ~A could not change to ~A: ~A"
+                       (lisp-worker-name worker)
+                       directory
+                       (or (getf properties :message) "unknown worker failure"))
+               :tool-name "lisp.cwd"))))
+  (setf (lisp-worker-configuration worker) configuration)
+  worker)
+
 
 ;;;; -- Named Worker Pool --
 
 (defclass lisp-worker-pool ()
   ((configuration
     :initarg :configuration
-    :reader lisp-worker-pool-configuration
+    :accessor lisp-worker-pool-configuration
     :type configuration
-    :documentation "The paths and runtime shared by every managed REPL.")
+    :documentation "The paths and current workspace shared by managed REPLs.")
    (workers
     :initform (make-hash-table :test #'equal)
     :reader lisp-worker-pool-workers
@@ -310,6 +343,63 @@
              (lisp-worker-pool-workers pool))
     (clrhash (lisp-worker-pool-workers pool)))
   nil)
+
+(-> lisp-worker-pool-change-working-directory
+    (lisp-worker-pool configuration)
+    lisp-worker-pool)
+(defun lisp-worker-pool-change-working-directory (pool configuration)
+  "Move every REPL in POOL to CONFIGURATION while preserving successful heaps."
+  (with-lock-held ((lisp-worker-pool-lock pool))
+    (let ((previous (lisp-worker-pool-configuration pool))
+          (changed nil))
+      (handler-case
+          (progn
+            (maphash
+             (lambda (name worker)
+               (declare (ignore name))
+               (lisp-worker-change-working-directory worker configuration)
+               (push worker changed))
+             (lisp-worker-pool-workers pool))
+            (setf (lisp-worker-pool-configuration pool) configuration)
+            pool)
+        (error (condition)
+          (let ((rollback-failures nil))
+            (dolist (worker changed)
+              (handler-case
+                  (lisp-worker-change-working-directory worker previous)
+                (error (rollback-condition)
+                  (lisp-worker-stop worker)
+                  (setf (lisp-worker-configuration worker) previous)
+                  (push (cons worker rollback-condition) rollback-failures))))
+            (when rollback-failures
+              (error 'worker-error
+                     :message
+                     (format nil
+                             "Changing Lisp REPL workspaces failed (~A), and rollback stopped: ~{~A~^; ~}."
+                             condition
+                             (loop for (worker . rollback-condition)
+                                     in (nreverse rollback-failures)
+                                   collect
+                                   (format nil "~A: ~A"
+                                           (lisp-worker-name worker)
+                                           rollback-condition)))
+                     :tool-name "lisp.cwd"))
+            (error condition)))))))
+
+(-> lisp-worker-manager-change-working-directory (t configuration) t)
+(defun lisp-worker-manager-change-working-directory (manager configuration)
+  "Move MANAGER's current and future REPLs to CONFIGURATION's workspace."
+  (typecase manager
+    (null
+     nil)
+    (lisp-worker
+     (lisp-worker-change-working-directory manager configuration))
+    (lisp-worker-pool
+     (lisp-worker-pool-change-working-directory manager configuration))
+    (otherwise
+     (error 'worker-error
+            :message "No Lisp worker manager can change working directory."
+            :tool-name "lisp.cwd"))))
 
 (-> lisp-worker-manager-stop (t) null)
 (defun lisp-worker-manager-stop (manager)

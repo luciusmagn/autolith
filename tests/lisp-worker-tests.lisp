@@ -198,6 +198,62 @@
            (test-assert (search "alpha  running  image pristine"
                                 (lisp-worker-pool-render pool))
                         "the worker pool lists each active REPL and image")
+           (let* ((workspace (merge-pathnames "moved-workspace/" root))
+                  (moved-configuration nil))
+             (ensure-directories-exist workspace)
+             (setf moved-configuration
+                   (configuration-with-working-directory configuration workspace))
+             (lisp-worker-pool-change-working-directory pool moved-configuration)
+             (let ((marker
+                     (lisp-worker-request alpha :eval
+                                          '(:form "(1+ *pool-value*)")))
+                   (worker-directory
+                     (lisp-worker-request
+                      alpha :eval '(:form "(namestring (uiop:getcwd))")))
+                   (default-directory
+                     (lisp-worker-request
+                      alpha :eval
+                      '(:form "(namestring *default-pathname-defaults*)"))))
+               (test-assert (equal (getf (rest marker) :values) '("42"))
+                            "moving a REPL preserves its heap state")
+               (test-assert
+                (search (namestring workspace)
+                        (first (getf (rest worker-directory) :values)))
+                "moving a REPL changes its process working directory")
+               (test-assert
+                (search (namestring workspace)
+                        (first (getf (rest default-directory) :values)))
+                "moving a REPL changes its pathname defaults"))
+             (let* ((gamma (lisp-worker-pool-start pool "gamma" "pristine"))
+                    (gamma-directory
+                      (lisp-worker-request
+                       gamma :eval '(:form "(namestring (uiop:getcwd))"))))
+               (test-assert
+                (search (namestring workspace)
+                        (first (getf (rest gamma-directory) :values)))
+                "new REPLs start in the moved pool workspace"))
+             (lisp-worker-pool-change-working-directory pool configuration))
+           (let ((invalid-configuration
+                   (configuration--clone
+                    configuration
+                    :working-directory (merge-pathnames "missing/" root))))
+             (test-assert
+              (handler-case
+                  (progn
+                    (lisp-worker-pool-change-working-directory
+                     pool invalid-configuration)
+                    nil)
+                (worker-error ()
+                  t))
+              "a failed REPL workspace change reports a worker error")
+             (test-assert
+              (equal (lisp-worker-pool-configuration pool) configuration)
+              "a failed REPL workspace change retains the pool configuration")
+             (let ((marker
+                     (lisp-worker-request alpha :eval
+                                          '(:form "(1+ *pool-value*)"))))
+               (test-assert (equal (getf (rest marker) :values) '("42"))
+                            "a failed REPL workspace change preserves heap state")))
            (handler-case
                (progn
                  (lisp-worker-pool-start pool "alpha" "another-image")

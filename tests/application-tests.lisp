@@ -1163,6 +1163,96 @@
                  "non-interactive pickers demand an explicit identifier"))
   nil)
 
+(-> test-working-directory-switch () null)
+(defun test-working-directory-switch ()
+  "Test transactional application, process, and worker workspace changes."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (workspace (merge-pathnames "workspace with spaces/" root))
+         (previous-process-directory (uiop:getcwd))
+         (previous-defaults *default-pathname-defaults*)
+         (pool nil))
+    (ensure-directories-exist workspace)
+    (unwind-protect
+         (let* ((conversation
+                  (conversation-create configuration :identifier "working-directory"))
+                (provider (provider-create configuration))
+                (registry (make-default-tool-registry))
+                (worker-pool (lisp-worker-pool-create configuration))
+                (agent (agent-create :configuration configuration
+                                     :provider provider
+                                     :conversation conversation
+                                     :tool-registry registry
+                                     :worker worker-pool))
+                (application
+                  (make-instance 'application
+                                 :configuration configuration
+                                 :conversation conversation
+                                 :provider provider
+                                 :tool-registry registry
+                                 :worker worker-pool
+                                 :agent agent
+                                 :ui nil))
+                (worker nil))
+           (setf pool worker-pool
+                 worker (lisp-worker-pool-start pool "workspace" "pristine"))
+           (lisp-worker-request
+            worker :eval '(:form "(defparameter *workspace-marker* 73)"))
+           (let ((selected (application-set-working-directory application workspace)))
+             (test-assert (equal selected (truename workspace))
+                          "workspace switching returns the selected directory")
+             (test-assert
+              (equal (configuration-working-directory
+                      (application-configuration application))
+                     (truename workspace))
+              "workspace switching replaces the application configuration")
+             (test-assert (equal (uiop:getcwd) (truename workspace))
+                          "workspace switching changes the process directory")
+             (test-assert (equal *default-pathname-defaults* (truename workspace))
+                          "workspace switching changes pathname defaults")
+             (test-assert
+              (equal (configuration-working-directory
+                      (agent-configuration (application-agent application)))
+                     (truename workspace))
+              "workspace switching reconnects the agent with the new directory")
+             (test-assert
+              (equal (configuration-working-directory
+                      (provider-configuration
+                       (application-provider application)))
+                     (truename workspace))
+              "workspace switching reconnects the provider with the new directory"))
+           (let ((worker-state
+                   (lisp-worker-request
+                    worker
+                    :eval
+                    '(:form
+                      "(list *workspace-marker* (namestring (uiop:getcwd)))"))))
+             (test-assert
+              (and (search "73" (first (getf (rest worker-state) :values)))
+                   (search (namestring workspace)
+                           (first (getf (rest worker-state) :values))))
+              "workspace switching moves a live REPL without losing its heap"))
+           (let ((active-configuration (application-configuration application)))
+             (test-assert
+              (handler-case
+                  (progn
+                    (application-set-working-directory application "missing-directory")
+                    nil)
+                (working-directory-error (condition)
+                  (eq (working-directory-error-stage condition) ':validation)))
+              "invalid workspace changes report their validation stage")
+             (test-assert
+              (eq (application-configuration application) active-configuration)
+              "invalid workspace changes retain the active configuration")
+             (test-assert (equal (uiop:getcwd) (truename workspace))
+                          "invalid workspace changes retain the process directory")))
+      (when pool
+        (lisp-worker-pool-stop-all pool))
+      (uiop:chdir previous-process-directory)
+      (setf *default-pathname-defaults* previous-defaults)
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-effort-switch () null)
 (defun test-effort-switch ()
   "Test reasoning effort picker items and in-place configuration switching."
@@ -1523,6 +1613,7 @@
   (test-responsive-model-input)
   (test-input-reader-quiescence)
   (test-conversation-picker)
+  (test-working-directory-switch)
   (test-effort-switch)
   (test-status-entry)
   (test-session-goal)

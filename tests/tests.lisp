@@ -32,6 +32,25 @@
                    (configuration-error ()
                      t))
                  "model copies reject identifiers outside the 5.6 family")
+    (let ((moved (configuration-with-working-directory configuration "tests")))
+      (test-assert
+       (equal (configuration-working-directory moved)
+              (truename (merge-pathnames "tests/"
+                                         (configuration-working-directory
+                                          configuration))))
+       "working-directory copies resolve relative existing directories")
+      (test-assert
+       (equal (configuration-source-root moved)
+              (configuration-source-root configuration))
+       "working-directory copies preserve unrelated configuration"))
+    (test-assert
+     (handler-case
+         (progn
+           (configuration-with-working-directory configuration "README.org")
+           nil)
+       (working-directory-error (condition)
+         (eq (working-directory-error-stage condition) ':validation)))
+     "working-directory copies reject files with a structured condition")
     (test-assert (string= (configuration-reasoning-effort configuration) "ultra")
                  "the default reasoning effort is ultra")
     (test-assert (string= (configuration-wire-effort configuration) "max")

@@ -224,17 +224,19 @@
                                           +codex-responses-endpoint+))))
 
 (-> configuration--clone
-    (configuration &key (:model (option string))
+    (configuration &key (:working-directory (option pathname))
+                   (:model (option string))
                    (:reasoning-effort (option string)))
     configuration)
-(defun configuration--clone (configuration &key model reasoning-effort)
-  "Copy CONFIGURATION, replacing only the supplied model and reasoning effort.
+(defun configuration--clone (configuration &key working-directory model reasoning-effort)
+  "Copy CONFIGURATION, replacing only supplied workspace or model choices.
 
 Selecting a different model recomputes the context window for that model."
   (make-instance 'configuration
                  :source-root (configuration-source-root configuration)
-                 :working-directory
-                 (configuration-working-directory configuration)
+                 :working-directory (or working-directory
+                                        (configuration-working-directory
+                                         configuration))
                  :data-root (configuration-data-root configuration)
                  :state-root (configuration-state-root configuration)
                  :cache-root (configuration-cache-root configuration)
@@ -252,6 +254,66 @@ Selecting a different model recomputes the context window for that model."
                  (configuration-compaction-threshold-percent configuration)
                  :provider-endpoint
                  (configuration-provider-endpoint configuration)))
+
+(-> configuration--expanded-working-directory
+    ((or pathname string))
+    (or pathname string))
+(defun configuration--expanded-working-directory (location)
+  "Expand a leading ~/ in LOCATION while leaving other paths unchanged."
+  (if (stringp location)
+      (cond
+        ((string= location "~")
+         (user-homedir-pathname))
+        ((uiop:string-prefix-p "~/" location)
+         (merge-pathnames (subseq location 2) (user-homedir-pathname)))
+        (t
+         location))
+      location))
+
+(-> configuration--resolve-working-directory
+    (configuration (or pathname string))
+    pathname)
+(defun configuration--resolve-working-directory (configuration location)
+  "Resolve LOCATION against CONFIGURATION and return its existing directory truename."
+  (let ((previous (configuration-working-directory configuration)))
+    (handler-case
+        (let* ((candidate
+                 (uiop:ensure-pathname
+                  (configuration--expanded-working-directory location)
+                  :defaults previous
+                  :ensure-absolute t
+                  :ensure-directory t
+                  :want-non-wild t))
+               (directory (uiop:directory-exists-p candidate)))
+          (unless directory
+            (error 'working-directory-error
+                   :message (format nil "Working directory ~S does not exist or is not a directory."
+                                    location)
+                   :requested-path location
+                   :previous-directory previous
+                   :stage ':validation
+                   :cause nil))
+          (uiop:ensure-directory-pathname (truename directory)))
+      (working-directory-error (condition)
+        (error condition))
+      (error (condition)
+        (error 'working-directory-error
+               :message (format nil "Cannot use ~S as a working directory: ~A"
+                                location condition)
+               :requested-path location
+               :previous-directory previous
+               :stage ':validation
+               :cause condition)))))
+
+(-> configuration-with-working-directory
+    (configuration (or pathname string))
+    configuration)
+(defun configuration-with-working-directory (configuration location)
+  "Copy CONFIGURATION with its workspace changed to existing directory LOCATION."
+  (configuration--clone
+   configuration
+   :working-directory
+   (configuration--resolve-working-directory configuration location)))
 
 (-> configuration-with-reasoning-effort (configuration string) configuration)
 (defun configuration-with-reasoning-effort (configuration reasoning-effort)
