@@ -277,9 +277,6 @@
 
 ;;;; -- Transcript Projection --
 
-(define-constant +application-tool-output-lines+ 12
-  :documentation "The maximum tool output lines shown in the terminal transcript.")
-
 (-> application--transcript-width (application) integer)
 (defun application--transcript-width (application)
   "Return APPLICATION's terminal width available to wrapped transcript bodies."
@@ -354,17 +351,27 @@
                                           body))))))
     spans))
 
-(-> application--bounded-tool-output (t) (option string))
-(defun application--bounded-tool-output (output)
-  "Return displayable tool OUTPUT bounded to a readable number of lines."
-  (let ((text (bounded-string output :limit 2000)))
-    (when (non-empty-string-p text)
-      (let ((lines (uiop:split-string text :separator '(#\Newline))))
-        (if (<= (length lines) +application-tool-output-lines+)
-            text
-            (format nil "~{~A~^~%~}~%… +~D more lines"
-                    (subseq lines 0 +application-tool-output-lines+)
-                    (- (length lines) +application-tool-output-lines+)))))))
+;;;; -- Tool Transcript Protocol --
+
+(-> application-tool-call-entry ((option tool) application json-object) list)
+(defgeneric application-tool-call-entry (tool application call)
+  (:documentation "Return the styled transcript entry for one function CALL."))
+
+(-> application-tool-result-entry ((option tool) application list) list)
+(defgeneric application-tool-result-entry (tool application record)
+  (:documentation "Return the styled transcript entry for one tool result RECORD."))
+
+(-> application--find-tool (application string) (option tool))
+(defun application--find-tool (application canonical-name)
+  "Return APPLICATION's registered tool named CANONICAL-NAME, when available."
+  (let ((separator (position #\. canonical-name))
+        (registry (and (slot-boundp application 'tool-registry)
+                       (application-tool-registry application))))
+    (when (and separator (typep registry 'tool-registry))
+      (tool-registry-find registry
+                          (subseq canonical-name 0 separator)
+                          (subseq canonical-name (1+ separator))))))
+
 
 (-> application--field-spans (string string) list)
 (defun application--field-spans (label value)
@@ -416,13 +423,9 @@
                          (terminal-span ':plain (string #\Newline)))
                    (application--markdown-body application text)))))
       ((string= (or type "") "function_call")
-       (application--transcript-entry
-        application
-        :style ':tool
-        :header (format nil "▸ ~A" (function-call-canonical-name item))
-        :detail (let ((arguments (json-get item "arguments")))
-                  (and (non-empty-string-p arguments)
-                       arguments))))
+       (let* ((canonical-name (function-call-canonical-name item))
+              (tool (application--find-tool application canonical-name)))
+         (application-tool-call-entry tool application item)))
       ((string= (or type "") "web_search_call")
        (application--transcript-entry
         application
@@ -452,17 +455,9 @@
        (and (stringp wire-json)
             (response-item-entry application (json-decode wire-json)))))
     (:tool-result
-     (let ((success-p (eq (getf (rest record) :status) ':ok)))
-       (application--transcript-entry
-        application
-        :style (if success-p
-                   ':success
-                   ':failure)
-        :header (format nil "~:[✗ ~A failed~;✓ ~A~]"
-                        success-p
-                        (getf (rest record) :tool))
-        :body (application--bounded-tool-output (getf (rest record) :output))
-        :body-style ':dim)))
+     (let* ((canonical-name (getf (rest record) :tool))
+            (tool (application--find-tool application canonical-name)))
+       (application-tool-result-entry tool application record)))
     (:summary
      (list (terminal-span
             ':hint

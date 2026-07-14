@@ -6,6 +6,7 @@
 (defun application-tests--ui-application (&key (columns 40))
   "Return a minimal application presenting into a recording terminal."
   (make-instance 'application
+                 :tool-registry (make-default-tool-registry)
                  :ui (terminal-ui-create
                       :terminal (make-instance 'recording-terminal
                                                :columns columns))))
@@ -328,18 +329,147 @@
                                    \"text\":\"see **bold** move\"}]}"))))
       (test-assert (find (terminal-span :strong "bold") entry :test #'equal)
                    "assistant bodies render markdown emphasis"))
-    (let ((entry (response-item-entry
-                  application
-                  (json-decode
-                   "{\"type\":\"function_call\",\"namespace\":\"self\",
-                     \"name\":\"eval\",
-                     \"arguments\":\"{\\\"form\\\":\\\"(+ 1 2)\\\"}\"}"))))
+    (let* ((source (format nil "~{form-line-~D~^~%~}"
+                           (loop for index from 1 to 10 collect index)))
+           (entry (response-item-entry
+                   application
+                   (json-object
+                    "type" "function_call"
+                    "namespace" "self"
+                    "name" "eval"
+                    "arguments" (json-encode
+                                 (json-object
+                                  "form" source
+                                  "restart" "CONTINUE")))))
+           (text (markdown-tests--row-text entry)))
       (test-assert (equal (first entry) (terminal-span :tool "▸ self.eval"))
                    "tool requests present a styled tool header")
-      (test-assert (eq (terminal-span-style (second entry)) ':dim)
-                   "tool arguments render as a dim detail")
-      (test-assert (= (length entry) 2)
-                   "tool requests stay on one header row"))
+      (test-assert (and (search "form-line-1" text)
+                        (search "… +2 more lines" text))
+                   "self.eval previews only the first configured source lines")
+      (test-assert (and (search "restart" text)
+                        (find-if (lambda (span)
+                                   (and (eq (terminal-span-style span) ':notice)
+                                        (search "CONTINUE"
+                                                (terminal-span-text span))))
+                                 entry))
+                   "self.eval presents restart selection in a separate area")
+      (test-assert (not (search "{\"form\"" text))
+                   "tool requests never expose raw argument JSON"))
+    (let* ((entry (response-item-entry
+                   application
+                   (json-object
+                    "type" "function_call"
+                    "namespace" "lisp"
+                    "name" "eval"
+                    "arguments" (json-encode
+                                 (json-object "form" "(+ 1 2)")))))
+           (text (markdown-tests--row-text entry)))
+      (test-assert (and (equal (first entry)
+                               (terminal-span :tool "▸ lisp.eval"))
+                        (search "(+ 1 2)" text)
+                        (not (search "{\"form\"" text)))
+                   "lisp.eval calls show bounded Lisp source instead of JSON"))
+    (let* ((entry (response-item-entry
+                   application
+                   (json-object
+                    "type" "function_call"
+                    "namespace" "fs"
+                    "name" "read"
+                    "arguments" (json-encode
+                                 (json-object
+                                  "path" "src/application.lisp"
+                                  "start-line" 5
+                                  "line-count" 3)))))
+           (text (markdown-tests--row-text entry)))
+      (test-assert (search "src/application.lisp  lines 5-7" text)
+                   "fs.read calls show the requested path and line window"))
+    (let* ((root (uiop:ensure-directory-pathname
+                  (merge-pathnames
+                   (format nil "autolith-edit-presentation-~A/"
+                           (make-identifier))
+                   (uiop:temporary-directory))))
+           (pathname (merge-pathnames "example.lisp" root))
+           (configuration
+             (configuration-create
+              :source-root (asdf:system-source-directory :autolith)
+              :working-directory root))
+           (edit-application
+             (make-instance 'application
+                            :configuration configuration
+                            :tool-registry (make-default-tool-registry)
+                            :ui (terminal-ui-create
+                                 :terminal (make-instance 'recording-terminal
+                                                          :columns 80)))))
+      (unwind-protect
+           (progn
+             (uiop:ensure-all-directories-exist (list root))
+             (with-open-file (stream pathname
+                                     :direction :output
+                                     :if-exists :supersede
+                                     :if-does-not-exist :create
+                                     :external-format :utf-8)
+               (format stream
+                       "line 1~%line 2~%line 3~%line 4~%line 5~%~
+                        line 6~%line 7~%line 8~%line 9~%before~%~
+                        old value~%after~%"))
+             (let* ((entry (response-item-entry
+                            edit-application
+                            (json-object
+                             "type" "function_call"
+                             "namespace" "fs"
+                             "name" "edit"
+                             "arguments" (json-encode
+                                          (json-object
+                                           "path" "example.lisp"
+                                           "old-text" (format nil
+                                                              "before~%~
+                                                               old value~%after")
+                                           "new-text" (format nil
+                                                              "before~%~
+                                                               new value~%after")
+                                           "replace-all" t)))))
+                    (text (markdown-tests--row-text entry)))
+               (test-assert (and (search "example.lisp" text)
+                                 (search "all occurrences" text)
+                                 (not (search "changes" text)))
+                            "fs.edit identifies its path and scope without a redundant label")
+               (test-assert
+                (and (find (terminal-span :dim "  10 10 │ before")
+                           entry
+                           :test #'equal)
+                     (find (terminal-span :failure "- 11    │ old value")
+                           entry
+                           :test #'equal)
+                     (find (terminal-span :success "+    11 │ new value")
+                           entry
+                           :test #'equal)
+                     (find (terminal-span :dim "  12 12 │ after")
+                           entry
+                           :test #'equal))
+                "fs.edit colors removed and added lines with file line numbers")))
+        (uiop:delete-directory-tree root
+                                    :validate t
+                                    :if-does-not-exist :ignore)))
+    (let* ((entry (response-item-entry
+                   application
+                   (json-object
+                    "type" "function_call"
+                    "namespace" "shell"
+                    "name" "run"
+                    "arguments" (json-encode
+                                 (json-object
+                                  "command" "printf hello && printf world"
+                                  "directory" "/tmp/work"
+                                  "timeout-seconds" 30)))))
+           (text (markdown-tests--row-text entry)))
+      (test-assert (and (search "$ printf" text)
+                        (search "directory" text)
+                        (search "/tmp/work" text)
+                        (search "30 seconds" text))
+                   "shell.run calls show command text and execution metadata")
+      (test-assert (not (search "{\"command\"" text))
+                   "shell.run calls omit raw argument JSON"))
     (let ((entry (response-item-entry
                   application
                   (json-decode
@@ -351,27 +481,93 @@
       (test-assert (search "live lisp images"
                            (markdown-tests--row-text entry))
                    "web search entries show their query"))
-    (let ((entry (conversation-record-entry
-                  application
-                  '(:tool-result :seq 2 :time 0 :call-id 1 :tool "self.eval"
-                    :status :ok :output "42"))))
+    (let* ((entry (conversation-record-entry
+                   application
+                   (list :tool-result :seq 2 :time 0 :call-id 1
+                         :tool "fs.read" :status :ok
+                         :output (format nil
+                                         "src/application.lisp lines 5-7 of 100~%~
+                                          5  hidden source~%~
+                                          6  more hidden source~%~
+                                          7  final hidden source"))))
+           (text (markdown-tests--row-text entry)))
+      (test-assert (search "src/application.lisp lines 5-7 of 100" text)
+                   "fs.read results show the actual path, window, and total")
+      (test-assert (not (search "hidden source" text))
+                   "fs.read results omit returned file contents"))
+    (let* ((entry (conversation-record-entry
+                   application
+                   (list :tool-result :seq 3 :time 0 :call-id 2
+                         :tool "shell.run" :status :ok
+                         :output (format nil "exit 3~%command output"))))
+           (text (markdown-tests--row-text entry)))
+      (test-assert (and (search "exit 3" text)
+                        (search "command output" text))
+                   "shell.run results separate exit status from command output"))
+    (let* ((entry (conversation-record-entry
+                   application
+                   (list :tool-result :seq 4 :time 0 :call-id 3
+                         :tool "self.eval" :status :ok
+                         :output (format nil "Output:~%hello~%Values:~%42~%"))))
+           (text (markdown-tests--row-text entry)))
       (test-assert (equal (first entry) (terminal-span :success "✓ self.eval"))
-                   "successful tool results present a success header"))
-    (let ((entry (conversation-record-entry
-                  application
-                  '(:tool-result :seq 3 :time 0 :call-id 2 :tool "self.eval"
-                    :status :error :output "boom"))))
+                   "successful tool results present a success header")
+      (test-assert (and (search "output" text)
+                        (search "hello" text)
+                        (search "values" text)
+                        (find (terminal-span :code "42") entry :test #'equal))
+                   "self.eval results separate captured output from values"))
+    (let* ((entry (conversation-record-entry
+                   application
+                   (list :tool-result :seq 5 :time 0 :call-id 4
+                         :tool "self.inspect" :status :ok
+                         :output (format nil
+                                         "Symbol: FOO~%Package: AUTOLITH~%~
+                                          Function binding: yes~%~
+                                          Lambda list: (X)~%Describe:~%details"))))
+           (text (markdown-tests--row-text entry)))
+      (test-assert (and (search "Symbol" text)
+                        (search "FOO" text)
+                        (find (terminal-span :strong "Describe")
+                              entry
+                              :test #'equal))
+                   "introspection results use aligned fields and section headings"))
+    (let* ((entry (conversation-record-entry
+                   application
+                   (list :tool-result :seq 6 :time 0 :call-id 5
+                         :tool "lisp.describe" :status :ok
+                         :output (format nil
+                                         "Output:~%Symbol: CAR~%~
+                                          Documentation: list head~%~
+                                          Values:~%"))))
+           (text (markdown-tests--row-text entry)))
+      (test-assert (and (search "description" text)
+                        (search "Symbol" text)
+                        (search "CAR" text)
+                        (search "values" text))
+                   "lisp.describe results separate structured description and values"))
+    (let* ((entry (conversation-record-entry
+                   application
+                   (list :tool-result :seq 6 :time 0 :call-id 5
+                         :tool "self.eval" :status :error
+                         :output (format nil
+                                         "Needs a value.~2%Available restarts:~%~
+                                            CONTINUE  Try again.~%~
+                                            USE-VALUE  Supply a value.~%~
+                                          Retry the identical call with a restart."))))
+           (text (markdown-tests--row-text entry)))
       (test-assert (equal (first entry)
                           (terminal-span :failure "✗ self.eval failed"))
-                   "failed tool results present a failure header")))
-  (let* ((output (format nil "~{line ~D~^~%~}"
-                         (loop for index from 1 to 20
-                               collect index)))
-         (bounded (application--bounded-tool-output output)))
-    (test-assert (search "… +8 more lines" bounded)
-                 "long tool output is bounded with a truncation note"))
-  (test-assert (null (application--bounded-tool-output ""))
-               "empty tool output produces no transcript body")
+                   "failed tool results present a failure header")
+      (test-assert (and (search "condition" text)
+                        (search "available restarts" text)
+                        (search "retry" text)
+                        (find-if (lambda (span)
+                                   (and (eq (terminal-span-style span) ':notice)
+                                        (search "CONTINUE"
+                                                (terminal-span-text span))))
+                                 entry))
+                   "correctable failures separate condition, restarts, and retry help")))
   (let ((application (application-tests--ui-application :columns 40)))
     (test-assert (string= (application--indented-body application
                                                       (format nil "3~%"))

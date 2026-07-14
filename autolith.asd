@@ -39,6 +39,7 @@
                              (:file "stream-terminal")
                              (:file "terminal-ui")
                              (:file "application")
+                             (:file "tool-presentation")
                              (:file "application-recovery")
                              (:file "commands")
                              (:file "responsive-input")
