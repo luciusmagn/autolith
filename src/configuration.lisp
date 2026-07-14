@@ -296,6 +296,11 @@ Selecting a different model recomputes the context window for that model."
   "Return the directory containing immutable private image commits."
   (merge-pathnames "image-commits/" (configuration-data-root configuration)))
 
+(-> configuration-lisp-image-root (configuration) pathname)
+(defun configuration-lisp-image-root (configuration)
+  "Return the directory containing immutable saved Lisp worker images."
+  (merge-pathnames "lisp-images/" (configuration-data-root configuration)))
+
 (-> configuration-current-image-commit-path (configuration) pathname)
 (defun configuration-current-image-commit-path (configuration)
   "Return the atomic pointer to the image commit used by normal startup."

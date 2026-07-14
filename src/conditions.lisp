@@ -136,6 +136,19 @@
   ()
   (:documentation "The disposable Lisp worker failed or violated its protocol."))
 
+(define-condition lisp-image-error (worker-error)
+  ((pathname
+    :initarg :pathname
+    :reader lisp-image-error-pathname
+    :type (option pathname)
+    :documentation "The saved worker-image artifact involved in the failure.")
+   (stage
+    :initarg :stage
+    :reader lisp-image-error-stage
+    :type keyword
+    :documentation "The worker-image operation stage that failed."))
+  (:documentation "A saved Lisp worker image is invalid or could not be published."))
+
 (define-condition source-mutation-error (tool-error)
   ((pathname
     :initarg :pathname

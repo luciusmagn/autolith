@@ -2,6 +2,74 @@
 
 ;;;; -- Subsystem Tests --
 
+(-> test--write-sparse-lisp-core (pathname) pathname)
+(defun test--write-sparse-lisp-core (pathname)
+  "Write a sparse file large enough to pass saved-core shape validation."
+  (ensure-directories-exist pathname)
+  (with-open-file (stream pathname
+                          :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create
+                          :element-type '(unsigned-byte 8))
+    (file-position stream +minimum-lisp-image-core-size+)
+    (write-byte 0 stream))
+  pathname)
+
+(-> test-lisp-image-manifests () null)
+(defun test-lisp-image-manifests ()
+  "Test immutable saved worker-image manifests, notes, and compatibility."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (identifier "instrumented-compiler")
+         (directory (lisp-image--directory configuration identifier))
+         (core (merge-pathnames "worker.core" directory)))
+    (unwind-protect
+         (progn
+           (test--write-sparse-lisp-core core)
+           (let ((image
+                   (lisp-image-publish-manifest
+                    configuration
+                    identifier
+                    +pristine-lisp-image-identifier+
+                    "Traces compiler type derivation for comparison."
+                    core
+                    :source-commit "0123456789abcdef")))
+             (test-assert (string= (lisp-image-identifier image) identifier)
+                          "saved Lisp images retain their identifier")
+             (test-assert
+              (string= (lisp-image-note image)
+                       "Traces compiler type derivation for comparison.")
+              "saved Lisp images retain their durable note")
+             (test-assert (lisp-image-compatible-p image)
+                          "a manifest written by this runtime is compatible")
+             (test-assert
+              (search "instrumented-compiler"
+                      (lisp-image-render-inventory configuration))
+              "the image inventory reminds the model about saved images")
+             (test-assert
+              (search "Traces compiler type derivation"
+                      (lisp-image-prompt-notes configuration))
+              "the prompt inventory includes durable image notes"))
+           (handler-case
+               (progn
+                 (lisp-image-publish-manifest
+                  configuration
+                  identifier
+                  +pristine-lisp-image-identifier+
+                  "A duplicate image."
+                  core)
+                 (test-assert nil "saved image identifiers are immutable"))
+             (lisp-image-error ()
+               (test-assert t "saved image identifiers are immutable")))
+           (handler-case
+               (progn
+                 (lisp-image--validate-identifier "pristine")
+                 (test-assert nil "the pristine image name is reserved"))
+             (lisp-image-error ()
+               (test-assert t "the pristine image name is reserved"))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-lisp-worker-protocol () null)
 (defun test-lisp-worker-protocol ()
   "Test portable worker request execution and condition reporting."

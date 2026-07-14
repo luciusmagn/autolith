@@ -21,6 +21,7 @@
                              (:file "json")
                              (:file "configuration")
                              (:file "authentication")
+                             (:file "lisp-images")
                              (:file "device-authentication")
                              (:file "conversation")
                              (:file "prompt")
