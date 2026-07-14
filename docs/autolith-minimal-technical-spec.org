@@ -241,15 +241,17 @@ A durable change normally follows this sequence:
 3. Run relevant checks.
 4. Persist the complete effective mutation state as an immutable private
    image commit under the data root.
-5. Mark the journal entry as durable.
+5. Commit the snapshot to Autolith's private mutation-history Git repository.
+6. Mark the journal entry as durable.
 
 Each private image commit has a manifest and a complete executable Lisp
 replay script. An atomic pointer under the state root selects the commit
-loaded after the tracked system at normal startup. =self.commit= checks
-and persists all pending =self.redefine= and =self.set= mutations in the
-current image lineage. =self.persist-definition= performs the complete
-transaction for one definition. Neither tool writes a workspace repository
-or creates a Git commit.
+loaded after the tracked system at normal startup and records the exact private
+Git commit retaining its artifacts. =self.commit= checks and persists all
+pending =self.redefine= and =self.set= mutations in the current image lineage.
+=self.persist-definition= performs the complete transaction for one definition.
+Both tools create commits only in Autolith's private mutation-history repository;
+neither tool writes or commits a workspace repository.
 
 Persisted definitions are complete Lisp forms rather than blind textual
 patches.
@@ -324,12 +326,13 @@ with a distinguished recovery status.
 
 * 8. Persistence
 
-Autolith persists six kinds of state:
+Autolith persists seven kinds of state:
 
 - Source in Git.
 - Conversations as S-expression files.
 - Mutations in an append-only journal.
 - Private image commits as manifests and complete Lisp replay scripts.
+- A private Git history retaining complete image-commit artifacts.
 - Working generations as saved Lisp cores and reconstruction scripts.
 - Worker images as immutable SBCL cores with manifests and durable notes.
 
@@ -415,6 +418,7 @@ A journal entry should identify:
 - Proposed change.
 - Result.
 - Related private image commit, if durable.
+- Related mutation-history Git commit, when recorded.
 - Related checkpoint, if saved.
 
 The journal is for recovery and diagnosis. It does not replace private
@@ -428,6 +432,7 @@ A generation is a known working state consisting of:
 - The tracked base Git commit.
 - A complete Lisp reconstruction script.
 - The applicable private image commit, when one exists.
+- The applicable mutation-history Git commit, when one exists.
 - A small manifest.
 - The applicable mutation-journal position.
 
@@ -437,6 +442,7 @@ The manifest identifies at least:
 - Core pathname.
 - Reconstruction script pathname.
 - Private image commit identifier, when applicable.
+- Mutation-history Git commit, when applicable.
 - Tracked base Git commit.
 - SBCL build.
 - Operating system.

@@ -79,14 +79,16 @@ be drafted and queued while AL is responding. Type =/help= for commands.
 * Persistent state
 
 Autolith keeps credentials and atomic selections under
-=${XDG_STATE_HOME:-~/.local/state}/autolith/= and conversations, private image
-commits, generations, runtimes, matching implementation source, and worker images under
-=${XDG_DATA_HOME:-~/.local/share}/autolith/=. Credentials never belong in Git,
-conversation files, journals, manifests, or saved cores.
+=${XDG_STATE_HOME:-~/.local/state}/autolith/=, including a private Git history
+of durable mutation snapshots. Conversations, canonical image commits,
+generations, runtimes, matching implementation source, and worker images live
+under =${XDG_DATA_HOME:-~/.local/share}/autolith/=. Credentials never belong in
+Git, conversation files, journals, manifests, or saved cores.
 
 Source remains authoritative for clean rebuilds. Saved cores retain exact live
 states; private image commits and each generation's =reconstruct.lisp= retain
-durable user-specific changes without patching the tracked repository.
+durable user-specific changes without patching the tracked repository. Missing
+canonical replay artifacts are restored from the separate private Git history.
 
 * Development
 

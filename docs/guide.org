@@ -261,19 +261,27 @@ and =self.set= journal successful reconstructible changes in the active image;
 =self.diff= shows the changes still pending in that image lineage. =self.commit=
 checks all pending changes and writes an immutable full snapshot under
 =${XDG_DATA_HOME:-~/.local/share}/autolith/image-commits/COMMIT-ID/=. Each snapshot
-contains =manifest.sexp= and executable =reconstruct.lisp=. The atomic selection
-record is
+contains =manifest.sexp= and executable =reconstruct.lisp=. Autolith copies those
+artifacts into a separate Git repository under
+=${XDG_STATE_HOME:-~/.local/state}/autolith/mutation-history/= and commits them
+using the private commit title. The atomic selection record is
 =${XDG_STATE_HOME:-~/.local/state}/autolith/current-image-commit.sexp=. Normal
-startup loads that script after the tracked system. =self.persist-definition=
-performs the same complete transaction directly for one definition. Legacy
-=overlays/*.lisp= files load when no private commit exists and are imported by
-the first private commit.
+startup loads that script after the tracked system. If the selected canonical
+manifest or replay script was deleted, startup restores it from the exact Git
+object before loading it. =self.persist-definition= performs the same complete
+transaction directly for one definition. Legacy =overlays/*.lisp= files load
+when no private commit exists and are imported by the first private commit.
 
 The relevant private layout is deliberately direct:
 
 #+BEGIN_SRC text
 ${XDG_STATE_HOME:-~/.local/state}/autolith/
-└── current-image-commit.sexp
+├── current-image-commit.sexp
+└── mutation-history/
+    ├── .git/
+    └── commits/COMMIT-ID/
+        ├── manifest.sexp
+        └── reconstruct.lisp
 
 ${XDG_DATA_HOME:-~/.local/share}/autolith/
 ├── image-commits/COMMIT-ID/
@@ -297,8 +305,9 @@ the tracked source like on any project, with only the stable launcher and
 recovery artifacts read-only. From any other workspace those tools refuse
 Autolith's own source entirely. =self.commit= has no workspace Git behavior and
 works identically from any workspace because every file it writes belongs to
-Autolith's private data or state root. Repository commits are handled through
-ordinary workspace commands only when the user requests them.
+Autolith's private data or state root. Its Git commits belong only to the
+private mutation-history repository. Workspace repository commits are handled
+through ordinary workspace commands only when the user requests them.
 
 Autolith keeps all project definitions in one =AUTOLITH= package. Files and CLOS
 protocols express subsystem boundaries without scoped packages.
@@ -310,12 +319,12 @@ briefly excludes live mutation, revalidates the source revision, and forks a
 coordinator. The active parent resumes immediately. A saver child writes a
 temporary core. Before publication, the coordinator boots that core through a
 private probe and requires its exact generation ID, tracked source commit, and
-private image commit. Only then does it publish the core, manifest, and
-selected-generation record. Before the fork, checkpoint preparation checks and
-commits any pending reconstructible mutations.
+private image and mutation-history Git commits. Only then does it publish the
+core, manifest, and selected-generation record. Before the fork, checkpoint
+preparation checks and commits any pending reconstructible mutations.
 Every new generation directory receives a complete =reconstruct.lisp=, and its
-version-2 manifest records that path and the exact private image commit captured
-by the saved core.
+version-3 manifest records that path and both private commit identities captured
+by the saved core. Manifest versions 1 and 2 remain readable.
 
 =/rollback ID= atomically selects a compatible generation and leaves the active
 process through a dedicated recovery status. The stable launcher then starts the
