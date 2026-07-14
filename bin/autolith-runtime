@@ -5,12 +5,12 @@ set -euo pipefail
 runtime_release=2.6.4
 runtime_archive_sha256=466933f9b4f403b6a49b2a7cc755fdd5d827c3b354aa3c8c0d96697e5da1e9fc
 runtime_archive_url=https://downloads.sourceforge.net/project/sbcl/sbcl/2.6.4/sbcl-2.6.4-x86-64-linux-binary.tar.bz2
-source_archive_sha256=3ba53e654b60feb7c4f50466199d6d5260f2661c711ba22d4b770b655400d57b
 source_archive_url=https://downloads.sourceforge.net/project/sbcl/sbcl/2.6.4/sbcl-2.6.4-source.tar.bz2
 
 adapter_path=$(readlink -f -- "${BASH_SOURCE[0]}")
 source_root=$(CDPATH= cd -- "$(dirname -- "$adapter_path")/.." && pwd)
 expected_version=$(tr -d '[:space:]' < "$source_root/sbcl.version")
+source_archive_sha256=$(tr -d '[:space:]' < "$source_root/sbcl-source.sha256")
 data_home=${XDG_DATA_HOME:-$HOME/.local/share}
 runtime_root=$data_home/autolith/runtimes/$expected_version
 runtime_command_path=$runtime_root/command
@@ -228,6 +228,8 @@ done
 [[ -f "$script_path" ]] || fail "Lisp script $script_path does not exist."
 [[ "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
   fail "sbcl.version is malformed."
+[[ "$source_archive_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+  fail "sbcl-source.sha256 is malformed."
 
 trap cleanup EXIT
 trap 'exit 129' HUP

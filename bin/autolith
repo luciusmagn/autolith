@@ -10,7 +10,11 @@ remaining_arguments=()
 state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 data_home=${XDG_DATA_HOME:-$HOME/.local/share}
 runtime_version=$(tr -d '[:space:]' < "$source_root/sbcl.version")
+source_archive_sha256=$(tr -d '[:space:]' < "$source_root/sbcl-source.sha256")
+runtime_root=$data_home/autolith/runtimes/$runtime_version
 runtime_command_path=$data_home/autolith/runtimes/$runtime_version/command
+runtime_source_root=$runtime_root/source
+source_identity_path=$runtime_root/source.identity
 recorded_runtime=
 if [[ -r "$runtime_command_path" ]]; then
   IFS= read -r recorded_runtime < "$runtime_command_path" || recorded_runtime=
@@ -23,6 +27,17 @@ else
   sbcl_command=sbcl
 fi
 export AUTOLITH_SBCL=$sbcl_command
+source_identity=
+if [[ -r "$source_identity_path" ]]; then
+  IFS= read -r source_identity < "$source_identity_path" || source_identity=
+fi
+if [[ "$source_archive_sha256" =~ ^[0-9a-f]{64}$ &&
+      "$source_identity" == "$runtime_version $source_archive_sha256" &&
+      -f "$runtime_source_root/version.lisp-expr" ]]; then
+  export AUTOLITH_SBCL_SOURCE_ROOT=$runtime_source_root
+else
+  unset AUTOLITH_SBCL_SOURCE_ROOT
+fi
 recovery_core=${AUTOLITH_RECOVERY_CORE:-$data_home/autolith/recovery/autolith-recovery.core}
 recovery_manifest=$(dirname -- "$recovery_core")/manifest.sexp
 active_core=${AUTOLITH_ACTIVE_CORE:-$data_home/autolith/active/autolith-active.core}
