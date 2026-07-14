@@ -115,7 +115,24 @@
     :initarg :conversation
     :reader responsive-scripted-terminal-conversation
     :type conversation
-    :documentation "The conversation whose durable answers permit final EOF."))
+    :documentation "The conversation whose durable answers permit final EOF.")
+   (pre-provider-event-count
+    :initarg :pre-provider-event-count
+    :initform 2
+    :reader responsive-scripted-terminal-pre-provider-event-count
+    :type (integer 0)
+    :documentation "The number of initial events admitted before the provider gate opens.")
+   (events-read
+    :initform 0
+    :accessor responsive-scripted-terminal-events-read
+    :type (integer 0)
+    :documentation "The number of scripted events already returned.")
+   (final-provider-item-count
+    :initarg :final-provider-item-count
+    :initform 2
+    :reader responsive-scripted-terminal-final-provider-item-count
+    :type (integer 0)
+    :documentation "The durable provider item count required before physical EOF."))
   (:documentation
    "A terminal that types more input only while its provider request is active."))
 
@@ -141,7 +158,8 @@
     (multiple-value-bind (entered-p released-p)
         (gated-provider-state provider)
       (cond
-        ((> remaining 3)
+        ((< (responsive-scripted-terminal-events-read terminal)
+            (responsive-scripted-terminal-pre-provider-event-count terminal))
          t)
         ((not entered-p)
          nil)
@@ -151,11 +169,16 @@
          (gated-provider-release provider)
          nil)
         (t
-         (>= (responsive-scripted-terminal--answer-count terminal) 2))))))
+         (>= (responsive-scripted-terminal--answer-count terminal)
+             (responsive-scripted-terminal-final-provider-item-count
+              terminal)))))))
 
 (defmethod terminal-read-event ((terminal responsive-scripted-terminal))
   "Return TERMINAL's next paced event, then physical EOF after durable answers."
-  (or (pop (scripted-terminal-events terminal)) ':stream-end))
+  (if (scripted-terminal-events terminal)
+      (prog1 (pop (scripted-terminal-events terminal))
+        (incf (responsive-scripted-terminal-events-read terminal)))
+      ':stream-end))
 
 (defclass waiting-recording-terminal (recording-terminal)
   ()
@@ -972,7 +995,7 @@
 
 (-> test-responsive-model-input () null)
 (defun test-responsive-model-input ()
-  "Test typing, submission, queueing, and cursor stability during model turns."
+  "Test steering, follow-up queueing, and cursor stability during model turns."
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration)))
     (unwind-protect
@@ -985,12 +1008,18 @@
                    :results
                    (list
                     (agent-test-result
-                     "responsive-1"
-                     (list (agent-test-message "first answer"))
+                     "responsive-tool"
+                     (list
+                      (agent-test-call
+                       :call-id "responsive-call"
+                       :arguments "{\"value\":\"before steering\"}")))
+                    (agent-test-result
+                     "responsive-steered"
+                     (list (agent-test-message "steered answer"))
                      :turn-completion :end)
                     (agent-test-result
-                     "responsive-2"
-                     (list (agent-test-message "second answer"))
+                     "responsive-queued"
+                     (list (agent-test-message "queued answer"))
                      :turn-completion :end))))
                 (terminal
                   (make-instance
@@ -998,14 +1027,17 @@
                    :columns 60
                    :provider provider
                    :conversation conversation
+                   :final-provider-item-count 3
                    :events
                    (list '(:insert "first message")
                          :submit
-                         '(:insert "second message")
+                         '(:insert "steer this turn")
                          :submit
+                         '(:insert "queued follow-up")
+                         :complete
                          '(:insert "draft survives"))))
                 (ui (terminal-ui-create :terminal terminal))
-                (registry (make-instance 'tool-registry))
+                (registry (agent-test-registry))
                 (agent (agent-create :configuration configuration
                                      :provider provider
                                      :conversation conversation
@@ -1023,7 +1055,7 @@
            (test-assert
             (string= (line-editor-text (terminal-ui-editor ui))
                      "draft survives")
-            "draft input survives streaming and two complete model turns")
+            "draft input survives steering and a queued follow-up turn")
            (let* ((records
                     (rest (conversation--read-records
                            (conversation-pathname conversation))))
@@ -1034,14 +1066,22 @@
                             collect (getf (rest record) :content)))
                   (output (recording-terminal-output terminal)))
              (test-assert (equal user-messages
-                                 '("first message" "second message"))
-                          "submitted messages run sequentially in FIFO order")
-             (test-assert (search "first answer" output)
-                          "the first queued response reaches scrollback")
-             (test-assert (search "second answer" output)
-                          "the second queued response reaches scrollback")
-             (test-assert (search "1 message queued" output)
-                          "the live region reports input waiting behind a turn")
+                                 '("first message"
+                                   "steer this turn"
+                                   "queued follow-up"))
+                          "steering precedes the post-turn follow-up")
+             (test-assert
+              (equal (nreverse (scripted-provider-input-counts provider))
+                     '(1 4 6))
+              "Enter reaches the current tool loop and Tab starts a later turn")
+             (test-assert (search "steered answer" output)
+                          "the steered response reaches scrollback")
+             (test-assert (search "queued answer" output)
+                          "the Tab-queued response reaches scrollback")
+             (test-assert (search "1 message waiting for next tool call" output)
+                          "the live region reports pending steering")
+             (test-assert (search "1 follow-up queued" output)
+                          "the live region reports post-turn follow-up input")
              (test-assert
               (live-region-cursor-visible-p (terminal-ui-live-region ui))
               "responsive model turns leave the input cursor visible")
@@ -1085,6 +1125,42 @@
                (application-input-controller-reader-thread controller))
               "the terminal reader restarts after single-threaded work"))
         (application-input-controller-stop controller))))
+  nil)
+
+(-> test-late-steering-promotion () null)
+(defun test-late-steering-promotion ()
+  "Test steering with no later tool runs before already queued follow-up input."
+  (let* ((terminal (make-instance 'waiting-recording-terminal :columns 60))
+         (ui (terminal-ui-create :terminal terminal))
+         (application (make-instance 'application :ui ui))
+         (controller nil))
+    (with-terminal-ui (active-ui ui)
+      (declare (ignore active-ui))
+      (setf controller (application-input-controller-create application))
+      (unwind-protect
+           (progn
+             (application-input-controller--enqueue
+              controller ':message "active turn")
+             (test-assert
+              (equal (application-input-controller--next-work controller)
+                     '(:message "active turn"))
+              "the initial submission becomes active work")
+             (application-input-controller--enqueue
+              controller ':message "tab follow-up")
+             (application-input-controller--enqueue-steering
+              controller "late enter")
+             (application-input-controller--finish-work controller)
+             (test-assert
+              (equal (application-input-controller--next-work controller)
+                     '(:message "late enter"))
+              "unconsumed Enter input moves ahead of Tab follow-ups")
+             (application-input-controller--finish-work controller)
+             (test-assert
+              (equal (application-input-controller--next-work controller)
+                     '(:message "tab follow-up"))
+              "Tab input remains queued after promoted steering"))
+        (when controller
+          (application-input-controller-stop controller)))))
   nil)
 
 (-> test-conversation-picker () null)
@@ -1686,6 +1762,7 @@
   (test-turn-cursor-visibility)
   (test-responsive-model-input)
   (test-input-reader-quiescence)
+  (test-late-steering-promotion)
   (test-conversation-picker)
   (test-working-directory-switch)
   (test-working-directory-command)

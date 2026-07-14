@@ -186,7 +186,12 @@
     :initform 0
     :accessor terminal-ui-queued-input-count
     :type (integer 0)
-    :documentation "Submitted messages waiting behind the active model turn.")
+    :documentation "Submitted follow-up inputs waiting behind the active model turn.")
+   (steering-input-count
+    :initform 0
+    :accessor terminal-ui-steering-input-count
+    :type (integer 0)
+    :documentation "Submitted messages waiting for the active turn's next tool boundary.")
    (stream-tail
     :initform nil
     :accessor terminal-ui-stream-tail

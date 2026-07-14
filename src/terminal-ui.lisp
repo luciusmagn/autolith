@@ -440,6 +440,18 @@
                                            (terminal-ui--status-text-at
                                             ui status-now)))
                       row-width)))))
+    (when (plusp (terminal-ui-steering-input-count ui))
+      (setf rows
+            (append rows
+                    (list
+                     (terminal--clip-spans
+                      (list
+                       (terminal-span ':brand "∙ ")
+                       (terminal-span
+                        ':dim
+                        (format nil "~D message~:P waiting for next tool call"
+                                (terminal-ui-steering-input-count ui))))
+                      row-width)))))
     (when (plusp (terminal-ui-queued-input-count ui))
       (setf rows
             (append rows
@@ -449,7 +461,7 @@
                        (terminal-span ':brand "∙ ")
                        (terminal-span
                         ':dim
-                        (format nil "~D message~:P queued"
+                        (format nil "~D follow-up~:P queued"
                                 (terminal-ui-queued-input-count ui))))
                       row-width)))))
     (when rows
@@ -795,11 +807,36 @@ when no resize needs to be applied."
 
 (-> terminal-ui-set-queued-input-count (terminal-ui integer) terminal-ui)
 (defun terminal-ui-set-queued-input-count (ui count)
-  "Set UI's queued message COUNT and repaint when it changes."
+  "Set UI's queued follow-up COUNT and repaint when it changes."
   (check-type count (integer 0))
   (with-terminal-ui-locked (ui)
     (unless (= count (terminal-ui-queued-input-count ui))
       (setf (terminal-ui-queued-input-count ui) count)
+      (terminal-ui--paint-live ui)))
+  ui)
+
+(-> terminal-ui-set-steering-input-count (terminal-ui integer) terminal-ui)
+(defun terminal-ui-set-steering-input-count (ui count)
+  "Set UI's next-tool steering COUNT and repaint when it changes."
+  (check-type count (integer 0))
+  (with-terminal-ui-locked (ui)
+    (unless (= count (terminal-ui-steering-input-count ui))
+      (setf (terminal-ui-steering-input-count ui) count)
+      (terminal-ui--paint-live ui)))
+  ui)
+
+(-> terminal-ui-set-input-counts
+    (terminal-ui integer integer)
+    terminal-ui)
+(defun terminal-ui-set-input-counts (ui steering-count queued-count)
+  "Set UI's steering and queued input counts with at most one repaint."
+  (check-type steering-count (integer 0))
+  (check-type queued-count (integer 0))
+  (with-terminal-ui-locked (ui)
+    (unless (and (= steering-count (terminal-ui-steering-input-count ui))
+                 (= queued-count (terminal-ui-queued-input-count ui)))
+      (setf (terminal-ui-steering-input-count ui) steering-count
+            (terminal-ui-queued-input-count ui) queued-count)
       (terminal-ui--paint-live ui)))
   ui)
 
@@ -869,6 +906,10 @@ when no resize needs to be applied."
       ((eq event :complete)
        (line-editor-handle-event editor '(:insert "    "))
        (values :changed nil))
+      ((eq event :queue-submit)
+       (multiple-value-bind (action payload)
+           (line-editor-handle-event editor :submit)
+         (values (if (eq action :submit) ':queue action) payload)))
       ((eq event :clear-screen)
        (values :changed nil))
       (t
@@ -880,17 +921,25 @@ when no resize needs to be applied."
                  payload))))))
 
 (-> terminal-ui-process-event
-    (terminal-ui t)
+    (terminal-ui t &key (:queue-completion-p boolean))
     (values keyword (option string)))
-(defun terminal-ui-process-event (ui event)
+(defun terminal-ui-process-event (ui event &key queue-completion-p)
   "Apply EVENT to UI's suggestions or editor and return its action and payload."
   (with-terminal-ui-locked (ui)
-    (multiple-value-bind (completion-action completion-payload)
-        (terminal-ui--handle-completion-event ui event)
-      (if completion-action
-          (values completion-action completion-payload)
-          (multiple-value-bind (action payload)
-              (terminal-ui--apply-editor-event ui event)
-            (when (member action '(:changed :cleared :submit))
-              (terminal-ui--repaint-live ui))
-            (values action payload))))))
+    (let ((effective-event
+            (if (and queue-completion-p
+                     (eq event :complete)
+                     (plusp (length (line-editor-text
+                                     (terminal-ui-editor ui))))
+                     (not (terminal-ui-completion-active-p ui)))
+                ':queue-submit
+                event)))
+      (multiple-value-bind (completion-action completion-payload)
+          (terminal-ui--handle-completion-event ui effective-event)
+        (if completion-action
+            (values completion-action completion-payload)
+            (multiple-value-bind (action payload)
+                (terminal-ui--apply-editor-event ui effective-event)
+              (when (member action '(:changed :cleared :submit :queue))
+                (terminal-ui--repaint-live ui))
+              (values action payload)))))))

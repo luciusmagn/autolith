@@ -213,6 +213,71 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-agent-steering () null)
+(defun test-agent-steering ()
+  "Test pending user input is persisted after a tool round and before its follow-up."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration :identifier "agent-steering"))
+         (provider
+           (make-instance
+            'scripted-provider
+            :results
+            (list
+             (agent-test-result
+              "steering-1"
+              (list (agent-test-call
+                     :call-id "steering-call"
+                     :arguments "{\"value\":\"before\"}"))
+              :turn-state "transient-turn-state")
+             (agent-test-result
+              "steering-2"
+              (list (agent-test-message "changed course"))
+              :turn-completion :end))))
+         (pending-input (list "change direction"))
+         (statuses nil))
+    (unwind-protect
+         (let* ((agent
+                  (agent-create :configuration configuration
+                                :provider provider
+                                :conversation conversation
+                                :tool-registry (agent-test-registry)
+                                :worker nil))
+                (observer
+                  (callback-agent-observer-create
+                   :steering-callback
+                   (lambda ()
+                     (prog1 pending-input
+                       (setf pending-input nil)))
+                   :status-callback
+                   (lambda (status details)
+                     (declare (ignore details))
+                     (push status statuses)))))
+           (agent-run-user-turn agent "start here" :observer observer)
+           (test-assert
+            (equal (nreverse (scripted-provider-input-counts provider))
+                   '(1 4))
+            "steering follows the function call and correlated tool output")
+           (test-assert
+            (equal (nreverse (scripted-provider-turn-states provider))
+                   '(nil nil))
+            "new steering invalidates the request-local provider turn state")
+           (let ((user-messages
+                   (loop for record in
+                           (rest (conversation--read-records
+                                  (conversation-pathname conversation)))
+                         when (and (eq (first record) ':message)
+                                   (eq (getf (rest record) :role) ':user))
+                           collect (getf (rest record) :content))))
+             (test-assert (equal user-messages
+                                 '("start here" "change direction"))
+                          "steering is durable ordinary user input"))
+           (test-assert (member :steering-applied statuses)
+                        "the observer is notified after steering becomes durable"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-agent-explicit-continuation () null)
 (defun test-agent-explicit-continuation ()
   "Test a tool-free explicit continuation receives another bounded request."
@@ -654,6 +719,7 @@
 (defun run-agent-tests ()
   "Run focused agent-loop tests and return true on success."
   (test-agent-tool-loop)
+  (test-agent-steering)
   (test-agent-explicit-continuation)
   (test-agent-invalid-call-history)
   (test-agent-bounds-and-tool-failures)

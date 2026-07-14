@@ -862,8 +862,10 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
            *application-thinking-words*)
       "pondering"))
 
-(-> application-agent-observer (application) agent-observer)
-(defun application-agent-observer (application)
+(-> application-agent-observer
+    (application &key (:steering-function (option function)))
+    agent-observer)
+(defun application-agent-observer (application &key steering-function)
   "Return a terminal observer streaming one APPLICATION turn as stable lines."
   (let ((ui (application-ui application))
         (activity-label (application-thinking-label))
@@ -972,6 +974,9 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
            (:tool-call-completed
             (application-render-records application)
             (terminal-ui-set-status ui activity-label))
+           (:steering-applied
+            (application-render-records application)
+            (terminal-ui-set-status ui activity-label))
            (:compaction-started
             (terminal-ui-set-status ui "compacting the conversation"))
            (:compaction-completed
@@ -979,7 +984,8 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
             (terminal-ui-set-status ui activity-label))
            (:turn-completed
             (terminal-ui-set-preview-rows ui nil)
-            (terminal-ui-set-status ui nil))))))))
+            (terminal-ui-set-status ui nil))))
+       :steering-callback steering-function))))
 
 (-> application--turn-final-text (provider-result) (option string))
 (defun application--turn-final-text (result)
@@ -1012,9 +1018,12 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
   nil)
 
 (-> application--run-turn
-    (application string &key (:continuation-p boolean))
+    (application string
+     &key (:continuation-p boolean)
+          (:steering-function (option function)))
     null)
-(defun application--run-turn (application content &key continuation-p)
+(defun application--run-turn
+    (application content &key continuation-p steering-function)
   "Persist and run one model turn for CONTENT while retaining editable input."
   (let* ((conversation (application-conversation application))
          (ui (application-ui application))
@@ -1040,7 +1049,9 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
             (agent-run-user-turn
              (application-agent application)
              content
-             :observer (application-agent-observer application)
+             :observer (application-agent-observer
+                        application
+                        :steering-function steering-function)
              :goal-context (application-goal-context application))))
       (terminal-ui-set-preview-rows ui nil)
       (terminal-ui-set-status ui nil)
@@ -1048,8 +1059,11 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
       (application-render-records application)))
   nil)
 
-(-> application--run-goal-continuations (application) null)
-(defun application--run-goal-continuations (application)
+(-> application--run-goal-continuations
+    (application &key (:steering-function (option function)))
+    null)
+(defun application--run-goal-continuations
+    (application &key steering-function)
   "Run bounded automatic continuation turns while the session goal is active."
   (loop
     (let ((goal (application-goal application)))
@@ -1069,15 +1083,22 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
       (incf (getf (application-goal application) :continuations))
       (application--run-turn application
                              +application-goal-continuation-prompt+
-                             :continuation-p t)))
+                             :continuation-p t
+                             :steering-function steering-function)))
   nil)
 
-(-> application-run-message (application string) null)
-(defun application-run-message (application content)
+(-> application-run-message
+    (application string &key (:steering-function (option function)))
+    null)
+(defun application-run-message (application content &key steering-function)
   "Run one user turn for CONTENT plus any automatic goal continuation turns."
   (let ((goal (application-goal application)))
     (when (and goal (eq (getf goal :status) ':active))
       (setf (getf (application-goal application) :continuations) 0)))
-  (application--run-turn application content)
-  (application--run-goal-continuations application)
+  (application--run-turn application
+                         content
+                         :steering-function steering-function)
+  (application--run-goal-continuations
+   application
+   :steering-function steering-function)
   nil)

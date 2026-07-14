@@ -33,7 +33,13 @@
     :initform nil
     :reader callback-agent-observer-status-callback
     :type (option function)
-    :documentation "The optional function called with a status keyword and portable details."))
+    :documentation "The optional function called with a status keyword and portable details.")
+   (steering-callback
+    :initarg :steering-callback
+    :initform nil
+    :reader callback-agent-observer-steering-callback
+    :type (option function)
+    :documentation "The optional function that drains user messages waiting for a tool boundary."))
   (:documentation "An agent observer implemented by ordinary terminal-facing callbacks."))
 
 (defclass agent ()
@@ -137,6 +143,11 @@
 (defgeneric agent-observer-status (observer status details)
   (:documentation "Present STATUS and portable DETAILS through OBSERVER."))
 
+(-> agent-observer-take-steering (agent-observer) list)
+(defgeneric agent-observer-take-steering (observer)
+  (:documentation
+   "Return and consume user messages waiting at OBSERVER's next tool boundary."))
+
 (defmethod agent-observer-text ((observer agent-observer) (text string))
   "Ignore assistant TEXT for the default silent OBSERVER."
   (declare (ignore observer text))
@@ -153,6 +164,11 @@
   (declare (type keyword status)
            (type list details))
   (declare (ignore observer status details))
+  nil)
+
+(defmethod agent-observer-take-steering ((observer agent-observer))
+  "Return no steering messages for the default silent OBSERVER."
+  (declare (ignore observer))
   nil)
 
 (defmethod agent-observer-text ((observer callback-agent-observer) (text string))
@@ -180,6 +196,13 @@
       (funcall callback status details)))
   nil)
 
+(defmethod agent-observer-take-steering ((observer callback-agent-observer))
+  "Drain steering messages through OBSERVER's configured callback."
+  (let ((callback (callback-agent-observer-steering-callback observer)))
+    (if callback
+        (funcall callback)
+        nil)))
+
 
 ;;;; -- Construction and Turn Entry --
 
@@ -187,15 +210,17 @@
     (&key
      (:text-callback (option function))
      (:reasoning-callback (option function))
-     (:status-callback (option function)))
+     (:status-callback (option function))
+     (:steering-callback (option function)))
     callback-agent-observer)
 (defun callback-agent-observer-create
-    (&key text-callback reasoning-callback status-callback)
+    (&key text-callback reasoning-callback status-callback steering-callback)
   "Create an observer backed by optional presentation callbacks."
   (make-instance 'callback-agent-observer
                  :text-callback text-callback
                  :reasoning-callback reasoning-callback
-                 :status-callback status-callback))
+                 :status-callback status-callback
+                 :steering-callback steering-callback))
 
 (-> agent-create
     (&key
@@ -408,6 +433,30 @@
                  :output (tool-result-content result)))))))
   nil)
 
+(-> agent--apply-steering-input (agent agent-observer integer) null)
+(defun agent--apply-steering-input (agent observer request-number)
+  "Persist user messages drained from OBSERVER after one completed tool round."
+  (let ((messages (agent-observer-take-steering observer))
+        (conversation (agent-conversation agent)))
+    (unless (listp messages)
+      (error 'agent-loop-error
+             :message "The agent observer returned malformed steering input."
+             :conversation-id (conversation-identifier conversation)
+             :request-number request-number))
+    (dolist (message messages)
+      (unless (non-empty-string-p message)
+        (error 'agent-loop-error
+               :message "The agent observer returned an empty steering message."
+               :conversation-id (conversation-identifier conversation)
+               :request-number request-number))
+      (conversation-append-user-message conversation message))
+    (when messages
+      (agent-observer-status
+       observer
+       :steering-applied
+       (list :message-count (length messages)))))
+  nil)
+
 (-> agent--reject-tool-calls
     (agent list agent-observer
      &key (:tool-round integer) (:message string))
@@ -616,4 +665,5 @@ persisted as history, only the durable summary record is."
             (t
              (incf tool-rounds)
              (incf tool-calls (length calls))
-             (agent--execute-tool-calls agent calls observer tool-rounds))))))))
+             (agent--execute-tool-calls agent calls observer tool-rounds)
+             (agent--apply-steering-input agent observer request-number))))))))

@@ -23,6 +23,11 @@
     :accessor application-input-controller-work-items
     :type list
     :documentation "FIFO message and command work submitted by the reader.")
+   (steering-items
+    :initform nil
+    :accessor application-input-controller-steering-items
+    :type list
+    :documentation "FIFO user messages waiting for the active turn's next tool boundary.")
    (active-p
     :initform nil
     :accessor application-input-controller-active-p
@@ -110,27 +115,34 @@
                        '("/resume" "/model" "/effort" "/rollback")
                        :test #'string=)))))))
 
-(-> application-input-controller--pending-message-count
+(-> application-input-controller--pending-input-count
     (application-input-controller)
     (integer 0))
-(defun application-input-controller--pending-message-count (controller)
-  "Return CONTROLLER's queued message count while its lock is held."
-  (count ':message
-         (application-input-controller-work-items controller)
-         :key #'first))
+(defun application-input-controller--pending-input-count (controller)
+  "Return CONTROLLER's queued follow-up count while its lock is held."
+  (length (application-input-controller-work-items controller)))
 
-(-> application-input-controller--publish-count
+(-> application-input-controller--publish-counts
     (application-input-controller)
     null)
-(defun application-input-controller--publish-count (controller)
-  "Publish CONTROLLER's queued message count through its serialized UI."
-  (let ((count
-          (with-lock-held ((application-input-controller-lock controller))
-            (application-input-controller--pending-message-count controller))))
-    (terminal-ui-set-queued-input-count
+(defun application-input-controller--publish-counts (controller)
+  "Publish CONTROLLER's steering and follow-up counts through its serialized UI."
+  (with-lock-held ((application-input-controller-lock controller))
+    (terminal-ui-set-input-counts
      (application-ui (application-input-controller-application controller))
-     count))
+     (length (application-input-controller-steering-items controller))
+     (application-input-controller--pending-input-count controller)))
   nil)
+
+(-> application-input-controller-turn-active-p
+    (application-input-controller)
+    boolean)
+(defun application-input-controller-turn-active-p (controller)
+  "Return true when CONTROLLER's main thread is processing one work item."
+  (not
+   (null
+    (with-lock-held ((application-input-controller-lock controller))
+      (application-input-controller-active-p controller)))))
 
 (-> application-input-controller-busy-p
     (application-input-controller)
@@ -166,11 +178,12 @@
         (setf (application-input-controller-failure controller) condition
               (application-input-controller-failure-backtrace controller) backtrace
               (application-input-controller-work-items controller) nil
+              (application-input-controller-steering-items controller) nil
               (application-input-controller-stopping-p controller) t))
       (setf active-p (application-input-controller-active-p controller))
       (condition-notify
        (application-input-controller-condition-variable controller)))
-    (application-input-controller--publish-count controller)
+    (application-input-controller--publish-counts controller)
     (when active-p
       (handler-case
           (application-input-controller--interrupt-main
@@ -195,8 +208,39 @@
                    (list (list kind (copy-seq input)))))
       (condition-notify
        (application-input-controller-condition-variable controller))))
-  (application-input-controller--publish-count controller)
+  (application-input-controller--publish-counts controller)
   nil)
+
+(-> application-input-controller--enqueue-steering
+    (application-input-controller string)
+    null)
+(defun application-input-controller--enqueue-steering (controller input)
+  "Queue INPUT for the active turn, or promote it before follow-ups if that turn ended."
+  (with-lock-held ((application-input-controller-lock controller))
+    (unless (application-input-controller-stopping-p controller)
+      (if (application-input-controller-active-p controller)
+          (setf (application-input-controller-steering-items controller)
+                (nconc (application-input-controller-steering-items controller)
+                       (list (copy-seq input))))
+          (push (list ':message (copy-seq input))
+                (application-input-controller-work-items controller)))
+      (condition-notify
+       (application-input-controller-condition-variable controller))))
+  (application-input-controller--publish-counts controller)
+  nil)
+
+(-> application-input-controller--take-steering
+    (application-input-controller)
+    list)
+(defun application-input-controller--take-steering (controller)
+  "Return and consume CONTROLLER's messages for the completed tool boundary."
+  (let ((messages nil))
+    (with-lock-held ((application-input-controller-lock controller))
+      (unless (application-input-controller-stopping-p controller)
+        (setf messages (application-input-controller-steering-items controller)
+              (application-input-controller-steering-items controller) nil)))
+    (application-input-controller--publish-counts controller)
+    messages))
 
 (-> application-input-controller--request-exit
     (application-input-controller keyword)
@@ -209,10 +253,11 @@
         (setf (application-input-controller-exit-reason controller) reason))
       (setf (application-input-controller-stopping-p controller) t
             (application-input-controller-work-items controller) nil
+            (application-input-controller-steering-items controller) nil
             active-p (application-input-controller-active-p controller))
       (condition-notify
        (application-input-controller-condition-variable controller)))
-    (application-input-controller--publish-count controller)
+    (application-input-controller--publish-counts controller)
     (when active-p
       (handler-case
           (application-input-controller--interrupt-main
@@ -243,14 +288,17 @@
   nil)
 
 (-> application-input-controller--handle-submission
-    (application-input-controller string)
+    (application-input-controller string &key (:steer-p boolean))
     null)
-(defun application-input-controller--handle-submission (controller input)
+(defun application-input-controller--handle-submission
+    (controller input &key steer-p)
   "Route submitted INPUT to model work, command work, or busy-command policy."
   (let ((message (application--message-input input)))
     (cond
       (message
-       (application-input-controller--enqueue controller ':message message))
+       (if steer-p
+           (application-input-controller--enqueue-steering controller message)
+           (application-input-controller--enqueue controller ':message message)))
       ((not (non-empty-string-p input))
        nil)
       ((application-input-controller-busy-p controller)
@@ -261,18 +309,38 @@
        (application-input-controller--enqueue controller ':command input))))
   nil)
 
+(-> application-input-controller--handle-queue-submission
+    (application-input-controller string)
+    null)
+(defun application-input-controller--handle-queue-submission (controller input)
+  "Queue INPUT as post-turn message or command work."
+  (let ((message (application--message-input input)))
+    (cond
+      (message
+       (application-input-controller--enqueue controller ':message message))
+      ((non-empty-string-p input)
+       (application-input-controller--enqueue controller ':command input))))
+  nil)
+
 (-> application-input-controller--process-event
     (application-input-controller t)
     null)
 (defun application-input-controller--process-event (controller event)
   "Apply terminal EVENT and publish any resulting work or exit request."
   (let ((ui (application-ui
-             (application-input-controller-application controller))))
+             (application-input-controller-application controller)))
+        (turn-active-p
+          (application-input-controller-turn-active-p controller)))
     (multiple-value-bind (action payload)
-        (terminal-ui-process-event ui event)
+        (terminal-ui-process-event
+         ui event :queue-completion-p turn-active-p)
       (case action
         (:submit
-         (application-input-controller--handle-submission controller payload))
+         (application-input-controller--handle-submission
+          controller payload :steer-p turn-active-p))
+        (:queue
+         (application-input-controller--handle-queue-submission
+          controller payload))
         (:end-of-input
          (application-input-controller--request-exit controller ':end-of-input))
         (:interrupt
@@ -409,34 +477,45 @@
     (option list))
 (defun application-input-controller--next-work (controller)
   "Wait for and return CONTROLLER's next work item, or NIL after exit."
-  (with-lock-held ((application-input-controller-lock controller))
-    (loop while (and (null (application-input-controller-work-items controller))
-                     (null (application-input-controller-failure controller))
-                     (not (application-input-controller-stopping-p controller)))
-          do (condition-wait
-              (application-input-controller-condition-variable controller)
-              (application-input-controller-lock controller)))
-    (when (application-input-controller-failure controller)
-      (error
-       'application-input-failed
-       :original-condition (application-input-controller-failure controller)
-       :backtrace (application-input-controller-failure-backtrace controller)))
-    (when (application-input-controller-stopping-p controller)
-      (return-from application-input-controller--next-work nil))
-    (let ((work (pop (application-input-controller-work-items controller))))
-      (setf (application-input-controller-active-p controller) t)
-      work)))
+  (let ((work nil))
+    (with-lock-held ((application-input-controller-lock controller))
+      (loop while (and (null (application-input-controller-work-items controller))
+                       (null (application-input-controller-failure controller))
+                       (not (application-input-controller-stopping-p controller)))
+            do (condition-wait
+                (application-input-controller-condition-variable controller)
+                (application-input-controller-lock controller)))
+      (when (application-input-controller-failure controller)
+        (error
+         'application-input-failed
+         :original-condition (application-input-controller-failure controller)
+         :backtrace (application-input-controller-failure-backtrace controller)))
+      (unless (application-input-controller-stopping-p controller)
+        (setf work (pop (application-input-controller-work-items controller))
+              (application-input-controller-active-p controller) t)))
+    (application-input-controller--publish-counts controller)
+    work))
 
 (-> application-input-controller--finish-work
     (application-input-controller)
     null)
 (defun application-input-controller--finish-work (controller)
-  "Mark CONTROLLER's current main-thread work finished."
+  "Finish current work and promote unconsumed steering before queued follow-ups."
   (with-lock-held ((application-input-controller-lock controller))
+    (unless (application-input-controller-stopping-p controller)
+      (let ((steering-items
+              (application-input-controller-steering-items controller)))
+        (when steering-items
+          (setf (application-input-controller-work-items controller)
+                (append (mapcar (lambda (input)
+                                  (list ':message input))
+                                steering-items)
+                        (application-input-controller-work-items controller)))))
+      (setf (application-input-controller-steering-items controller) nil))
     (setf (application-input-controller-active-p controller) nil)
     (condition-notify
      (application-input-controller-condition-variable controller)))
-  (application-input-controller--publish-count controller)
+  (application-input-controller--publish-counts controller)
   nil)
 
 (-> application-input-controller-stop (application-input-controller) null)
@@ -447,12 +526,14 @@
       (setf (application-input-controller-stopping-p controller) t
             (application-input-controller-reader-paused-p controller) t
             (application-input-controller-work-items controller) nil
+            (application-input-controller-steering-items controller) nil
             (application-input-controller-active-p controller) nil
             thread (application-input-controller-reader-thread controller))
       (condition-notify
        (application-input-controller-condition-variable controller)))
-    (terminal-ui-set-queued-input-count
+    (terminal-ui-set-input-counts
      (application-ui (application-input-controller-application controller))
+     0
      0)
     (when thread
       (join-thread thread)
@@ -462,8 +543,11 @@
           (setf (application-input-controller-reader-thread controller) nil)))))
   nil)
 
-(-> application--run-message-input (application string) keyword)
-(defun application--run-message-input (application input)
+(-> application--run-message-input
+    (application string &key (:steering-function (option function)))
+    keyword)
+(defun application--run-message-input
+    (application input &key steering-function)
   "Run model INPUT with established expected, cancellation, and fatal handling."
   (let ((signal-backtrace nil))
     (handler-bind
@@ -473,7 +557,8 @@
              (setf signal-backtrace (application-safe-backtrace)))))
       (handler-case
           (progn
-            (application-run-message application input)
+            (application-run-message
+             application input :steering-function steering-function)
             ':continue)
         (application-turn-cancelled (condition)
           (error condition))
@@ -526,7 +611,12 @@
   (let ((application (application-input-controller-application controller)))
     (case (first work)
       (:message
-       (application--run-message-input application (second work)))
+       (application--run-message-input
+        application
+        (second work)
+        :steering-function
+        (lambda ()
+          (application-input-controller--take-steering controller))))
       (:command
        (let* ((input (second work))
               (result

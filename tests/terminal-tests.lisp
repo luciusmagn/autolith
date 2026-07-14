@@ -715,7 +715,15 @@
         (terminal-ui-process-event active-ui :complete)
         (test-assert (string= (line-editor-text editor) "plain text    ")
                      "tab outside suggestion mode keeps inserting spaces")
-        (terminal-ui-process-event active-ui :interrupt))))
+        (terminal-ui-process-event active-ui :interrupt)
+        (terminal-ui-process-event active-ui '(:insert "queued follow-up"))
+        (multiple-value-bind (action payload)
+            (terminal-ui-process-event
+             active-ui :complete :queue-completion-p t)
+          (test-assert (eq action :queue)
+                       "tab queues a non-empty draft while a turn is active")
+          (test-assert (string= payload "queued follow-up")
+                       "queued submission returns the complete draft")))))
   nil)
 
 (-> test-terminal-modal-selection () null)
