@@ -22,7 +22,9 @@ terminal-ui
     |
     +---------> tool registry
                     |
-                    +-------------> lisp-worker subprocess
+                    +-------------> named lisp-worker pool
+                    |                    |
+                    |                    +-----> immutable worker images
                     |
                     +-------------> active Lisp image
 #+END_SRC
@@ -71,13 +73,21 @@ tool call receives a matching result, including malformed and failed calls.
 
 ** =lisp-worker.lisp=
 
-Owns a disposable SBCL subprocess and its readable S-expression protocol.
-No =lisp.*= operation shares heap state with the active image.
+Owns named, persistent SBCL subprocesses, their readable S-expression protocol,
+matching implementation-source lookup, and forked worker-core saving. No
+=lisp.*= operation shares heap state with another REPL or the active image.
+
+** =lisp-images.lisp=
+
+Owns immutable worker-image manifests, compatibility checks, parentage, durable
+notes, atomic core publication, and the bounded inventory placed in every model
+request. The pristine image is a reserved virtual root.
 
 ** =self-tools.lisp=
 
 Owns active-image inspection, exploratory mutation, definition identity, and
-form-aware source primitives.
+form-aware source primitives. Package-aware definition installation can
+instrument Lisp-level SBCL packages while restoring package locks afterward.
 
 ** =durable-mutations.lisp=
 
@@ -165,10 +175,12 @@ launcher can use the core.
 
 Contain the stable launcher boundary, pinned-runtime adapter, and minimal
 recovery runtime. =script/bootstrap= locates or installs the pinned SBCL beneath the
-data root without changing the system Lisp. It builds the recovery runtime into
-a read-only pristine core and builds the separate preloaded active image outside
-the repository. Both builders record exact source provenance and boot-probe each
-temporary image. The launcher repeats the versioned probes before use. It
+data root without changing the system Lisp. It also installs the independently
+hash-verified matching SBCL source as a read-only reference. It builds the
+recovery runtime into a read-only pristine core and builds the separate
+preloaded active image outside the repository. Both builders record exact
+source provenance and boot-probe each temporary image. The launcher repeats the
+versioned probes before use. It
 reports source loading immediately when the active image is missing or stale.
 Recovery reports
 sanitized crash and mutation context, creates exact-commit recovery worktrees,
@@ -199,4 +211,7 @@ changes without patching that source.
 Provider instances retain credential-source pathnames but not access or
 refresh tokens. Checkpoint code must run outside the dynamic request scope and
 must reject attempts to save while credentials are dynamically bound. Tokens
-never enter conversations, journals, logs, or manifests.
+never enter conversations, journals, logs, or manifests. Worker images contain
+only isolated REPL heaps and never participate in active-image startup or
+recovery. Their manifests and notes live under the data root; the pinned runtime
+executable and pristine recovery artifacts remain separate.

@@ -595,7 +595,7 @@ The first dogfoodable version is complete when it can:
 1. Authenticate through the Codex subscription provider.
 2. Hold a streaming conversation in the TUI.
 3. Save and reload the conversation from a =.sexp= file.
-4. Execute =lisp.*= operations in a disposable SBCL process.
+4. Execute =lisp.*= operations in named, heap-isolated SBCL REPL processes.
 5. Inspect and redefine a live function through =self.*=.
 6. Persist that definition as a private image commit and replay script.
 7. Create a Linux checkpoint without stopping the active agent.

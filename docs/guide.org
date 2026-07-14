@@ -11,7 +11,9 @@ Autolith is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
 - owns its system prompt, conversation state, tool loop, and authentication;
 - never invokes or depends on the Codex executable;
 - keeps finalized output in normal terminal scrollback;
-- runs =lisp.*= operations in a disposable SBCL process;
+- runs =lisp.*= operations in named, heap-isolated SBCL REPLs;
+- saves modified worker heaps as immutable images with durable notes;
+- inspects the exact source matching its pinned SBCL runtime;
 - exposes documented =self.*= inspection and mutation operations;
 - privately commits reconstructible live mutations without committing to Git;
 - saves live SBCL generations without stopping the active parent;
@@ -29,7 +31,10 @@ The supported target is Linux x86-64 with Git, OpenSSL, Quicklisp, =curl=, GNU
 command uses a matching =AUTOLITH_SBCL= when explicitly configured, locates a
 matching system runtime, or downloads the official Linux x86-64 binary and
 checks its pinned SHA-256 identity before installing it under the Autolith data
-root. The launcher and development commands remember that selection.
+root. Setup also downloads the official matching SBCL source archive, verifies
+its separately pinned SHA-256 identity, and publishes the extracted tree without
+write bits beside the runtime. The launcher and development commands remember
+that selection.
 
 Dependencies are pinned by =qlfile= and =qlfile.lock=. With Quicklisp already
 installed at =~/quicklisp=, run:
@@ -44,7 +49,9 @@ Quicklisp, materializes the locked project dependencies under the ignored
 =.qlot/= directory, builds a small pristine recovery core under
 =${XDG_DATA_HOME:-~/.local/share}/autolith/recovery/=, and builds a preloaded
 active image under the adjacent =active/= directory. Both cores and their
-manifests are installed read-only.
+manifests are installed read-only. Matching implementation source lives under
+=${XDG_DATA_HOME:-~/.local/share}/autolith/runtimes/2.6.4/source/= and is used as
+a read-only inspection reference, never as a live patch target.
 
 The launcher probes the preloaded image against the current SBCL, operating
 system, architecture, and content hash of every Autolith source input plus the
@@ -217,15 +224,37 @@ from the workspace to the nearest =.git= project root, then includes every
 refreshed on every request. Without a project root only the workspace file
 is considered.
 
-The initial =lisp.*= tools are =eval=, =compile=, =load-system=, =describe=,
-=run-tests=, and =reset=. They use a persistent but disposable SBCL subprocess
-with a small S-expression protocol. They do not share heap objects with the
-active agent.
+The =lisp.*= tools manage named persistent SBCL REPLs through a small readable
+S-expression protocol. =eval=, =compile=, =load-system=, =describe=, =source=,
+and =run-tests= accept a =repl= name and default to =default=. A missing REPL
+starts from pristine SBCL. =start= creates one from pristine or a compatible
+saved image, =reset= deliberately replaces one from a selected image, =stop=
+forgets one, and =repls= shows the live pool. Separate REPLs never share heap
+objects with each other or the active agent, so pristine and instrumented
+behavior can be compared side by side.
 
-The initial =self.*= tools inspect bindings, read tracked definitions, evaluate,
-redefine, set, persist complete definitions, show pending live mutations,
-privately commit them, checkpoint, list generations, and request immediate
-rollback.
+=lisp.source= uses SBCL's live definition metadata to map functions, macros,
+compiler optimizers, source transforms, transforms, VOPs, and IR1 converters
+back into the hash-verified matching source tree. It returns the complete
+recorded top-level form when debug offsets permit and otherwise returns a
+numbered source window. The installed source tree remains unchanged.
+
+=lisp.save-image= forks a saver from a selected REPL without stopping its
+parent, boot-probes the unpublished core with the pinned executable, then
+atomically publishes the core, manifest, and required note. =lisp.images= lists
+the immutable image names, parentage, compatibility, and notes. The model sees a
+bounded reminder of these notes on every request and can choose a saved image
+only when starting or resetting a REPL. The virtual =pristine= image cannot be
+overwritten.
+
+The =self.*= tools inspect bindings, read tracked definitions or matching SBCL
+source, evaluate, redefine, set, persist complete Autolith definitions, show
+pending live mutations, privately commit them, checkpoint, list generations,
+and request immediate rollback. =self.redefine= accepts an explicit active package, temporarily
+unlocks a locked implementation package while reading and installing the form,
+restores the lock, and journals the canonical package. =self.commit= preserves
+that package in its replay entry, allowing an SBCL Lisp-level definition to be
+reconstructed without changing the runtime executable.
 
 Durable self-modifications never patch the tracked repository. =self.redefine=
 and =self.set= journal successful reconstructible changes in the active image;
@@ -250,10 +279,17 @@ ${XDG_DATA_HOME:-~/.local/share}/autolith/
 ├── image-commits/COMMIT-ID/
 │   ├── manifest.sexp
 │   └── reconstruct.lisp
-└── generations/GENERATION-ID/
-    ├── autolith.core
-    ├── manifest.sexp
-    └── reconstruct.lisp
+├── generations/GENERATION-ID/
+│   ├── autolith.core
+│   ├── manifest.sexp
+│   └── reconstruct.lisp
+├── lisp-images/IMAGE-ID/
+│   ├── manifest.sexp
+│   ├── note.txt
+│   └── worker.core
+└── runtimes/2.6.4/
+    ├── installation/
+    └── source/
 #+END_SRC
 
 Running Autolith with its own repository as the workspace turns it into an
@@ -306,6 +342,10 @@ the selected generation. If that generation fails fatally, recovery tries other
 compatible retained generations newest first, restoring terminal state and
 refreshing crash context between attempts.
 
+Worker images are never candidates for active startup, rollback, or recovery.
+Saving or loading an instrumented worker core does not replace the pinned SBCL
+executable, the preloaded active baseline, or the pristine recovery core.
+
 Automatic recovery forwards the original application arguments while marking
 the resumed process as recovered, restores the capsule's conversation, and
 retains the last rendered sequence so ordinary terminal scrollback is not
@@ -351,7 +391,9 @@ Run the complete test suite from the repository root:
 
 The suite covers request shape, SSE framing, credential storage and device auth,
 append-only conversation recovery, tool dispatch, worker evaluation, active
-definition transactions, agent continuation and tool bounds, terminal control
+definition transactions, matching SBCL source inspection, named REPL isolation,
+real modified-worker core publication, locked implementation-package replay,
+agent continuation and tool bounds, terminal control
 safety, crash correlation, generation manifests, a launched isolated worker,
 and startup of the installed pristine recovery core. Manual release smoke tests
 add the live subscription boundary, forked checkpoint publication, automatic
