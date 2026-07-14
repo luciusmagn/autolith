@@ -385,8 +385,11 @@
             (json-object
              "type" "reasoning"
              "summary" (json-array
-                        (json-object "type" "summary_text"
-                                     "text" "Checked the safe path."))
+                        (json-object
+                         "type" "summary_text"
+                         "text" (format nil
+                                        "Checked the safe path.~%Compared fallback behavior.~C[31m"
+                                        +terminal-escape-character+)))
              "content" (json-array
                         (json-object "type" "reasoning_text"
                                      "text" "raw private reasoning")))))
@@ -401,10 +404,37 @@
         (test-assert
          (equal (first entry) (terminal-span :hint "◇ reasoning summary"))
          "trace mode labels provider-visible reasoning summaries")
-        (test-assert (search "Checked the safe path." text)
-                     "trace mode shows completed reasoning summaries")
+        (test-assert
+         (and (find (terminal-span :dim "  │ ") entry :test #'equal)
+              (find (terminal-span :plain "Checked the safe path.")
+                    entry
+                    :test #'equal)
+              (search "Compared fallback behavior." text))
+         "trace mode presents readable summaries beside a subdued rail")
+        (test-assert
+         (every (lambda (line)
+                  (<= (text-cell-width line) 39))
+                (uiop:split-string text :separator '(#\Newline)))
+         "reasoning summary rails stay within the transcript width")
+        (test-assert (not (find +terminal-escape-character+ text))
+                     "reasoning summaries neutralize terminal controls")
         (test-assert (not (search "raw private reasoning" text))
-                     "trace mode never shows raw reasoning content")))
+                     "trace mode never shows raw reasoning content"))
+      (let* ((narrow-application
+               (application-tests--ui-application
+                :columns 20
+                :reasoning-traces-p t))
+             (entry
+               (application--reasoning-summary-entry
+                narrow-application
+                "A deliberately long reasoning summary for a narrow terminal."))
+             (text (markdown-tests--row-text entry)))
+        (test-assert
+         (and (> (count (terminal-span :dim "  │ ") entry :test #'equal) 1)
+              (every (lambda (line)
+                       (<= (text-cell-width line) 19))
+                     (uiop:split-string text :separator '(#\Newline))))
+         "reasoning summaries wrap with room for the rail on narrow terminals")))
     (let* ((source (format nil "~{form-line-~D~^~%~}"
                            (loop for index from 1 to 10 collect index)))
            (entry (response-item-entry

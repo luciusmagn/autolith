@@ -424,13 +424,21 @@
 
 (-> application--reasoning-summary-entry (application string) list)
 (defun application--reasoning-summary-entry (application summary)
-  "Return one dim transcript entry for provider-visible reasoning SUMMARY."
-  (application--transcript-entry
-   application
-   :style ':hint
-   :header "◇ reasoning summary"
-   :body summary
-   :body-style ':dim))
+  "Return one railed transcript entry for provider-visible reasoning SUMMARY."
+  (let* ((safe-summary
+           (string-right-trim '(#\Space #\Tab #\Newline #\Return)
+                              (sanitize-text summary)))
+         (body-width
+           (max 1
+                (- (terminal-columns
+                    (terminal-ui-terminal (application-ui application)))
+                   5))))
+    (append
+     (list (terminal-span ':hint "◇ reasoning summary"))
+     (loop for row in (wrap-text safe-summary body-width)
+           append (list (terminal-span ':plain (string #\Newline))
+                        (terminal-span ':dim "  │ ")
+                        (terminal-span ':plain row))))))
 
 (-> response-item-entry (application json-object) (option list))
 (defun response-item-entry (application item)
