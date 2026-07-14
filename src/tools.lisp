@@ -518,7 +518,7 @@
                 empty-schema)
       (register 'self-commit-tool
                 "self" "commit"
-                "Check and persist all pending self.redefine and self.set mutations as an immutable private image commit and complete Lisp replay script. This never invokes Git or changes a workspace repository."
+                "Check and persist all pending self.redefine and self.set mutations as an immutable private image commit and complete Lisp replay script. This never creates a Git commit or changes a workspace repository."
                 (tool-object-schema
                  (json-object
                   "title" (tool-string-property

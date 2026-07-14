@@ -13,7 +13,7 @@ Autolith is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
 - keeps finalized output in normal terminal scrollback;
 - runs =lisp.*= operations in a disposable SBCL process;
 - exposes documented =self.*= inspection and mutation operations;
-- privately commits reconstructible live mutations without touching Git;
+- privately commits reconstructible live mutations without committing to Git;
 - saves live SBCL generations without stopping the active parent;
 - keeps a separate pristine recovery core;
 - starts from a validated preloaded active image when available; and

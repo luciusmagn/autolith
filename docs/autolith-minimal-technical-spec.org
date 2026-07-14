@@ -219,8 +219,8 @@ replay script. An atomic pointer under the state root selects the commit
 loaded after the tracked system at normal startup. =self.commit= checks
 and persists all pending =self.redefine= and =self.set= mutations in the
 current image lineage. =self.persist-definition= performs the complete
-transaction for one definition. Neither tool invokes Git or writes a
-workspace repository.
+transaction for one definition. Neither tool writes a workspace repository
+or creates a Git commit.
 
 Persisted definitions are complete Lisp forms rather than blind textual
 patches.
