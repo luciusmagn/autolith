@@ -38,6 +38,10 @@
                  "the system prompt carries the current date")
     (test-assert (search "Autolith may be shortened to AL." prompt)
                  "the system prompt introduces Autolith's short name")
+    (test-assert
+     (search "Perform any additional steps you identify instead of handing them back as suggestions."
+             prompt)
+     "the system prompt requires Autolith to finish discovered work itself")
     (test-assert (search "memory namespace persists useful facts" prompt)
                  "the system prompt explains persistent memory policy")
     (test-assert
