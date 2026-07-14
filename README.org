@@ -34,6 +34,7 @@ user's privileges.
 - Multiline editing and reusable completion widgets provided by Clinedi.
 - Input remains editable while model responses and tools are running.
 - Append-only portable conversation files with exact resume commands.
+- Workspace and global persistent memories with bounded prompt recall.
 - Everyday filesystem and shell tools plus named, isolated Lisp REPLs.
 - Immutable modified worker images with notes and pristine side-by-side comparison.
 - Hash-verified matching SBCL source and Lisp-level implementation instrumentation.
@@ -81,9 +82,10 @@ be drafted and queued while AL is responding. Type =/help= for commands.
 Autolith keeps credentials and atomic selections under
 =${XDG_STATE_HOME:-~/.local/state}/autolith/=, including a private Git history
 of durable mutation snapshots. Conversations, canonical image commits,
-generations, runtimes, matching implementation source, and worker images live
-under =${XDG_DATA_HOME:-~/.local/share}/autolith/=. Credentials never belong in
-Git, conversation files, journals, manifests, or saved cores.
+memories, generations, runtimes, matching implementation source, and worker
+images live under =${XDG_DATA_HOME:-~/.local/share}/autolith/=. Credentials
+never belong in Git, conversation files, memories, journals, manifests, or
+saved cores.
 
 Source remains authoritative for clean rebuilds. Saved cores retain exact live
 states; private image commits and each generation's =reconstruct.lisp= retain

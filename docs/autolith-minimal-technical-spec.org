@@ -69,6 +69,7 @@ The active SBCL image contains:
 
 - The model client and agent loop.
 - Conversation and working state.
+- Persistent memory selection and storage.
 - Tool definitions and dispatch.
 - The terminal interface.
 - Self-inspection and self-modification facilities.
@@ -147,6 +148,7 @@ Credentials are stored outside:
 
 - Saved Lisp cores.
 - Conversation files.
+- Memory files.
 - The Git repository.
 
 An API-key provider may exist as an optional fallback, but is not the
@@ -205,7 +207,25 @@ Initial operations should include:
 The exact tool set may remain small. General operations should be
 composed from ordinary Lisp wherever practical.
 
-** 5.3 Future Sub-Agents
+** 5.3 =memory.*=
+
+=memory.*= tools operate on durable user-specific memories stored outside
+conversations and saved cores. Initial operations include:
+
+- =memory.remember=
+- =memory.list=
+- =memory.search=
+- =memory.read=
+- =memory.forget=
+
+Memories are workspace-scoped by default. Global memories are reserved for
+cross-workspace preferences and guidance. The model receives a bounded catalog
+of global and current-workspace memories on every request and uses the search
+and read tools for exact recall. Catalog values are untrusted quoted data, not
+instructions. Memory writes must exclude credentials, secrets, transient
+progress, and unsupported guesses.
+
+** 5.4 Future Sub-Agents
 
 Sub-agents are out of scope for the first version.
 
@@ -326,10 +346,11 @@ with a distinguished recovery status.
 
 * 8. Persistence
 
-Autolith persists seven kinds of state:
+Autolith persists eight kinds of state:
 
 - Source in Git.
 - Conversations as S-expression files.
+- Memories as an append-only S-expression log.
 - Mutations in an append-only journal.
 - Private image commits as manifests and complete Lisp replay scripts.
 - A private Git history retaining complete image-commit artifacts.
@@ -423,6 +444,34 @@ A journal entry should identify:
 
 The journal is for recovery and diagnosis. It does not replace private
 image commits or their complete replay scripts.
+
+** 8.3 Persistent Memories
+
+Persistent memories are stored in one readable =memories.sexp= file beneath the
+data root. The file begins with a versioned header and continues as an
+append-only sequence of complete top-level forms. A memory record contains at
+least:
+
+- A stable identifier.
+- Creation and replacement times.
+- Global or workspace scope.
+- The owning workspace for workspace scope.
+- A short retrieval title.
+- Complete bounded content.
+- Retrieval tags.
+- The source conversation identifier, when available.
+
+Replacing a memory appends a complete record with the same identifier. A
+tombstone removes an identifier from active recall without claiming secure
+erasure of earlier bytes. Reading binds =*read-eval*= to =nil=, rejects malformed
+complete records, and tolerates an incomplete final form. The next successful
+append atomically repairs an incomplete tail before publishing the new record.
+
+Every model request receives a deterministic bounded catalog containing only
+global and current-workspace memories. The catalog includes enough metadata and
+a short excerpt for selection; exact content remains available through
+=memory.search= and =memory.read=. Memory corruption degrades this catalog to a
+bounded unavailable notice instead of preventing unrelated model work.
 
 * 9. Generations and Checkpoints
 
@@ -563,6 +612,7 @@ The first interface is a restrained TUI optimized for dogfooding.
 It should show:
 
 - Conversation.
+- Relevant persistent memory activity through tool calls.
 - Streaming model output.
 - Tool calls and results.
 - Conditions and selected restarts.

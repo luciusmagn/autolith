@@ -38,6 +38,11 @@
                  "the system prompt carries the current date")
     (test-assert (search "Autolith may be shortened to AL." prompt)
                  "the system prompt introduces Autolith's short name")
+    (test-assert (search "memory namespace persists useful facts" prompt)
+                 "the system prompt explains persistent memory policy")
+    (test-assert
+     (search "Persistent memory catalog: no relevant memories" prompt)
+     "the system prompt carries the current relevant-memory catalog")
     (test-assert (search "Repository Guidelines" prompt)
                  "the system prompt carries the workspace AGENTS.md")
     (test-assert (search "Workspace instructions from" prompt)

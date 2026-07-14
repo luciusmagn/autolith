@@ -9,6 +9,7 @@ Autolith is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
 - talks directly to the ChatGPT Codex subscription Responses service;
 - defaults to =gpt-5.6-sol= with user-visible reasoning effort =ultra=;
 - owns its system prompt, conversation state, tool loop, and authentication;
+- recalls workspace and global persistent memories through dedicated tools;
 - never invokes or depends on the Codex executable;
 - keeps finalized output in normal terminal scrollback;
 - runs =lisp.*= operations in named, heap-isolated SBCL REPLs;
@@ -207,7 +208,43 @@ Conversations are append-only readable forms under
 =${XDG_DATA_HOME:-~/.local/share}/autolith/conversations/=. A truncated final form is
 ignored after a crash; malformed complete records are rejected.
 
-* Workspace, Lisp, and self tools
+* Persistent memories
+
+Autolith stores persistent memory in the readable append-only file
+=${XDG_DATA_HOME:-~/.local/share}/autolith/memories.sexp=. It does not require
+SQLite. Each =(:memory ...)= record is a complete value; replacing a memory
+appends another complete record with the same stable identifier. A
+=(:memory-forgotten ...)= record removes that identifier from active recall.
+The reader binds =*read-eval*= to =nil=. It ignores an incomplete final form
+after a crash and atomically repairs that tail before the next append.
+
+Memories are workspace-scoped by default. They are recalled only when Autolith
+runs in the same workspace. Global scope is intended for cross-workspace user
+preferences and durable guidance. =memory.list= shows metadata, =memory.search=
+requires every case-insensitive query term to match somewhere in the title,
+body, tags, or workspace, and =memory.read= returns one complete active memory.
+=memory.remember= creates a memory or replaces one by identifier.
+=memory.remember= limits the complete body to 5,000 characters so one
+=memory.read= call can return it without hidden paging.
+=memory.forget= stops active recall by appending a tombstone. Because the log is
+append-only, forgetting is not secure erasure of historical bytes; stop
+Autolith and deliberately rewrite or remove the private file when erasure is
+required.
+
+On every provider request, the system prompt receives a bounded catalog of
+global and current-workspace memories. Each entry contains quoted JSON metadata,
+tags, and a short content excerpt. The model uses that catalog to decide whether
+to call =memory.search= and =memory.read= for exact recall. A malformed log does
+not prevent an ordinary model request: the catalog becomes a bounded unavailable
+notice, while memory tool calls report the typed persistence failure.
+
+Autolith does not automatically summarize every conversation. The model writes
+a memory when durable information is likely to help later, and the prompt tells
+it never to store credentials, secrets, transient progress, or guesses. This
+keeps memory creation visible in conversation tool history and avoids extra
+background model traffic.
+
+* Workspace, memory, Lisp, and self tools
 
 The =fs.*= and =shell.*= tools cover everyday workspace work: =fs.read=
 returns numbered file lines from an optional window, =fs.list= lists one
@@ -284,6 +321,7 @@ ${XDG_STATE_HOME:-~/.local/state}/autolith/
         └── reconstruct.lisp
 
 ${XDG_DATA_HOME:-~/.local/share}/autolith/
+├── memories.sexp
 ├── image-commits/COMMIT-ID/
 │   ├── manifest.sexp
 │   └── reconstruct.lisp
@@ -384,10 +422,10 @@ commands with the privileges of the user running it. Process boundaries,
 restricted tool surfaces, append-only records, Git, and retained generations
 reduce accidental permanent damage; they do not contain malicious code.
 
-Credentials are excluded from source, conversations, journals, manifests, crash
-capsules, tool output, and saved cores. Provider objects retain credential paths,
-not token values, and checkpointing is rejected inside a credential request
-scope.
+Credentials are excluded from source, conversations, memories, journals,
+manifests, crash capsules, tool output, and saved cores. Provider objects retain
+credential paths, not token values, and checkpointing is rejected inside a
+credential request scope.
 
 * Development
 
@@ -398,10 +436,10 @@ Run the complete test suite from the repository root:
 #+END_SRC
 
 The suite covers request shape, SSE framing, credential storage and device auth,
-append-only conversation recovery, tool dispatch, worker evaluation, active
-definition transactions, matching SBCL source inspection, named REPL isolation,
-real modified-worker core publication, locked implementation-package replay,
-agent continuation and tool bounds, terminal control
+append-only conversation and memory recovery, tool dispatch, worker evaluation,
+active definition transactions, matching SBCL source inspection, named REPL
+isolation, real modified-worker core publication, locked implementation-package
+replay, agent continuation and tool bounds, terminal control
 safety, crash correlation, generation manifests, a launched isolated worker,
 and startup of the installed pristine recovery core. Manual release smoke tests
 add the live subscription boundary, forked checkpoint publication, automatic

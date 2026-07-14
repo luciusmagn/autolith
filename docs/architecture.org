@@ -16,9 +16,11 @@ separate responsibilities; packages do not.
 terminal-ui
     |
     v
-  agent ------> conversation ------> append-only .sexp file
+  agent ------> conversation ------> append-only conversation .sexp file
     |
     +---------> provider ----------> request-scoped credentials
+    |
+    +---------> memories ----------> append-only memory .sexp file
     |
     +---------> tool registry
                     |
@@ -59,6 +61,26 @@ Fresh conversations remain in memory until the first durable record atomically
 publishes the header and that record together. Empty sessions therefore create
 no conversation file. It persists each user message before network work begins
 and treats completed provider output items as authoritative history.
+
+** =memories.lisp= and =memory-tools.lisp=
+
+Own the append-only portable memory log, replacement replay, recall tombstones,
+workspace and global selection, bounded prompt catalog, and the =memory.*= tool
+surface. Every provider request receives metadata and a short excerpt for
+global memories and memories matching the current workspace. The catalog is
+quoted as untrusted JSON data; exact bodies remain behind search and read tools.
+A damaged memory log yields a bounded unavailable notice instead of breaking
+the provider path. An incomplete final form is ignored and atomically removed
+when the next complete record is appended.
+
+The design was informed by OpenAI Codex commit
+=5bed6447998c754d154dbd796517310b8f04d4ce=. That implementation uses SQLite
+for background extraction jobs and usage ranking, then consolidates selected
+results into a Markdown tree whose bounded =memory_summary.md= enters developer
+instructions. Autolith keeps the same useful separation between a small prompt
+catalog and deeper read tools, but its single-agent runtime does not need a job
+database, background extraction model calls, Git-backed consolidation
+workspace, or generated Markdown hierarchy.
 
 ** =provider.lisp=
 
@@ -216,7 +238,7 @@ changes without patching that source.
 Provider instances retain credential-source pathnames but not access or
 refresh tokens. Checkpoint code must run outside the dynamic request scope and
 must reject attempts to save while credentials are dynamically bound. Tokens
-never enter conversations, journals, logs, or manifests. Worker images contain
-only isolated REPL heaps and never participate in active-image startup or
-recovery. Their manifests and notes live under the data root; the pinned runtime
-executable and pristine recovery artifacts remain separate.
+never enter conversations, memories, journals, logs, or manifests. Worker
+images contain only isolated REPL heaps and never participate in active-image
+startup or recovery. Their manifests and notes live under the data root; the
+pinned runtime executable and pristine recovery artifacts remain separate.
