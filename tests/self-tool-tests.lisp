@@ -220,7 +220,6 @@
          (previous-commit-identifier *active-image-commit-identifier*)
          (previous-lineage-identifier *active-image-lineage-identifier*)
          (active-check-count 0)
-         (source-check-count 0)
          (checker
            (make-instance
             'callback-mutation-checker
@@ -228,12 +227,7 @@
             (lambda (checked-configuration definition-source)
               (declare (ignore checked-configuration definition-source))
               (incf active-check-count)
-              "active checks passed")
-            :source-callback
-            (lambda (checked-configuration paths)
-              (declare (ignore checked-configuration paths))
-              (incf source-check-count)
-              "source checks passed"))))
+              "active checks passed"))))
     (unwind-protect
          (progn
            (ensure-directories-exist source-pathname)
@@ -296,11 +290,7 @@
                       (lambda (checked-configuration definition-source)
                         (declare (ignore checked-configuration
                                          definition-source))
-                        (error "Injected active check failure."))
-                      :source-callback
-                      (lambda (checked-configuration paths)
-                        (declare (ignore checked-configuration paths))
-                        "unused"))))
+                        (error "Injected active check failure.")))))
                   (registry (make-default-tool-registry))
                   (persist-tool (tool-registry-find registry
                                                     "self"
@@ -549,8 +539,6 @@
                 (search "A user-made repository change."
                         (uiop:read-file-string source-pathname))
                 "self.commit leaves tracked workspace changes untouched"))
-             (test-assert (= source-check-count 0)
-                          "private image commits never run source Git checks")
              (test-assert (= active-check-count 3)
                           "self.commit checks the active image exactly once")
              (test-assert

@@ -186,11 +186,7 @@
             (lambda (checked-configuration definition-source)
               (declare (ignore checked-configuration definition-source))
               (incf check-count)
-              "active generation checks passed")
-            :source-callback
-            (lambda (checked-configuration paths)
-              (declare (ignore checked-configuration paths))
-              (error "Generation capture must not run source checks here.")))))
+              "active generation checks passed"))))
     (unwind-protect
          (progn
            (setf *image-state-initialized-p* nil

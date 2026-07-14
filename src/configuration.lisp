@@ -288,7 +288,7 @@ Selecting a different model recomputes the context window for that model."
 
 (-> configuration-overlay-root (configuration) pathname)
 (defun configuration-overlay-root (configuration)
-  "Return the directory of self-modification overlays loaded at startup."
+  "Return the legacy self-modification overlay directory used for migration."
   (merge-pathnames "overlays/" (configuration-data-root configuration)))
 
 (-> configuration-image-commit-root (configuration) pathname)

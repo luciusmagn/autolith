@@ -13,14 +13,9 @@
 (defclass callback-mutation-checker (mutation-checker)
   ((active-callback
     :initarg :active-callback
-    :reader callback-mutation-checker-active-callback
-    :type function
-    :documentation "The injected active-image check callback.")
-   (source-callback
-    :initarg :source-callback
-    :reader callback-mutation-checker-source-callback
-    :type function
-    :documentation "The injected clean-source check callback."))
+   :reader callback-mutation-checker-active-callback
+   :type function
+    :documentation "The injected active-image check callback."))
   (:documentation "A mutation checker backed by explicit boundary callbacks."))
 
 (-> mutation-checker-check-active
@@ -29,13 +24,6 @@
 (defgeneric mutation-checker-check-active (checker configuration definition-source)
   (:documentation
    "Check installed DEFINITION-SOURCE in the active image and return captured output."))
-
-(-> mutation-checker-check-source
-    (mutation-checker configuration list)
-    string)
-(defgeneric mutation-checker-check-source (checker configuration paths)
-  (:documentation
-   "Check the rebuildable source tree containing PATHS and return captured output."))
 
 (defmethod mutation-checker-check-active
     ((checker standard-mutation-checker)
@@ -49,25 +37,6 @@
           (*trace-output* stream))
       (asdf:test-system :autolith))))
 
-(defmethod mutation-checker-check-source
-    ((checker standard-mutation-checker)
-     (configuration configuration)
-     (paths list))
-  "Run the repository check command after source changes to PATHS."
-  (declare (ignore checker paths))
-  (let ((check-pathname
-          (merge-pathnames "script/check"
-                           (configuration-source-root configuration))))
-    (unless (probe-file check-pathname)
-      (error 'source-mutation-error
-             :message "The repository has no script/check command."
-             :tool-name "self.commit"
-             :pathname check-pathname))
-    (uiop:run-program (list (namestring check-pathname))
-                      :directory (configuration-source-root configuration)
-                      :output :string
-                      :error-output :output)))
-
 (defmethod mutation-checker-check-active
     ((checker callback-mutation-checker)
      (configuration configuration)
@@ -76,16 +45,6 @@
   (or (funcall (callback-mutation-checker-active-callback checker)
                configuration
                definition-source)
-      ""))
-
-(defmethod mutation-checker-check-source
-    ((checker callback-mutation-checker)
-     (configuration configuration)
-     (paths list))
-  "Invoke CHECKER's injected clean-source callback."
-  (or (funcall (callback-mutation-checker-source-callback checker)
-               configuration
-               paths)
       ""))
 
 (-> tool-context-effective-mutation-checker (tool-context) mutation-checker)
@@ -309,8 +268,8 @@
 (defun durable-mutation-record-p (configuration record)
   "Return true when RECORD is a valid durable-definition journal state.
 
-The recorded pathname is either a startup overlay file or, for records
-written before overlays existed, a tracked src/ file."
+The recorded pathname is normally a private image-commit script. Legacy
+journals may instead name a startup overlay or tracked src/ file."
   (and (durable-mutation-journal-record-p record)
        (non-empty-string-p (getf (rest record) :id))
        (non-empty-string-p (getf (rest record) :target))
@@ -406,7 +365,7 @@ written before overlays existed, a tracked src/ file."
 
 (-> durable-mutation--fallback-source (configuration list) (option string))
 (defun durable-mutation--fallback-source (configuration definition)
-  "Return DEFINITION's tracked source for restoration when no overlay exists."
+  "Return DEFINITION's tracked source when private history has no prior form."
   (handler-case
       (loop for tracked in (self-tracked-definitions configuration
                                                      (second definition))
@@ -431,7 +390,7 @@ written before overlays existed, a tracked src/ file."
         (error 'source-mutation-error
                :message "The durable source is not a supported complete definition."
                :tool-name "self.persist-definition"
-               :pathname (configuration-overlay-root configuration)))
+               :pathname (configuration-image-commit-root configuration)))
       (let* ((target (definition-key definition))
              (commit-identifier (make-identifier))
              (commit-directory

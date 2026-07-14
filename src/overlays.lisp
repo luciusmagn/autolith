@@ -2,9 +2,9 @@
 
 ;;;; -- Self-Modification Overlays --
 
-;;; Durable self-modifications persist here as complete top-level definitions
-;;; in one file per definition, loaded at startup after the tracked system.
-;;; The tracked source repository is never patched by Autolith itself.
+;;; Autolith versions before private image commits persisted complete definitions
+;;; here. Normal startup loads these files only when no private commit is selected;
+;;; the first private commit imports them into its complete replay snapshot.
 
 (-> overlay-pathname (configuration string) pathname)
 (defun overlay-pathname (configuration target)
