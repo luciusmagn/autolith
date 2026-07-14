@@ -91,6 +91,19 @@
                  "the worker turns evaluation conditions into protocol errors")
     (test-assert (non-empty-string-p (getf (rest failure) :message))
                  "worker protocol errors carry a readable condition report"))
+  (let ((source
+          (worker-handle-request
+           '(:request :id 3 :operation :source
+             :arguments (:name "CL:MAPCAR" :kind "function")))))
+    (test-assert (eq (getf (rest source) :status) :ok)
+                 "the worker resolves implementation definition source")
+    (test-assert (search "src/code/list.lisp"
+                         (getf (rest source) :output))
+                 "implementation source comes from the exact managed tree")
+    (test-assert (search "(define-list-map mapcar"
+                         (getf (rest source) :output)
+                         :test #'char-equal)
+                 "implementation source includes the complete recorded form"))
   (let ((previous-command (uiop:getenv "AUTOLITH_SBCL")))
     (unwind-protect
          (progn
@@ -108,11 +121,21 @@
          (root (test-configuration-root configuration))
          (worker (lisp-worker-create configuration)))
     (unwind-protect
-         (let ((response (lisp-worker-request worker :eval '(:form "(+ 40 2)"))))
-           (test-assert (eq (getf (rest response) :status) :ok)
-                        "the disposable worker starts through its direct active loader")
-           (test-assert (equal (getf (rest response) :values) '("42"))
-                        "the launched worker completes its isolated protocol request"))
+         (let ((evaluation
+                 (lisp-worker-request worker :eval '(:form "(+ 40 2)")))
+               (source
+                 (lisp-worker-request
+                  worker
+                  :source
+                  '(:name "CL:MAPCAR" :kind "function"))))
+           (test-assert (eq (getf (rest evaluation) :status) :ok)
+                        "the named worker starts through its direct active loader")
+           (test-assert (equal (getf (rest evaluation) :values) '("42"))
+                        "the launched worker completes its isolated protocol request")
+           (test-assert
+            (and (eq (getf (rest source) :status) :ok)
+                 (search "src/code/list.lisp" (getf (rest source) :output)))
+            "a launched worker can read its matching implementation source"))
       (lisp-worker-stop worker)
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   (let* ((configuration (test-configuration))

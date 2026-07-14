@@ -27,7 +27,7 @@
 
 (defclass lisp-tool (tool)
   ()
-  (:documentation "A tool whose operation is isolated in a disposable Lisp worker."))
+  (:documentation "A tool whose operation is isolated in a named Lisp worker."))
 
 (defclass self-tool (tool)
   ()
@@ -48,6 +48,10 @@
 (defclass lisp-describe-tool (lisp-tool)
   ()
   (:documentation "Describe one Lisp object or symbol in the worker."))
+
+(defclass lisp-source-tool (lisp-tool)
+  ()
+  (:documentation "Read exact matching source for one worker definition."))
 
 (defclass lisp-run-tests-tool (lisp-tool)
   ()
@@ -208,7 +212,7 @@
     :initarg :worker
     :reader tool-context-worker
     :type t
-    :documentation "The disposable worker manager.")
+    :documentation "The named Lisp worker manager.")
    (conversation
     :initarg :conversation
     :reader tool-context-conversation
@@ -460,11 +464,11 @@
                  '("command")))
       (register 'lisp-eval-tool
                 "lisp" "eval"
-                "Evaluate one Common Lisp form in the disposable worker."
+                "Evaluate one Common Lisp form in a named persistent REPL."
                 (required-form-schema "One readable Common Lisp form."))
       (register 'lisp-compile-tool
                 "lisp" "compile"
-                "Compile and execute one Common Lisp form in the disposable worker."
+                "Compile and execute one Common Lisp form in a named persistent REPL."
                 (required-form-schema "One readable Common Lisp form."))
       (register 'lisp-load-system-tool
                 "lisp" "load-system"
@@ -485,6 +489,18 @@
                   "repl" (tool-string-property
                            "The persistent REPL name; defaults to default."))
                  '("designator")))
+      (register 'lisp-source-tool
+                "lisp" "source"
+                "Read a definition from the hash-verified source matching the pinned SBCL runtime, using source locations from one named REPL."
+                (tool-object-schema
+                 (json-object
+                  "name" (tool-string-property
+                           "A readable definition name, such as CL:MAPCAR or SB-C::IR1-CONVERT.")
+                  "kind" (tool-string-property
+                           "An optional SBCL definition kind, such as function, optimizer, transform, or vop.")
+                  "repl" (tool-string-property
+                           "The persistent REPL name; defaults to default."))
+                 '("name")))
       (register 'lisp-run-tests-tool
                 "lisp" "run-tests"
                 "Run ASDF tests for one system in a named persistent REPL."

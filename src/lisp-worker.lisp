@@ -543,6 +543,18 @@
     :describe
     (list :designator (tool-argument arguments "designator" :required t)))))
 
+(defmethod tool-execute ((tool lisp-source-tool)
+                         (context tool-context)
+                         (arguments hash-table))
+  "Read exact matching source through CONTEXT's selected worker."
+  (declare (ignore tool))
+  (worker-response-tool-result
+   (lisp-worker-request
+    (lisp-tool-worker context arguments)
+    :source
+    (list :name (tool-argument arguments "name" :required t)
+          :kind (tool-argument arguments "kind")))))
+
 (defmethod tool-execute ((tool lisp-run-tests-tool)
                          (context tool-context)
                          (arguments hash-table))
@@ -695,6 +707,235 @@
                       (multiple-value-list (funcall function)))))))
       (values (mapcar #'worker-render-value result-values) output))))
 
+
+;;;; -- Matching Implementation Source --
+
+(defparameter +worker-source-kinds+
+  '(:class :compiler-macro :condition :constant :function :generic-function
+    :macro :method :method-combination :package :setf-expander :structure
+    :symbol-macro :type :alien-type :variable :declaration :optimizer
+    :source-transform :transform :vop :ir1-convert)
+  "SB-INTROSPECT definition kinds accepted by lisp.source.")
+
+(-> worker-source--kind ((option string)) (option keyword))
+(defun worker-source--kind (name)
+  "Return the supported definition kind named NAME, or NIL for every kind."
+  (when (non-empty-string-p name)
+    (let ((kind (find (string-upcase name)
+                      +worker-source-kinds+
+                      :key #'symbol-name
+                      :test #'string=)))
+      (unless kind
+        (error 'worker-error
+               :message
+               (format nil
+                       "Unknown SBCL definition kind ~S. Choose one of ~{~(~A~)~^, ~}."
+                       name
+                       +worker-source-kinds+)
+               :tool-name "lisp.source"))
+      kind)))
+
+(-> worker-source--name (string) t)
+(defun worker-source--name (source)
+  "Read and validate one definition name from SOURCE."
+  (let ((name (worker-read-form source)))
+    (unless (or (symbolp name)
+                (stringp name)
+                (and (consp name)
+                     (eq (first name) 'setf)
+                     (symbolp (second name))
+                     (null (rest (rest name)))))
+      (error 'worker-error
+             :message "lisp.source needs a symbol, package string, or (SETF symbol) name."
+             :tool-name "lisp.source"))
+    name))
+
+(-> worker-source--root () pathname)
+(defun worker-source--root ()
+  "Return the hash-verified source root matching this SBCL runtime."
+  (let ((source-root (uiop:getenv "AUTOLITH_SBCL_SOURCE_ROOT")))
+    (unless (and (non-empty-string-p source-root)
+                 (uiop:directory-exists-p source-root))
+      (error 'worker-error
+             :message
+             "Matching SBCL source is unavailable; run ./script/bootstrap to install it."
+             :tool-name "lisp.source"))
+    (uiop:ensure-directory-pathname (truename source-root))))
+
+(-> worker-source--relative-pathname (pathname) pathname)
+(defun worker-source--relative-pathname (pathname)
+  "Map a recorded SBCL source PATHNAME into its exact archive-relative path."
+  (let* ((directories
+           (mapcar #'string-downcase
+                   (remove-if-not #'stringp (pathname-directory pathname))))
+         (start
+           (position-if
+            (lambda (component)
+              (member component '("src" "contrib" "tests" "tools")
+                      :test #'string=))
+            directories))
+         (name (pathname-name pathname))
+         (type (pathname-type pathname)))
+    (unless (and start name)
+      (error 'worker-error
+             :message (format nil "Cannot map recorded SBCL source pathname ~S."
+                              pathname)
+             :tool-name "lisp.source"))
+    (pathname
+     (format nil "~{~A/~}~A~@[.~A~]"
+             (subseq directories start)
+             (string-downcase name)
+             (and type (string-downcase type))))))
+
+(-> worker-source--pathname (pathname) pathname)
+(defun worker-source--pathname (recorded-pathname)
+  "Resolve RECORDED-PATHNAME only within the verified matching source tree."
+  (let* ((source-root (worker-source--root))
+         (pathname
+           (merge-pathnames
+            (worker-source--relative-pathname recorded-pathname)
+            source-root)))
+    (unless (and (uiop:subpathp pathname source-root)
+                 (probe-file pathname))
+      (error 'worker-error
+             :message
+             (format nil "Recorded source ~S is absent from matching SBCL source."
+                     recorded-pathname)
+             :tool-name "lisp.source"))
+    (truename pathname)))
+
+(-> worker-source--line-number (string integer) integer)
+(defun worker-source--line-number (source offset)
+  "Return the one-based line number containing OFFSET in SOURCE."
+  (1+ (count #\Newline source :end (min offset (length source)))))
+
+(-> worker-source--line-window (string integer) string)
+(defun worker-source--line-window (source offset)
+  "Return a numbered source window surrounding OFFSET."
+  (let* ((target-line (worker-source--line-number source offset))
+         (first-line (max 1 (- target-line 12)))
+         (last-line (+ target-line 28)))
+    (with-output-to-string (output)
+      (with-input-from-string (input source)
+        (loop for line = (read-line input nil nil)
+              for line-number from 1
+              while line
+              when (<= first-line line-number last-line)
+                do (format output "~5D  ~A~%" line-number line)
+              when (> line-number last-line)
+                do (return))))))
+
+(-> worker-source--complete-form (string integer) (option string))
+(defun worker-source--complete-form (source offset)
+  "Return the complete readable top-level form at OFFSET when possible."
+  (handler-case
+      (let ((*package* (find-package '#:cl-user))
+            (*read-eval* nil))
+        (multiple-value-bind (form end)
+            (read-from-string source t nil :start offset)
+          (declare (ignore form))
+          (subseq source offset end)))
+    (error ()
+      nil)))
+
+(-> worker-source--fallback-offset (t string) integer)
+(defun worker-source--fallback-offset (name source)
+  "Return a useful textual location for NAME when debug data lacks an offset."
+  (let* ((symbol
+           (if (and (consp name) (eq (first name) 'setf))
+               (second name)
+               name))
+         (needle
+           (etypecase symbol
+             (symbol (symbol-name symbol))
+             (string symbol))))
+    (or (search needle source :test #'char-equal) 0)))
+
+(-> worker-source--render-location (t keyword t) string)
+(defun worker-source--render-location (source-location kind name)
+  "Render one SB-INTROSPECT SOURCE-LOCATION from verified matching source."
+  (let* ((recorded
+           (uiop:symbol-call '#:sb-introspect
+                             '#:definition-source-pathname
+                             source-location))
+         (pathname (and recorded (worker-source--pathname recorded)))
+         (source (and pathname (uiop:read-file-string pathname)))
+         (recorded-offset
+           (uiop:symbol-call '#:sb-introspect
+                             '#:definition-source-character-offset
+                             source-location))
+         (offset (and source
+                      (or recorded-offset
+                          (worker-source--fallback-offset
+                           name
+                           source)))))
+    (unless (and pathname source offset)
+      (error 'worker-error
+             :message "SBCL recorded no readable file location for this definition."
+             :tool-name "lisp.source"))
+    (let ((complete-form
+            (and recorded-offset
+                 (worker-source--complete-form source offset))))
+      (with-output-to-string (output)
+        (format output "Kind: ~(~A~)~%Path: ~A~%Line: ~D~%"
+                kind
+                (enough-namestring pathname (worker-source--root))
+                (worker-source--line-number source offset))
+        (if complete-form
+            (write-string (bounded-string complete-form :limit 5000) output)
+            (write-string (worker-source--line-window source offset) output))))))
+
+(-> worker-source (string (option string)) (values list string))
+(defun worker-source (name-source kind-source)
+  "Return matching source locations for NAME-SOURCE and optional KIND-SOURCE."
+  (require :sb-introspect)
+  (let* ((name (worker-source--name name-source))
+         (selected-kind (worker-source--kind kind-source))
+         (kinds (if selected-kind
+                    (list selected-kind)
+                    +worker-source-kinds+))
+         (locations nil)
+         (seen (make-hash-table :test #'equal)))
+    (dolist (kind kinds)
+      (dolist (source-location
+               (uiop:symbol-call '#:sb-introspect
+                                 '#:find-definition-sources-by-name
+                                 name
+                                 kind))
+        (let ((key
+                (list kind
+                      (uiop:symbol-call '#:sb-introspect
+                                        '#:definition-source-pathname
+                                        source-location)
+                      (uiop:symbol-call '#:sb-introspect
+                                        '#:definition-source-form-path
+                                        source-location))))
+          (unless (gethash key seen)
+            (setf (gethash key seen) t)
+            (push (cons kind source-location) locations)))))
+    (unless locations
+      (error 'worker-error
+             :message
+             (format nil "No ~:[SBCL ~;~(~A~) ~]definition source was found for ~S."
+                     selected-kind selected-kind name)
+             :tool-name "lisp.source"))
+    (values
+     nil
+     (bounded-string
+      (with-output-to-string (output)
+        (loop for (kind . source-location) in (nreverse locations)
+              for index from 1 to 8
+              do (when (> index 1)
+                   (format output "~%~%"))
+                 (write-string
+                  (worker-source--render-location source-location kind name)
+                  output)
+              finally
+                 (when (> (length locations) 8)
+                   (format output "~%~%~D additional source locations omitted."
+                           (- (length locations) 8)))))
+      :limit 12000))))
+
 (-> worker--single-threaded-p () boolean)
 (defun worker--single-threaded-p ()
   "Return true when the worker has no live Lisp thread besides this one."
@@ -770,6 +1011,9 @@
       (lambda ()
         (describe (worker-read-form (getf arguments :designator)))
         (values))))
+    (:source
+     (worker-source (getf arguments :name)
+                    (getf arguments :kind)))
     (:run-tests
      (worker-capture-evaluation
       (lambda ()
