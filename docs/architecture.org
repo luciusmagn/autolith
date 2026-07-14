@@ -81,11 +81,19 @@ form-aware source primitives.
 
 ** =durable-mutations.lisp=
 
-Owns checked mutation transactions, validated journal replay, and explicit Git
-publication. Durable mutation objects carry explicit phases and survive source
-restarts. Git and journal state reconcile across the narrow post-commit crash
-window. Normal self source and commit tools cannot edit the launcher or recovery
-artifacts.
+Owns the checked one-definition transaction and validated durable journal replay.
+Durable mutation objects carry explicit phases and reconcile against published
+private image commits across the narrow post-publication crash window.
+
+** =image-commits.lisp=
+
+Owns stable exploratory mutation identities, branch lineages, =self.diff=,
+=self.commit=, private commit manifests, and complete Lisp replay scripts. Each
+commit is a full effective snapshot under the data root, and an atomic pointer
+under the state root selects normal startup state. Retained cores preserve their
+checkpointed commit identity and begin a new lineage on reconnect, so rollback
+cannot absorb mutations written later by another branch. Legacy overlays are
+loaded at the base and imported into the first private commit.
 
 ** =terminal.lisp=
 
@@ -135,7 +143,10 @@ boot recovery.
 
 Owns compatible manifests and the Linux SBCL coordinator-and-saver checkpoint
 backend. An unpublished core must boot and identify its exact generation and
-Git commit before its core, manifest, and selection become visible.
+tracked source commit together with its private image commit before its core,
+manifest, and selection become visible. Checkpoint preparation commits pending
+reconstructible mutations and writes a complete =reconstruct.lisp= beside every
+new core. Manifest version 2 records that script; version 1 remains readable.
 
 ** =main.lisp=
 
@@ -174,12 +185,14 @@ components:
 1. Append the proposed mutation to the journal.
 2. Compile and install it in the active image.
 3. Run the relevant checks.
-4. Replace the matching complete top-level source form.
-5. Commit the source change.
+4. Publish a complete private image-commit replay script and manifest.
+5. Atomically select the private commit for normal startup.
 6. Append the durable result to the journal.
 
-Exploratory mutation stops after installation and checking. Source remains
-authoritative for clean rebuilds.
+Exploratory mutation stops after installation and journal publication until
+=self.commit= consumes it. Tracked source remains authoritative for the base
+system, and the selected private script reconstructs durable user-specific
+changes without patching that source.
 
 * Credentials and saved images
 

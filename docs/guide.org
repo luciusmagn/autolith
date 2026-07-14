@@ -13,6 +13,7 @@ Autolith is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
 - keeps finalized output in normal terminal scrollback;
 - runs =lisp.*= operations in a disposable SBCL process;
 - exposes documented =self.*= inspection and mutation operations;
+- privately commits reconstructible live mutations without touching Git;
 - saves live SBCL generations without stopping the active parent;
 - keeps a separate pristine recovery core;
 - starts from a validated preloaded active image when available; and
@@ -222,23 +223,47 @@ with a small S-expression protocol. They do not share heap objects with the
 active agent.
 
 The initial =self.*= tools inspect bindings, read tracked definitions, evaluate,
-redefine, set, persist complete definitions, show diffs, commit explicit paths,
-checkpoint, list generations, and request immediate rollback.
+redefine, set, persist complete definitions, show pending live mutations,
+privately commit them, checkpoint, list generations, and request immediate
+rollback.
 
-Durable self-modifications never patch the tracked repository. Instead,
-=self.persist-definition= writes each complete top-level definition to an
-overlay file under =${XDG_DATA_HOME:-~/.local/share}/autolith/overlays/=, and every
-startup loads the overlays after the tracked system. A broken overlay is
-skipped with a visible notice instead of blocking startup.
+Durable self-modifications never patch the tracked repository. =self.redefine=
+and =self.set= journal successful reconstructible changes in the active image;
+=self.diff= shows the changes still pending in that image lineage. =self.commit=
+checks all pending changes and writes an immutable full snapshot under
+=${XDG_DATA_HOME:-~/.local/share}/autolith/image-commits/COMMIT-ID/=. Each snapshot
+contains =manifest.sexp= and executable =reconstruct.lisp=. The atomic selection
+record is
+=${XDG_STATE_HOME:-~/.local/state}/autolith/current-image-commit.sexp=. Normal
+startup loads that script after the tracked system. =self.persist-definition=
+performs the same complete transaction directly for one definition. Legacy
+=overlays/*.lisp= files load when no private commit exists and are imported by
+the first private commit.
+
+The relevant private layout is deliberately direct:
+
+#+BEGIN_SRC text
+${XDG_STATE_HOME:-~/.local/state}/autolith/
+└── current-image-commit.sexp
+
+${XDG_DATA_HOME:-~/.local/share}/autolith/
+├── image-commits/COMMIT-ID/
+│   ├── manifest.sexp
+│   └── reconstruct.lisp
+└── generations/GENERATION-ID/
+    ├── autolith.core
+    ├── manifest.sexp
+    └── reconstruct.lisp
+#+END_SRC
 
 Running Autolith with its own repository as the workspace turns it into an
 ordinary development agent for Autolith: =fs.write= and =fs.edit= then work on
 the tracked source like on any project, with only the stable launcher and
 recovery artifacts read-only. From any other workspace those tools refuse
-Autolith's own source entirely. =self.commit= is reserved for an explicit user
-request to commit paths in Autolith's source while that repository is the
-workspace. It refuses to operate from unrelated workspaces; their Git history
-is handled through ordinary workspace commands when the user requests it.
+Autolith's own source entirely. =self.commit= has no workspace Git behavior and
+works identically from any workspace because every file it writes belongs to
+Autolith's private data or state root. Repository commits are handled through
+ordinary workspace commands only when the user requests them.
 
 Autolith keeps all project definitions in one =AUTOLITH= package. Files and CLOS
 protocols express subsystem boundaries without scoped packages.
@@ -249,8 +274,13 @@ protocols express subsystem boundaries without scoped packages.
 briefly excludes live mutation, revalidates the source revision, and forks a
 coordinator. The active parent resumes immediately. A saver child writes a
 temporary core. Before publication, the coordinator boots that core through a
-private probe and requires its exact generation ID and Git commit. Only then does
-it publish the core, manifest, and selected-generation record.
+private probe and requires its exact generation ID, tracked source commit, and
+private image commit. Only then does it publish the core, manifest, and
+selected-generation record. Before the fork, checkpoint preparation checks and
+commits any pending reconstructible mutations.
+Every new generation directory receives a complete =reconstruct.lisp=, and its
+version-2 manifest records that path and the exact private image commit captured
+by the saved core.
 
 =/rollback ID= atomically selects a compatible generation and leaves the active
 process through a dedicated recovery status. The stable launcher then starts the
@@ -283,7 +313,21 @@ duplicated. An explicit =--resume ID= overrides checkpoint-time conversation
 state.
 
 Saved cores are compatible only with the recorded SBCL version, operating system
-build, and architecture. Source remains authoritative for clean rebuilds.
+build, and architecture. Source remains authoritative for rebuilding the base.
+To reconstruct a generation without its core, check out the manifest's
+=:git-commit=, materialize the locked dependencies with =./script/bootstrap=,
+load the =autolith= system, then load the generation's =reconstruct.lisp= in the
+=AUTOLITH= package. The script is complete and ordered; the manifest and
+=autolith --recovery --list= show its exact pathname.
+
+After loading the locked project setup from that checkout, the essential Lisp
+sequence is:
+
+#+BEGIN_SRC lisp
+(asdf:load-asd (truename "autolith.asd"))
+(asdf:load-system :autolith)
+(load #P"/path/from/generation/manifest/reconstruct.lisp")
+#+END_SRC
 
 * Security status
 

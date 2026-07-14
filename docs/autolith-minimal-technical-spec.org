@@ -196,10 +196,12 @@ There are two levels of change.
 
 ** 6.1 Exploratory Change
 
-An exploratory change modifies the active image only.
+An exploratory =self.redefine= or =self.set= change modifies the active
+image and appends a stable mutation identity to the journal.
 
 It may be tested, reverted, refined, or discarded without immediately
-changing source control.
+changing durable reconstruction state. =self.diff= shows successful
+reconstructible changes that remain pending in the current image lineage.
 
 ** 6.2 Durable Change
 
@@ -208,21 +210,26 @@ A durable change normally follows this sequence:
 1. Record the intended mutation in the mutation journal.
 2. Compile and install the change in the active image.
 3. Run relevant checks.
-4. Persist the complete definition to an overlay file under the data
-   root.
+4. Persist the complete effective mutation state as an immutable private
+   image commit under the data root.
 5. Mark the journal entry as durable.
 
-Overlay files hold complete top-level definitions and load at startup
-after the tracked system. The agent never patches the tracked source
-repository; repository changes remain with the user and their
-development tools.
+Each private image commit has a manifest and a complete executable Lisp
+replay script. An atomic pointer under the state root selects the commit
+loaded after the tracked system at normal startup. =self.commit= checks
+and persists all pending =self.redefine= and =self.set= mutations in the
+current image lineage. =self.persist-definition= performs the complete
+transaction for one definition. Neither tool invokes Git or writes a
+workspace repository.
 
 Persisted definitions are complete Lisp forms rather than blind textual
 patches.
 
 The tracked source remains authoritative for clean rebuilds of the base
-system, extended by the overlays. Saved cores preserve the exact live
-state of a working generation.
+system. Private replay scripts reconstruct committed user-specific
+extensions. Saved cores preserve the exact live state of a working
+generation. Legacy overlay files are imported into the first private
+image commit so existing durable changes remain reconstructible.
 
 * 7. Conditions and Restarts
 
@@ -288,12 +295,13 @@ with a distinguished recovery status.
 
 * 8. Persistence
 
-Autolith persists four kinds of state:
+Autolith persists five kinds of state:
 
 - Source in Git.
 - Conversations as S-expression files.
 - Mutations in an append-only journal.
-- Working generations as saved Lisp cores.
+- Private image commits as manifests and complete Lisp replay scripts.
+- Working generations as saved Lisp cores and reconstruction scripts.
 
 ** 8.1 Conversation Files
 
@@ -376,17 +384,20 @@ A journal entry should identify:
 - Previous source or recoverable reference.
 - Proposed change.
 - Result.
-- Related Git commit, if durable.
+- Related private image commit, if durable.
 - Related checkpoint, if saved.
 
-The journal is for recovery and diagnosis. It does not replace Git.
+The journal is for recovery and diagnosis. It does not replace private
+image commits or their complete replay scripts.
 
 * 9. Generations and Checkpoints
 
 A generation is a known working state consisting of:
 
 - A saved Lisp core.
-- A Git commit.
+- The tracked base Git commit.
+- A complete Lisp reconstruction script.
+- The applicable private image commit, when one exists.
 - A small manifest.
 - The applicable mutation-journal position.
 
@@ -394,7 +405,9 @@ The manifest identifies at least:
 
 - Generation identifier.
 - Core pathname.
-- Git commit.
+- Reconstruction script pathname.
+- Private image commit identifier, when applicable.
+- Tracked base Git commit.
 - SBCL build.
 - Operating system.
 - Architecture.
@@ -408,12 +421,14 @@ operating systems, or architectures.
 On Linux, Autolith creates a checkpoint without stopping the active agent:
 
 1. Briefly block live mutation.
-2. Flush source, conversation, and journal output.
-3. Fork a child process.
-4. Resume the parent.
-5. Let the child detach inherited external resources.
-6. Let the child save the Lisp core and exit.
-7. Atomically publish the completed core and manifest.
+2. Check and privately commit pending reconstructible mutations.
+3. Write a complete reconstruction script in the new generation directory.
+4. Flush source, conversation, and journal output.
+5. Fork a child process.
+6. Resume the parent.
+7. Let the child detach inherited external resources.
+8. Let the child save the Lisp core and exit.
+9. Atomically publish the completed core and manifest.
 
 The parent remains the active agent.
 
@@ -545,7 +560,7 @@ The first dogfoodable version is complete when it can:
 3. Save and reload the conversation from a =.sexp= file.
 4. Execute =lisp.*= operations in a disposable SBCL process.
 5. Inspect and redefine a live function through =self.*=.
-6. Persist that definition to source and commit it to Git.
+6. Persist that definition as a private image commit and replay script.
 7. Create a Linux checkpoint without stopping the active agent.
 8. Recover from an intentionally broken agent loop.
 9. Boot a retained generation through =autolith --recovery=.

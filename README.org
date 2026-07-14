@@ -35,8 +35,8 @@ user's privileges.
 - Input remains editable while model responses and tools are running.
 - Append-only portable conversation files with exact resume commands.
 - Everyday filesystem and shell tools plus an isolated disposable Lisp worker.
-- Live =self.*= inspection and mutation with durable overlay persistence.
-- Forked SBCL checkpoints, retained generations, and a pristine recovery image.
+- Live =self.*= mutation with private commits and complete replay scripts.
+- Forked checkpoints with per-generation reconstruction artifacts.
 - A validated preloaded active image for fast startup and source fallback.
 
 * Quick start
@@ -76,14 +76,15 @@ be drafted and queued while AL is responding. Type =/help= for commands.
 
 * Persistent state
 
-Autolith keeps credentials under =${XDG_STATE_HOME:-~/.local/state}/autolith/=
-and conversations, overlays, runtimes, and images under
+Autolith keeps credentials and atomic selections under
+=${XDG_STATE_HOME:-~/.local/state}/autolith/= and conversations, private image
+commits, generations, runtimes, and images under
 =${XDG_DATA_HOME:-~/.local/share}/autolith/=. Credentials never belong in Git,
 conversation files, journals, manifests, or saved cores.
 
 Source remains authoritative for clean rebuilds. Saved cores retain exact live
-states; overlays retain durable live definitions without patching the tracked
-repository.
+states; private image commits and each generation's =reconstruct.lisp= retain
+durable user-specific changes without patching the tracked repository.
 
 * Development
 
