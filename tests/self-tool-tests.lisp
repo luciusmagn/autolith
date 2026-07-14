@@ -457,6 +457,9 @@
                (test-assert (search "private image commit"
                                     (tool-result-content result))
                             "the persistence result identifies private storage")
+               (test-assert (search "Private Git commit:"
+                                    (tool-result-content result))
+                            "the persistence result identifies recoverable history")
                (test-assert first-commit
                             "durable persistence selects a private commit")
                (test-assert

@@ -435,17 +435,18 @@ journals may instead name a startup overlay or tracked src/ file."
                               :target target
                               :source definition-source))
                        :identifier commit-identifier)))
-                (declare (ignore commit)))
-              (durable-mutation-transition configuration mutation
-                                           :source-written)
-              (durable-mutation-transition configuration mutation :durable)
-              (tool-success
-               (format nil
-                       "Mutation ~A installed, checked, and persisted as ~
-                        private image commit ~A.~%Replay script: ~A"
-                       (durable-mutation-identifier mutation)
-                       commit-identifier
-                       (namestring commit-script))))
+                (durable-mutation-transition configuration mutation
+                                             :source-written)
+                (durable-mutation-transition configuration mutation :durable)
+                (tool-success
+                 (format nil
+                         "Mutation ~A installed, checked, and persisted as ~
+                          private image commit ~A.~%Private Git commit: ~A~%
+                          Replay script: ~A"
+                         (durable-mutation-identifier mutation)
+                         commit-identifier
+                         (image-commit-history-commit commit)
+                         (namestring commit-script)))))
           (error (condition)
             (when (and (member (durable-mutation-phase mutation)
                                '(:pending :installed :checked)

@@ -595,7 +595,7 @@
                  '("symbol" "value")))
       (register 'self-persist-definition-tool
                 "self" "persist-definition"
-                "Compile, install, check, and persist one complete definition in a private image commit. The tracked source repository is never modified."
+                "Compile, install, check, and persist one complete definition in a private image commit backed by Autolith's private mutation-history Git repository. The tracked source repository is never modified."
                 (tool-object-schema
                  (json-object
                   "definition" (tool-string-property
@@ -609,7 +609,7 @@
                 empty-schema)
       (register 'self-commit-tool
                 "self" "commit"
-                "Check and persist all pending self.redefine and self.set mutations as an immutable private image commit and complete Lisp replay script. This never creates a Git commit or changes a workspace repository."
+                "Check and persist all pending self.redefine and self.set mutations as an immutable private image commit and complete Lisp replay script, then retain the snapshot in Autolith's private mutation-history Git repository. This never changes a workspace repository."
                 (tool-object-schema
                  (json-object
                   "title" (tool-string-property
