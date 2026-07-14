@@ -606,6 +606,20 @@ asks for a context checkpoint handoff."
   "Return true when ITEM is a Responses function call."
   (string= (or (json-get item "type") "") "function_call"))
 
+(-> provider--reasoning-summary-key (json-object) (option list))
+(defun provider--reasoning-summary-key (event)
+  "Return EVENT's stable reasoning summary part identity, when available."
+  (let ((item-id (json-get event "item_id"))
+        (output-index (json-get event "output_index"))
+        (summary-index (json-get event "summary_index")))
+    (cond
+      ((integerp output-index)
+       (list :output output-index :summary summary-index))
+      ((non-empty-string-p item-id)
+       (list :item item-id :summary summary-index))
+      (t
+       nil))))
+
 (-> provider--consume-stream (stream t function) provider-result)
 (defun provider--consume-stream (stream headers event-callback)
   "Consume STREAM into a provider result while invoking EVENT-CALLBACK."
@@ -613,6 +627,7 @@ asks for a context checkpoint handoff."
         (response-id nil)
         (usage nil)
         (turn-completion :unspecified)
+        (reasoning-summary-key nil)
         (completed-p nil))
     (loop until completed-p
           for data = (read-sse-data stream)
@@ -637,9 +652,22 @@ asks for a context checkpoint handoff."
                                             :text (or (json-get event "delta") ""))))
                    ((string= (or type "")
                              "response.reasoning_summary_text.delta")
-                    (funcall event-callback
-                             (make-instance 'reasoning-delta-event
-                                            :text (or (json-get event "delta") ""))))
+                    (let* ((delta (or (json-get event "delta") ""))
+                           (next-key
+                             (and (plusp (length delta))
+                                  (provider--reasoning-summary-key event)))
+                           (new-part-p
+                             (and next-key
+                                  reasoning-summary-key
+                                  (not (equal next-key reasoning-summary-key)))))
+                      (when next-key
+                        (setf reasoning-summary-key next-key))
+                      (funcall event-callback
+                               (make-instance
+                                'reasoning-delta-event
+                                :text (if new-part-p
+                                          (format nil "~2%~A" delta)
+                                          delta)))))
                    ((string= (or type "") "response.output_item.done")
                     (let ((item (json-get event "item")))
                       (when (json-object-p item)

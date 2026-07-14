@@ -714,8 +714,10 @@
                 (reasoning-prefix "**<thought>** Checking the safe path.")
                 (reasoning-suffix
                   " Comparing fallback behavior and verifying the live preview remains separate from status.")
-                (streamed-reasoning
+                (reasoning-first-part
                   (concatenate 'string reasoning-prefix reasoning-suffix))
+                (reasoning-second-part
+                  "**<thought>** Confirming the durable summary matches.")
                 (streamed-text (format nil
                                        "The quick brown fox jumps over~%the lazy dog")))
            (terminal-ui-start (application-ui application))
@@ -750,6 +752,8 @@
                          (apply #'append preview)
                          :test #'equal))
               "long live reasoning traces retain a bounded recent preview"))
+           (funcall send-reasoning
+                    (format nil "~2%~A" reasoning-second-part))
            (recording-terminal-reset terminal)
            (funcall send-text (format nil
                                       "The quick brown fox jumps over~%"))
@@ -772,6 +776,8 @@
                                assistant-position
                                (< reasoning-position assistant-position))
                           "the reasoning summary finalizes above assistant output")
+             (test-assert (search "Confirming" streamed)
+                          "multiple reasoning summary parts stay visibly separated")
              (test-assert (search "The quick brown fox" streamed)
                           "newline-terminated logical lines commit while streaming"))
            (conversation-append-provider-item
@@ -780,7 +786,9 @@
              "type" "reasoning"
              "summary" (json-array
                         (json-object "type" "summary_text"
-                                     "text" streamed-reasoning))
+                                     "text" reasoning-first-part)
+                        (json-object "type" "summary_text"
+                                     "text" reasoning-second-part))
              "encrypted_content" "opaque-reasoning"))
            (conversation-append-provider-item
             conversation

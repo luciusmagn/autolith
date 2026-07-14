@@ -278,7 +278,24 @@
             (test-sse-event-string
              (json-object
               "type" "response.reasoning_summary_text.delta"
-              "delta" "I inspected the request."))
+              "item_id" "ephemeral-reasoning-id"
+              "output_index" 0
+              "summary_index" 0
+              "delta" "I inspected "))
+            (test-sse-event-string
+             (json-object
+              "type" "response.reasoning_summary_text.delta"
+              "item_id" "ephemeral-reasoning-id"
+              "output_index" 0
+              "summary_index" 0
+              "delta" "the request."))
+            (test-sse-event-string
+             (json-object
+              "type" "response.reasoning_summary_text.delta"
+              "item_id" "ephemeral-reasoning-id"
+              "output_index" 0
+              "summary_index" 1
+              "delta" "I chose a safe response."))
             (test-sse-event-string
              (json-object
               "type" "response.reasoning_text.delta"
@@ -331,17 +348,23 @@
        "completed reasoning exposes only its dedicated visible summary")
       (test-assert (not (search "raw private reasoning" summary))
                    "raw reasoning content is never folded into the summary"))
-    (let ((reasoning-events
-            (remove-if-not (lambda (event)
-                             (typep event 'reasoning-delta-event))
-                           events)))
-      (test-assert (= (length reasoning-events) 1)
+    (let* ((reasoning-events
+             (reverse
+              (remove-if-not (lambda (event)
+                               (typep event 'reasoning-delta-event))
+                             events)))
+           (streamed-summary
+             (format nil
+                     "~{~A~}"
+                     (mapcar #'reasoning-delta-event-text reasoning-events))))
+      (test-assert (= (length reasoning-events) 3)
                    "only summary deltas become visible reasoning events")
       (test-assert
-       (string= (reasoning-delta-event-text (first reasoning-events))
-                "I inspected the request.")
-       "the visible reasoning event retains the summary text"))
-    (test-assert (= (length events) 5)
+       (string= streamed-summary
+                (format nil
+                        "I inspected the request.~2%I chose a safe response."))
+       "summary part boundaries match the authoritative completed text"))
+    (test-assert (= (length events) 7)
                  "the stream emits safe deltas, items, and completion events"))
   nil)
 
