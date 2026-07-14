@@ -418,6 +418,16 @@
       (t
        ""))))
 
+(-> application--reasoning-summary-entry (application string) list)
+(defun application--reasoning-summary-entry (application summary)
+  "Return one dim transcript entry for provider-visible reasoning SUMMARY."
+  (application--transcript-entry
+   application
+   :style ':hint
+   :header "◇ reasoning summary"
+   :body summary
+   :body-style ':dim))
+
 (-> response-item-entry (application json-object) (option list))
 (defun response-item-entry (application item)
   "Return a styled transcript entry for completed provider ITEM."
@@ -434,12 +444,7 @@
        (when (application-reasoning-traces-p application)
          (let ((summary (response-item-reasoning-summary item)))
            (when summary
-             (application--transcript-entry
-              application
-              :style ':hint
-              :header "◇ reasoning summary"
-              :body summary
-              :body-style ':dim)))))
+             (application--reasoning-summary-entry application summary)))))
       ((string= (or type "") "function_call")
        (let* ((canonical-name (function-call-canonical-name item))
               (tool (application--find-tool application canonical-name)))
@@ -505,15 +510,27 @@
           (and (json-object-p item)
                (response-item-assistant-text item)))))))
 
+(-> application--reasoning-record-text (list) (option string))
+(defun application--reasoning-record-text (record)
+  "Return the visible reasoning summary carried by durable RECORD, when present."
+  (when (eq (first record) :provider-item)
+    (let ((wire-json (getf (rest record) :wire-json)))
+      (when (stringp wire-json)
+        (let ((item (json-decode wire-json)))
+          (and (json-object-p item)
+               (response-item-reasoning-summary item)))))))
+
 (-> application-render-records
-    (application &key (:streamed-assistant-text (option string)))
+    (application &key (:streamed-assistant-text (option string))
+                      (:streamed-reasoning-text (option string)))
     null)
-(defun application-render-records (application &key streamed-assistant-text)
+(defun application-render-records
+    (application &key streamed-assistant-text streamed-reasoning-text)
   "Append APPLICATION's not-yet-rendered durable transcript records once.
 
-Assistant records are suppressed only when their joined durable text exactly
-matches STREAMED-ASSISTANT-TEXT. Suppressed identifiers remain finalized so a
-later conversation replay cannot duplicate their streamed transcript rows."
+Assistant and reasoning records are suppressed only when their joined durable
+text exactly matches the corresponding streamed text. Suppressed identifiers
+remain finalized so later conversation replay cannot duplicate streamed rows."
   (let* ((ui (application-ui application))
          (conversation (application-conversation application))
          (conversation-id (conversation-identifier conversation))
@@ -530,20 +547,34 @@ later conversation replay cannot duplicate their streamed transcript rows."
                  for text = (application--assistant-message-record-text record)
                  when text
                    collect text))
-         (stream-match-p
+         (reasoning-texts
+           (loop for record in records
+                 for text = (application--reasoning-record-text record)
+                 when text
+                   collect text))
+         (assistant-stream-match-p
            (and streamed-assistant-text
                 assistant-texts
                 (string= streamed-assistant-text
-                         (format nil "~{~A~^~%~}" assistant-texts)))))
+                         (format nil "~{~A~^~%~}" assistant-texts))))
+         (reasoning-stream-match-p
+           (and streamed-reasoning-text
+                reasoning-texts
+                (string= streamed-reasoning-text
+                         (format nil "~{~A~^~2%~}" reasoning-texts)))))
     (dolist (record records)
-      (let ((sequence (getf (rest record) :seq)))
-        (let ((identifier (list :conversation conversation-id sequence)))
-          (if (and stream-match-p
-                   (application--assistant-message-record-text record))
-              (terminal-ui-mark-finalized ui identifier)
-              (let ((entry (conversation-record-entry application record)))
-                (when entry
-                  (terminal-ui-append-finalized ui identifier entry)))))
+      (let* ((sequence (getf (rest record) :seq))
+             (identifier (list :conversation conversation-id sequence))
+             (assistant-text
+               (application--assistant-message-record-text record))
+             (reasoning-text
+               (application--reasoning-record-text record)))
+        (if (or (and assistant-stream-match-p assistant-text)
+                (and reasoning-stream-match-p reasoning-text))
+            (terminal-ui-mark-finalized ui identifier)
+            (let ((entry (conversation-record-entry application record)))
+              (when entry
+                (terminal-ui-append-finalized ui identifier entry))))
         (setf (application-rendered-sequence application) sequence))))
   nil)
 
@@ -659,11 +690,23 @@ later conversation replay cannot duplicate their streamed transcript rows."
   (let ((ui (application-ui application))
         (activity-label (application-thinking-label))
         (reasoning-tail "")
+        (reasoning-text "")
+        (presented-reasoning-text nil)
         (stream-text "")
         (stream-pending "")
         (stream-open-p nil)
         (stream-renderer nil))
-    (labels ((stream-text-delta (delta)
+    (labels ((reasoning-flush ()
+               "Finalize the visible reasoning summary before assistant output."
+               (when (and (application-reasoning-traces-p application)
+                          (plusp (length reasoning-text))
+                          (null presented-reasoning-text))
+                 (application-present
+                  application
+                  (application--reasoning-summary-entry application reasoning-text))
+                 (setf presented-reasoning-text reasoning-text)))
+
+             (stream-text-delta (delta)
                "Commit DELTA's completed markdown rows and repaint the fluid tail."
                (when (plusp (length delta))
                  (setf stream-text
@@ -673,6 +716,7 @@ later conversation replay cannot duplicate their streamed transcript rows."
                         (concatenate 'string stream-pending delta)))
                  (let ((rows nil))
                    (unless stream-open-p
+                     (reasoning-flush)
                      (setf stream-open-p t
                            reasoning-tail ""
                            stream-renderer (application--markdown-renderer
@@ -714,24 +758,28 @@ later conversation replay cannot duplicate their streamed transcript rows."
        :reasoning-callback
        (lambda (delta)
          (when (application-reasoning-traces-p application)
-           (let ((combined (concatenate 'string reasoning-tail delta)))
-             (setf reasoning-tail
-                   (subseq combined (max 0 (- (length combined) 500)))))
+           (setf reasoning-text (concatenate 'string reasoning-text delta))
+           (let ((start (max 0 (- (length reasoning-text) 500))))
+             (setf reasoning-tail (subseq reasoning-text start)))
            (application-stream-status application activity-label reasoning-tail)))
        :status-callback
        (lambda (status details)
          (case status
            (:provider-request-started
             (setf reasoning-tail ""
+                  reasoning-text ""
+                  presented-reasoning-text nil
                   stream-text ""
                   activity-label (application-thinking-label))
             (terminal-ui-set-status ui activity-label))
            (:provider-request-completed
-            (let ((completed-stream-text (and stream-open-p stream-text)))
+            (let ((completed-stream-text (and stream-open-p stream-text))
+                  (completed-reasoning-text presented-reasoning-text))
               (stream-flush)
               (application-render-records
                application
-               :streamed-assistant-text completed-stream-text)))
+               :streamed-assistant-text completed-stream-text
+               :streamed-reasoning-text completed-reasoning-text)))
            (:tool-call-started
             (terminal-ui-set-status
              ui

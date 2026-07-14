@@ -660,22 +660,35 @@
                 (send-reasoning
                   (callback-agent-observer-reasoning-callback observer))
                 (send-status (callback-agent-observer-status-callback observer))
+                (streamed-reasoning "Checking the safe path.")
                 (streamed-text (format nil
                                        "The quick brown fox jumps over~%the lazy dog")))
            (terminal-ui-start (application-ui application))
            (funcall send-status :provider-request-started nil)
-           (funcall send-reasoning "Checking the safe path.")
+           (funcall send-reasoning streamed-reasoning)
            (test-assert (search "Checking"
                                 (recording-terminal-output terminal))
                         "trace mode shows live reasoning-summary progress")
            (funcall send-text (format nil
                                       "The quick brown fox jumps over~%"))
            (funcall send-text "the lazy dog")
-           (let ((streamed (recording-terminal-output terminal)))
-             (test-assert (search "● autolith" streamed)
-                          "streaming opens a autolith transcript block")
+           (let* ((streamed (recording-terminal-output terminal))
+                  (reasoning-position (search "◇ reasoning summary" streamed))
+                  (assistant-position (search "● autolith" streamed)))
+             (test-assert (and reasoning-position
+                               assistant-position
+                               (< reasoning-position assistant-position))
+                          "the reasoning summary finalizes above assistant output")
              (test-assert (search "The quick brown fox" streamed)
                           "newline-terminated logical lines commit while streaming"))
+           (conversation-append-provider-item
+            conversation
+            (json-object
+             "type" "reasoning"
+             "summary" (json-array
+                        (json-object "type" "summary_text"
+                                     "text" streamed-reasoning))
+             "encrypted_content" "opaque-reasoning"))
            (conversation-append-provider-item
             conversation
             (json-object
@@ -690,7 +703,9 @@
              (test-assert (search "the lazy dog" completion)
                           "completing a request commits the fluid tail")
              (test-assert (not (search "● autolith" completion))
-                          "streamed message records do not render again"))
+                          "streamed message records do not render again")
+             (test-assert (not (search "◇ reasoning summary" completion))
+                          "streamed reasoning records do not render below the answer"))
            (setf (application-rendered-sequence application) 0)
            (recording-terminal-reset terminal)
            (application-render-records application)
@@ -698,6 +713,10 @@
             (not (search "The quick brown fox"
                          (recording-terminal-output terminal)))
             "replaying a conversation does not duplicate streamed messages")
+           (test-assert
+            (not (search "◇ reasoning summary"
+                         (recording-terminal-output terminal)))
+            "replaying a conversation does not duplicate streamed reasoning")
            (conversation-append-tool-result
             conversation "call-1" "self.eval" "42" t)
            (recording-terminal-reset terminal)
