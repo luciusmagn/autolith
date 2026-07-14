@@ -285,7 +285,6 @@ ${XDG_DATA_HOME:-~/.local/share}/autolith/
 │   └── reconstruct.lisp
 ├── lisp-images/IMAGE-ID/
 │   ├── manifest.sexp
-│   ├── note.txt
 │   └── worker.core
 └── runtimes/2.6.4/
     ├── installation/
