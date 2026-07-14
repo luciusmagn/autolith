@@ -5,25 +5,57 @@
 (defvar *exploratory-definitions* (make-hash-table :test #'equal)
   "Complete source forms installed exploratorily in the active image.")
 
-(-> self-read-form (string &key (:read-eval boolean)) t)
-(defun self-read-form (source &key (read-eval t))
-  "Read exactly one Common Lisp form from SOURCE."
-  (let ((*read-eval* read-eval)
-        (*package* (find-package '#:autolith))
-        (end-marker (cons nil nil)))
-    (multiple-value-bind (form position)
-        (read-from-string source t nil)
-      (multiple-value-bind (extra ignored-position)
-          (read-from-string source nil end-marker :start position)
-        (declare (ignore ignored-position))
-        (unless (eq extra end-marker)
-          (error "Expected exactly one Common Lisp form.")))
-      form)))
+(-> self-resolve-package ((option string)) package)
+(defun self-resolve-package (name)
+  "Return existing package NAME, defaulting to the AUTOLITH package."
+  (let ((package (if (non-empty-string-p name)
+                     (find-package name)
+                     (find-package '#:autolith))))
+    (unless package
+      (error 'source-mutation-error
+             :message (format nil "No active Common Lisp package is named ~S."
+                              name)
+             :tool-name "self.redefine"
+             :pathname nil))
+    package))
 
-(-> self-resolve-symbol (string) symbol)
-(defun self-resolve-symbol (name)
-  "Resolve readable symbol NAME relative to the AUTOLITH package."
-  (let ((value (self-read-form name :read-eval nil)))
+(-> self-call-with-package-unlocked (package function) t)
+(defun self-call-with-package-unlocked (package thunk)
+  "Call THUNK with PACKAGE temporarily unlocked, restoring its lock afterward."
+  (let ((locked-p (sb-ext:package-locked-p package)))
+    (unwind-protect
+         (progn
+           (when locked-p
+             (sb-ext:unlock-package package))
+           (funcall thunk))
+      (when (and locked-p (find-package (package-name package)))
+        (sb-ext:lock-package package)))))
+
+(-> self-read-form
+    (string &key (:read-eval boolean) (:package package))
+    t)
+(defun self-read-form
+    (source &key (read-eval t) (package (find-package '#:autolith)))
+  "Read exactly one Common Lisp form from SOURCE relative to PACKAGE."
+  (self-call-with-package-unlocked
+   package
+   (lambda ()
+     (let ((*read-eval* read-eval)
+           (*package* package)
+           (end-marker (cons nil nil)))
+       (multiple-value-bind (form position)
+           (read-from-string source t nil)
+         (multiple-value-bind (extra ignored-position)
+             (read-from-string source nil end-marker :start position)
+           (declare (ignore ignored-position))
+           (unless (eq extra end-marker)
+             (error "Expected exactly one Common Lisp form.")))
+         form)))))
+
+(-> self-resolve-symbol (string &key (:package package)) symbol)
+(defun self-resolve-symbol (name &key (package (find-package '#:autolith)))
+  "Resolve readable symbol NAME relative to PACKAGE."
+  (let ((value (self-read-form name :read-eval nil :package package)))
     (unless (symbolp value)
       (error "~S does not name a symbol." name))
     value))
@@ -334,23 +366,59 @@ protocol."
                                   :level 10
                                   :length 100)))))))
 
-(-> self--install-definition (list string) t)
-(defun self--install-definition (definition source)
-  "Compile and install parsed DEFINITION while retaining its complete SOURCE."
-  (let ((result (eval definition)))
-    (setf (gethash (definition-key definition) *exploratory-definitions*) source)
-    result))
+(-> self--install-definition (list string &key (:package package)) t)
+(defun self--install-definition
+    (definition source &key (package (find-package '#:autolith)))
+  "Compile and install parsed DEFINITION in PACKAGE, retaining complete SOURCE."
+  (self-call-with-package-unlocked
+   package
+   (lambda ()
+     (let* ((*package* package)
+            (result (eval definition)))
+       (setf (gethash (definition-key definition) *exploratory-definitions*)
+             source)
+       result))))
+
+(-> self-replay-definition (string string) t)
+(defun self-replay-definition (package-name source)
+  "Read and install persisted SOURCE in PACKAGE-NAME during image reconstruction."
+  (let* ((package (self-resolve-package package-name))
+         (definition
+           (self-read-form source :read-eval nil :package package)))
+    (unless (definition-form-p definition)
+      (error 'source-mutation-error
+             :message "A private image commit contains an invalid definition."
+             :tool-name "self.commit"
+             :pathname nil))
+    (if (overlay--constant-target-p (definition-key definition))
+        (handler-bind
+            ((error
+               (lambda (condition)
+                 (let ((restart (find-restart 'continue condition)))
+                   (when restart
+                     (invoke-restart restart))))))
+          (self--install-definition definition source :package package))
+        (self--install-definition definition source :package package))))
 
 (-> self-restore-definition
-    (string serious-condition &key (:installer function))
+    (string serious-condition
+     &key (:installer function) (:package (option package)))
     t)
 (defun self-restore-definition
-    (previous-source original-condition &key (installer #'self--install-definition))
+    (previous-source original-condition
+     &key (installer #'self--install-definition) package)
   "Restore PREVIOUS-SOURCE or signal compound active-image corruption."
   (handler-case
-      (funcall installer
-               (self-read-form previous-source :read-eval nil)
-               previous-source)
+      (if package
+          (funcall installer
+                   (self-read-form previous-source
+                                   :read-eval nil
+                                   :package package)
+                   previous-source
+                   :package package)
+          (funcall installer
+                   (self-read-form previous-source :read-eval nil)
+                   previous-source))
     (error (restoration-condition)
       (error 'active-image-corruption
              :message
@@ -358,11 +426,15 @@ protocol."
              :original-condition original-condition
              :restoration-condition restoration-condition))))
 
-(-> self-install-definition (configuration string) t)
-(defun self-install-definition (configuration source)
-  "Compile and install one exploratory SOURCE definition with active history."
+(-> self-install-definition
+    (configuration string &key (:package package))
+    t)
+(defun self-install-definition
+    (configuration source &key (package (find-package '#:autolith)))
+  "Compile and install one exploratory SOURCE definition in PACKAGE."
   (with-live-mutation
-    (let ((definition (self-read-form source)))
+    (let ((definition (self-read-form source :package package))
+          (package-name (package-name package)))
       (unless (definition-form-p definition)
         (error 'source-mutation-error
                :message "self.redefine accepts one complete supported definition."
@@ -378,11 +450,14 @@ protocol."
                :id identifier
                :lineage *active-image-lineage-identifier*
                :target key
+               :package package-name
                :previous previous
                :proposed source
                :result :pending))
         (handler-case
-            (let ((result (self--install-definition definition source)))
+            (let ((result (self--install-definition definition
+                                                    source
+                                                    :package package)))
               (mutation-journal-append
                configuration
                (list :mutation
@@ -390,6 +465,7 @@ protocol."
                      :id identifier
                      :lineage *active-image-lineage-identifier*
                      :target key
+                     :package package-name
                      :previous previous
                      :proposed source
                      :result :installed))
@@ -402,6 +478,7 @@ protocol."
                    :id identifier
                    :lineage *active-image-lineage-identifier*
                    :target key
+                   :package package-name
                    :previous previous
                    :proposed source
                    :result :failed
@@ -413,13 +490,19 @@ protocol."
                          (arguments hash-table))
   "Install one exploratory top-level definition in CONTEXT's active image."
   (declare (ignore tool))
-  (let ((source (tool-argument arguments "definition" :required t)))
+  (let ((source (tool-argument arguments "definition" :required t))
+        (package
+          (self-resolve-package (tool-argument arguments "package"))))
     (self-call-with-restarts
      (lambda ()
-       (self-install-definition (tool-context-configuration context) source))
+       (self-install-definition (tool-context-configuration context)
+                                source
+                                :package package))
      :restart-name (tool-argument arguments "restart")
      :restart-value-source (tool-argument arguments "restart-value"))
-    (tool-success "The definition was compiled and installed in the active image.")))
+    (tool-success
+     (format nil "The definition was compiled and installed in package ~A."
+             (package-name package)))))
 
 (defmethod tool-execute ((tool self-set-tool)
                          (context tool-context)
@@ -629,13 +712,22 @@ protocol."
                          (arguments hash-table))
   "Return tracked source definitions for one symbol in CONTEXT."
   (declare (ignore tool))
-  (let* ((symbol (self-resolve-symbol
-                  (tool-argument arguments "symbol" :required t)))
+  (let* ((package
+           (self-resolve-package (tool-argument arguments "package")))
+         (symbol (self-resolve-symbol
+                  (tool-argument arguments "symbol" :required t)
+                  :package package))
          (definitions
            (self-tracked-definitions
             (tool-context-configuration context)
             symbol)))
-    (tool-success (self-render-tracked-definitions definitions symbol))))
+    (if definitions
+        (tool-success (self-render-tracked-definitions definitions symbol))
+        (multiple-value-bind (values output)
+            (worker-source (write-to-string symbol :readably t)
+                           (tool-argument arguments "kind"))
+          (declare (ignore values))
+          (tool-success output)))))
 
 (-> source-definition-match-p (source-form list) boolean)
 (defun source-definition-match-p (source-form definition)

@@ -16,9 +16,19 @@
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (pathname (merge-pathnames "definitions.lisp" root))
-         (previous-function (symbol-function 'test-self-target)))
+         (previous-function (symbol-function 'test-self-target))
+         (implementation-package (find-package '#:sb-ext))
+         (implementation-name
+           (format nil "AUTOLITH-ACTIVE-IMAGE-TEST-~A"
+                   (string-upcase (make-identifier))))
+         (implementation-source
+           nil)
+         (implementation-key nil)
+         (implementation-record nil))
     (unwind-protect
          (progn
+           (setf implementation-source
+                 (format nil "(defun ~A () 4242)" implementation-name))
            (self-install-definition
             configuration
             "(defun test-self-target () \"Return the installed test value.\" 42)")
@@ -44,6 +54,57 @@
             (search "Return the installed test value."
                     (self-inspect-symbol 'test-self-target))
             "active-image inspection exposes function documentation")
+           (test-assert (sb-ext:package-locked-p implementation-package)
+                        "the selected SBCL implementation package begins locked")
+           (self-install-definition configuration
+                                    implementation-source
+                                    :package implementation-package)
+           (multiple-value-bind (symbol status)
+               (find-symbol implementation-name implementation-package)
+             (declare (ignore status))
+             (setf implementation-key
+                   (definition-key (list 'defun symbol nil 4242)))
+             (test-assert (and symbol
+                               (fboundp symbol)
+                               (= (funcall symbol) 4242))
+                          "self definition installation can instrument an SBCL package"))
+           (test-assert (sb-ext:package-locked-p implementation-package)
+                        "active SBCL instrumentation restores the package lock")
+           (setf implementation-record
+                 (find-if
+                  (lambda (candidate)
+                    (and (eq (first candidate) :mutation)
+                         (eq (getf (rest candidate) :kind) :definition)
+                         (string= (or (getf (rest candidate) :package) "")
+                                  "SB-EXT")
+                         (eq (getf (rest candidate) :result) :installed)))
+                  (mutation-journal-read-records configuration)))
+           (test-assert implementation-record
+                        "active implementation mutations journal their package")
+           (let ((script (merge-pathnames "implementation-replay.lisp" root)))
+             (image-commit-write-script
+              script
+              "implementation-replay"
+              "Replay implementation instrumentation"
+              (list (image-commit--record->entry implementation-record)))
+             (self-call-with-package-unlocked
+              implementation-package
+              (lambda ()
+                (let ((symbol (find-symbol implementation-name
+                                           implementation-package)))
+                  (when symbol
+                    (when (fboundp symbol)
+                      (fmakunbound symbol))
+                    (unintern symbol implementation-package)))))
+             (load script)
+             (let ((symbol (find-symbol implementation-name
+                                        implementation-package)))
+               (test-assert (and symbol
+                                 (fboundp symbol)
+                                 (= (funcall symbol) 4242)
+                                 (sb-ext:package-locked-p
+                                  implementation-package))
+                            "private replay reconstructs a locked-package definition")))
            (let* ((source-root (merge-pathnames "source/" root))
                   (source-pathname (merge-pathnames "src/sample.lisp" source-root))
                   (source-configuration
@@ -69,6 +130,27 @@
                             "tracked source inspection reports its repository path")
                (test-assert (search "Tracked source documentation." rendered)
                             "tracked source inspection returns exact definition text")))
+           (let* ((conversation
+                    (conversation-create configuration
+                                         :identifier "self-sbcl-source"))
+                  (context
+                    (make-instance 'tool-context
+                                   :configuration configuration
+                                   :worker nil
+                                   :conversation conversation))
+                  (result
+                    (tool-execute
+                     (tool-registry-find (make-default-tool-registry)
+                                         "self"
+                                         "source")
+                     context
+                     (json-object "symbol" "CL:MAPCAR"
+                                  "kind" "function"))))
+             (test-assert
+              (and (tool-result-success-p result)
+                   (search "src/code/list.lisp"
+                           (tool-result-content result)))
+              "self.source falls back to matching active SBCL source"))
            (test-assert
             (equal (definition-signature
                     '(defmethod sample-operation ((left string) right) left))
@@ -125,6 +207,17 @@
       (setf (symbol-function 'test-self-target) previous-function)
       (remhash (definition-key '(defun test-self-target () 0))
                *exploratory-definitions*)
+      (when implementation-key
+        (remhash implementation-key *exploratory-definitions*))
+      (self-call-with-package-unlocked
+       implementation-package
+       (lambda ()
+         (let ((symbol (find-symbol implementation-name
+                                    implementation-package)))
+           (when symbol
+             (when (fboundp symbol)
+               (fmakunbound symbol))
+             (unintern symbol implementation-package)))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 

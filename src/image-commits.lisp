@@ -134,6 +134,8 @@
        (non-empty-string-p (getf entry :id))
        (non-empty-string-p (getf entry :target))
        (stringp (getf entry :source))
+       (or (null (getf entry :package))
+           (non-empty-string-p (getf entry :package)))
        t))
 
 (-> image-commit--manifest-form
@@ -283,6 +285,8 @@
        (string= (or (getf (rest record) :lineage) "") lineage)
        (non-empty-string-p (getf (rest record) :target))
        (stringp (getf (rest record) :proposed))
+       (or (null (getf (rest record) :package))
+           (non-empty-string-p (getf (rest record) :package)))
        t))
 
 (-> image-commit-pending-records (configuration) list)
@@ -317,6 +321,7 @@
     (list :kind (getf properties :kind)
           :id (getf properties :id)
           :target (getf properties :target)
+          :package (or (getf properties :package) "AUTOLITH")
           :source (getf properties :proposed))))
 
 (-> image-commit--merge-entries (list list) list)
@@ -342,11 +347,10 @@
           (getf entry :target))
   (case (getf entry :kind)
     (:definition
-     (if (overlay--constant-target-p (getf entry :target))
-         (overlay--write-constant-form stream (getf entry :source))
-         (progn
-           (write-string (getf entry :source) stream)
-           (fresh-line stream))))
+     (format stream
+             "(self-replay-definition ~S ~S)~%"
+             (or (getf entry :package) "AUTOLITH")
+             (getf entry :source)))
     (:set
      (format stream
              "(setf (symbol-value (quote ~A))~%~6T~A)~%"

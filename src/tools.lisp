@@ -552,11 +552,15 @@
                  '("symbol")))
       (register 'self-source-tool
                 "self" "source"
-                "Read complete tracked source definitions for an active symbol without general evaluation."
+                "Read complete tracked Autolith source or hash-verified matching SBCL source for an active symbol without general evaluation."
                 (tool-object-schema
                  (json-object
                   "symbol" (tool-string-property
-                            "A symbol name, optionally package-qualified."))
+                            "A symbol name, optionally package-qualified.")
+                  "package" (tool-string-property
+                              "The reader package for an unqualified symbol; defaults to AUTOLITH.")
+                  "kind" (tool-string-property
+                           "An optional SBCL definition kind when inspecting implementation source."))
                  '("symbol")))
       (register 'self-eval-tool
                 "self" "eval"
@@ -569,11 +573,13 @@
                  '("form")))
       (register 'self-redefine-tool
                 "self" "redefine"
-                "Compile and install one complete exploratory top-level definition."
+                "Compile and install one complete exploratory top-level definition in the active image, including Lisp-level SBCL implementation packages."
                 (tool-object-schema
                  (json-object
                   "definition" (tool-string-property
                                 "A complete defining Common Lisp form.")
+                  "package" (tool-string-property
+                              "The active package in which to read and install the definition; defaults to AUTOLITH.")
                   "restart" (tool-restart-property)
                   "restart-value" (tool-restart-value-property))
                  '("definition")))
