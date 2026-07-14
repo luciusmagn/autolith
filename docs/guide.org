@@ -183,8 +183,10 @@ extra turns before pausing. The model marks genuine completion with a literal
 =/goal resume= control automatic continuation, and =/goal clear= removes the
 goal. Goals persist with their conversation across =/resume=.
 
-=/model= switches between the 5.6 family models (sol, luna, terra) for the
-current session; =AUTOLITH_MODEL= still selects any model at startup.
+=/model= switches between the 5.6 family models (sol, luna, terra), and
+=/effort= selects their reasoning effort. Both choices become the global
+defaults for later launches. =AUTOLITH_MODEL= and =AUTOLITH_REASONING_EFFORT=
+override the saved defaults when set at startup.
 
 =/trace on= shows each provider reasoning summary as a bounded, Markdown-styled
 live trace above the status and prompt, then finalizes it once in the transcript.

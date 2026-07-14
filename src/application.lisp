@@ -170,36 +170,37 @@
     application)
 (defun application-create (configuration &key conversation-id)
   "Create a connected application, loading CONVERSATION-ID when supplied."
-  (configuration-ensure-directories configuration)
-  (durable-mutations-load configuration)
-  (let* ((overlay-failures (image-state-load configuration))
-         (reasoning-traces-p (preferences-reasoning-traces-p configuration))
-         (conversation (if conversation-id
-                           (conversation-load-by-id configuration conversation-id)
-                           (conversation-create configuration)))
-         (provider (provider-create
-                    configuration
-                    :reasoning-summaries-p reasoning-traces-p))
-         (registry (make-default-tool-registry))
-         (worker (lisp-worker-pool-create configuration))
-         (agent (agent-create :configuration configuration
-                              :provider provider
-                              :conversation conversation
-                              :tool-registry registry
-                              :worker worker))
-         (ui (application-terminal-ui-create))
-         (application (make-instance 'application
-                                     :configuration configuration
-                                     :conversation conversation
-                                     :provider provider
-                                     :tool-registry registry
-                                     :worker worker
-                                     :agent agent
-                                     :ui ui
-                                     :reasoning-traces-p reasoning-traces-p)))
-    (setf (application-overlay-failures application) overlay-failures)
-    (application--load-goal application)
-    application))
+  (let ((configuration (preferences-apply-model-selection configuration)))
+    (configuration-ensure-directories configuration)
+    (durable-mutations-load configuration)
+    (let* ((overlay-failures (image-state-load configuration))
+           (reasoning-traces-p (preferences-reasoning-traces-p configuration))
+           (conversation (if conversation-id
+                             (conversation-load-by-id configuration conversation-id)
+                             (conversation-create configuration)))
+           (provider (provider-create
+                      configuration
+                      :reasoning-summaries-p reasoning-traces-p))
+           (registry (make-default-tool-registry))
+           (worker (lisp-worker-pool-create configuration))
+           (agent (agent-create :configuration configuration
+                                :provider provider
+                                :conversation conversation
+                                :tool-registry registry
+                                :worker worker))
+           (ui (application-terminal-ui-create))
+           (application (make-instance 'application
+                                       :configuration configuration
+                                       :conversation conversation
+                                       :provider provider
+                                       :tool-registry registry
+                                       :worker worker
+                                       :agent agent
+                                       :ui ui
+                                       :reasoning-traces-p reasoning-traces-p)))
+      (setf (application-overlay-failures application) overlay-failures)
+      (application--load-goal application)
+      application)))
 
 (-> application-reconnect
     (application &key (:conversation-id (option string)))

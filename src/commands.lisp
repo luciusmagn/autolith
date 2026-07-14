@@ -304,11 +304,13 @@
 
 (-> application-set-reasoning-effort (application string) null)
 (defun application-set-reasoning-effort (application effort)
-  "Switch APPLICATION to reasoning EFFORT for this session's next turns."
-  (application--install-configuration
-   application
-   (configuration-with-reasoning-effort (application-configuration application)
-                                        effort)))
+  "Switch APPLICATION to reasoning EFFORT and save it as the global default."
+  (let ((configuration
+          (configuration-with-reasoning-effort
+           (application-configuration application)
+           effort)))
+    (preferences-set-model-selection configuration)
+    (application--install-configuration application configuration)))
 
 (-> application-set-reasoning-traces (application boolean) null)
 (defun application-set-reasoning-traces (application enabled-p)
@@ -363,10 +365,12 @@
 
 (-> application-set-model (application string) null)
 (defun application-set-model (application model)
-  "Switch APPLICATION to MODEL for this session's next turns."
-  (application--install-configuration
-   application
-   (configuration-with-model (application-configuration application) model)))
+  "Switch APPLICATION to MODEL and save it as the global default."
+  (let ((configuration
+          (configuration-with-model (application-configuration application)
+                                    model)))
+    (preferences-set-model-selection configuration)
+    (application--install-configuration application configuration)))
 
 ;;;; -- Manual Compaction --
 

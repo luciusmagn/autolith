@@ -1222,6 +1222,13 @@
                                   (application-configuration application))
                                  "low")
                         "switching effort replaces the configuration")
+           (let ((preferences (preferences-load configuration)))
+             (test-assert
+              (string= (preference-state-reasoning-effort preferences) "low")
+              "switching effort saves the global effort default")
+             (test-assert
+              (string= (preference-state-model preferences) "gpt-5.6-sol")
+              "switching effort saves the accompanying model default"))
            (let ((updated (application-configuration application)))
              (test-assert (equal (configuration-source-root updated)
                                  (configuration-source-root configuration))
@@ -1267,6 +1274,13 @@
                                   (application-configuration application))
                                  "low")
                         "model switching preserves the reasoning effort")
+           (let ((preferences (preferences-load configuration)))
+             (test-assert
+              (string= (preference-state-model preferences) "gpt-5.6-terra")
+              "switching models saves the global model default")
+             (test-assert
+              (string= (preference-state-reasoning-effort preferences) "low")
+              "switching models preserves the global effort default"))
            (test-assert (handler-case
                             (progn
                               (application-set-model application "gpt-4")
