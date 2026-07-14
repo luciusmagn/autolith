@@ -385,17 +385,20 @@
   nil)
 
 
-;;;; -- Session Goal Command --
+;;;; -- Command Input --
 
-(-> application--goal-remainder (string) string)
-(defun application--goal-remainder (input)
-  "Return INPUT's trimmed text after the /goal command word."
+(-> application--command-remainder (string) string)
+(defun application--command-remainder (input)
+  "Return INPUT's trimmed text after its slash-command word."
   (let ((space (position-if (lambda (character)
                               (find character '(#\Space #\Tab)))
                             input)))
     (if space
         (string-trim '(#\Space #\Tab) (subseq input space))
         "")))
+
+
+;;;; -- Session Goal Command --
 
 (-> application--goal-description (application) string)
 (defun application--goal-description (application)
@@ -501,6 +504,28 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        :items items
        :resize-callback #'application-pending-terminal-size))))
 
+
+;;;; -- Working Directory Command --
+
+(-> application-working-directory-command (application string) null)
+(defun application-working-directory-command (application remainder)
+  "Show or change APPLICATION's workspace from the /cwd command REMAINDER."
+  (if (non-empty-string-p remainder)
+      (let ((directory (application-set-working-directory application remainder)))
+        (application-present
+         application
+         (format nil "Working directory is now ~A" (namestring directory))))
+      (application-present
+       application
+       (format nil "Working directory: ~A"
+               (namestring
+                (configuration-working-directory
+                 (application-configuration application))))))
+  nil)
+
+
+;;;; -- Authentication and Checkpoint Commands --
+
 (-> application-authenticate (application) null)
 (defun application-authenticate (application)
   "Run Autolith-owned device authentication outside raw terminal mode."
@@ -589,6 +614,11 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        (application-present application
                             (application-list-conversations application))
        :continue)
+      ((string= command "/cwd")
+       (application-working-directory-command
+        application
+        (application--command-remainder input))
+       :continue)
       ((string= command "/auth")
        (application-authenticate application)
        :continue)
@@ -614,7 +644,7 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        :continue)
       ((string= command "/goal")
        (application-goal-command application
-                                 (application--goal-remainder input))
+                                 (application--command-remainder input))
        :continue)
       ((string= command "/model")
        (let ((model

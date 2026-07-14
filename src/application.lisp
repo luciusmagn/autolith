@@ -80,6 +80,7 @@
     (:name "/new"           :argument nil :description "start a new conversation")
     (:name "/resume"        :argument nil :description "pick a saved conversation to resume")
     (:name "/conversations" :argument nil :description "list saved conversations")
+    (:name "/cwd"           :argument "PATH" :description "change the active workspace")
     (:name "/auth"          :argument nil :description "authenticate Autolith with ChatGPT")
     (:name "/model"         :argument nil :description "pick the 5.6 model")
     (:name "/effort"        :argument nil :description "pick the reasoning effort")
@@ -417,6 +418,11 @@
                   *default-pathname-defaults* directory))
         (error (condition)
           (fail ':process condition)))
+      (handler-case
+          (tool-registry-close-search-state
+           (application-tool-registry application))
+        (error (condition)
+          (fail ':search condition)))
       (handler-case
           (application--install-configuration application configuration)
         (error (condition)

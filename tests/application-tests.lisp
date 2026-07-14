@@ -1253,6 +1253,80 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-working-directory-command () null)
+(defun test-working-directory-command ()
+  "Test /cwd completion, full-path parsing, presentation, and no-argument status."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (workspace (merge-pathnames "command workspace/" root))
+         (previous-process-directory (uiop:getcwd))
+         (previous-defaults *default-pathname-defaults*)
+         (terminal (make-instance 'recording-terminal :columns 80))
+         (ui (terminal-ui-create :terminal terminal))
+         (registry (make-default-tool-registry)))
+    (ensure-directories-exist workspace)
+    (unwind-protect
+         (let* ((conversation
+                  (conversation-create configuration :identifier "cwd-command"))
+                (provider (provider-create configuration))
+                (agent (agent-create :configuration configuration
+                                     :provider provider
+                                     :conversation conversation
+                                     :tool-registry registry
+                                     :worker nil))
+                (application
+                  (make-instance 'application
+                                 :configuration configuration
+                                 :conversation conversation
+                                 :provider provider
+                                 :tool-registry registry
+                                 :worker nil
+                                 :agent agent
+                                 :ui ui)))
+           (terminal-ui-start ui)
+           (let ((entry (find "/cwd" +application-commands+
+                              :key (lambda (command) (getf command :name))
+                              :test #'string=)))
+             (test-assert
+              (and entry
+                   (string= (terminal-completion-label entry) "/cwd PATH"))
+              "the command table offers /cwd with its path argument")
+             (test-assert (search "/cwd PATH" (application-help))
+                          "the command reference includes /cwd"))
+           (test-assert
+            (string= (application--command-remainder
+                      "/cwd directory name with spaces")
+                     "directory name with spaces")
+            "slash-command remainders retain embedded spaces")
+           (test-assert
+            (eq (application-command
+                 application
+                 (format nil "/cwd ~A" (namestring workspace)))
+                ':continue)
+            "/cwd continues the application loop")
+           (test-assert
+            (equal (configuration-working-directory
+                    (application-configuration application))
+                   (truename workspace))
+            "/cwd passes the complete path to workspace switching")
+           (test-assert
+            (search (format nil "Working directory is now ~A"
+                            (namestring (truename workspace)))
+                    (recording-terminal-output terminal))
+            "/cwd presents the selected workspace")
+           (application-command application "/cwd")
+           (test-assert
+            (search (format nil "Working directory: ~A"
+                            (namestring (truename workspace)))
+                    (recording-terminal-output terminal))
+            "/cwd without a path presents the current workspace"))
+      (ignore-errors (terminal-ui-stop ui))
+      (ignore-errors (tool-registry-close-search-state registry))
+      (uiop:chdir previous-process-directory)
+      (setf *default-pathname-defaults* previous-defaults)
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-effort-switch () null)
 (defun test-effort-switch ()
   "Test reasoning effort picker items and in-place configuration switching."
@@ -1614,6 +1688,7 @@
   (test-input-reader-quiescence)
   (test-conversation-picker)
   (test-working-directory-switch)
+  (test-working-directory-command)
   (test-effort-switch)
   (test-status-entry)
   (test-session-goal)

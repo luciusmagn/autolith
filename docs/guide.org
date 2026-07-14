@@ -156,6 +156,7 @@ prefix from before selection. The commands are:
 /new            start a new conversation
 /resume         pick a saved conversation to resume
 /conversations  list saved conversations
+/cwd PATH       change the active workspace
 /auth           authenticate Autolith with ChatGPT
 /model          pick the 5.6 model
 /effort         pick the reasoning effort
@@ -174,6 +175,14 @@ picker; each also accepts an explicit argument. Tab cycles the picker alongside
 Up and Down navigation. Conversations and generations are listed newest first.
 Conversations remember the directory they were started in, and the picker
 shows it.
+
+=/cwd PATH= changes the workspace for the current Autolith process. Relative
+paths resolve from the current workspace, =~/= expands to the home directory,
+and spaces need no quoting because the complete command remainder is the path.
+=/cwd= alone prints the current workspace. A successful change updates subsequent
+system prompts and inherited =AGENTS.md= instructions, filesystem and shell tools,
+search, workspace memories, and existing or future Lisp REPLs without discarding
+their heaps. It does not rewrite the active conversation's recorded origin.
 
 =/goal OBJECTIVE= sets a session goal in the spirit of Codex goals. The goal
 rides along every provider request as transient context, and after each of
