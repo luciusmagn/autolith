@@ -5,6 +5,8 @@ set -euo pipefail
 runtime_release=2.6.4
 runtime_archive_sha256=466933f9b4f403b6a49b2a7cc755fdd5d827c3b354aa3c8c0d96697e5da1e9fc
 runtime_archive_url=https://downloads.sourceforge.net/project/sbcl/sbcl/2.6.4/sbcl-2.6.4-x86-64-linux-binary.tar.bz2
+source_archive_sha256=3ba53e654b60feb7c4f50466199d6d5260f2661c711ba22d4b770b655400d57b
+source_archive_url=https://downloads.sourceforge.net/project/sbcl/sbcl/2.6.4/sbcl-2.6.4-source.tar.bz2
 
 adapter_path=$(readlink -f -- "${BASH_SOURCE[0]}")
 source_root=$(CDPATH= cd -- "$(dirname -- "$adapter_path")/.." && pwd)
@@ -14,6 +16,8 @@ runtime_root=$data_home/autolith/runtimes/$expected_version
 runtime_command_path=$runtime_root/command
 managed_prefix=$runtime_root/installation
 managed_sbcl=$managed_prefix/bin/sbcl
+managed_source=$runtime_root/source
+source_identity_path=$runtime_root/source.identity
 install_requested=false
 script_path=
 script_arguments=()
@@ -28,6 +32,7 @@ fail()
 cleanup()
 {
   if [[ -n "$temporary_directory" && -d "$temporary_directory" ]]; then
+    chmod -R u+w "$temporary_directory" 2>/dev/null || true
     rm -rf -- "$temporary_directory"
   fi
 }
@@ -70,6 +75,74 @@ runtime_record()
   printf '%s\n' "$command" > "$temporary"
   chmod 444 -- "$temporary"
   mv -f -- "$temporary" "$runtime_command_path"
+}
+
+source_available()
+{
+  local identity=
+
+  if [[ ! -d "$managed_source" ||
+        ! -f "$managed_source/version.lisp-expr" ||
+        ! -r "$source_identity_path" ]]; then
+    return 1
+  fi
+  IFS= read -r identity < "$source_identity_path" || return 1
+  [[ "$identity" == "$expected_version $source_archive_sha256" ]]
+}
+
+source_install()
+{
+  local archive
+  local distribution
+  local identity
+  local stale_source=
+
+  [[ "$expected_version" == "$runtime_release" ]] ||
+    fail "sbcl.version changed without matching source download metadata."
+  for command in curl sha256sum tar; do
+    command -v -- "$command" >/dev/null 2>&1 ||
+      fail "automatic source installation needs $command."
+  done
+
+  mkdir -p -- "$runtime_root"
+  chmod 700 -- "$runtime_root"
+  temporary_directory=$(mktemp -d "$runtime_root/.source.XXXXXX")
+  archive=$temporary_directory/sbcl-$expected_version-source.tar.bz2
+  distribution=$temporary_directory/sbcl-$expected_version
+
+  printf 'Installing matching SBCL %s source for Autolith.\n' "$expected_version" >&2
+  curl --fail --location --show-error --retry 3 --progress-bar \
+    --proto '=https' --tlsv1.2 \
+    --output "$archive" "$source_archive_url"
+  printf '%s  %s\n' "$source_archive_sha256" "$archive" |
+    sha256sum --check --status - ||
+    fail "the downloaded SBCL source archive has the wrong SHA-256 identity."
+  tar -xjf "$archive" -C "$temporary_directory"
+  [[ -f "$distribution/version.lisp-expr" &&
+     -f "$distribution/src/code/list.lisp" ]] ||
+    fail "the SBCL source archive has an unexpected layout."
+  chmod -R a-w "$distribution"
+
+  if [[ -e "$managed_source" ]]; then
+    stale_source=$runtime_root/source.stale.$$
+    mv -- "$managed_source" "$stale_source"
+  fi
+  if ! mv -- "$distribution" "$managed_source"; then
+    if [[ -n "$stale_source" && -e "$stale_source" ]]; then
+      mv -- "$stale_source" "$managed_source" || true
+    fi
+    fail "the verified SBCL source could not be published."
+  fi
+  if [[ -n "$stale_source" ]]; then
+    chmod -R u+w "$stale_source"
+    rm -rf -- "$stale_source"
+  fi
+  identity=$runtime_root/.source.identity.$$
+  printf '%s %s\n' "$expected_version" "$source_archive_sha256" > "$identity"
+  chmod 444 -- "$identity"
+  mv -f -- "$identity" "$source_identity_path"
+  rm -rf -- "$temporary_directory"
+  temporary_directory=
 }
 
 runtime_install()
@@ -192,6 +265,15 @@ if [[ -z "$sbcl_command" ]]; then
   fail "SBCL $expected_version is unavailable; run ./script/bootstrap."
 fi
 
+if [[ "$install_requested" == true ]] && ! source_available; then
+  source_install
+fi
+
 runtime_record "$sbcl_command"
 export AUTOLITH_SBCL=$sbcl_command
+if source_available; then
+  export AUTOLITH_SBCL_SOURCE_ROOT=$managed_source
+else
+  unset AUTOLITH_SBCL_SOURCE_ROOT
+fi
 exec "$sbcl_command" --script "$script_path" "${script_arguments[@]}"
