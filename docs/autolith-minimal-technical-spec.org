@@ -84,15 +84,29 @@ inputs against the current source tree. It is distinct from retained working
 generations and from the pristine recovery image. Source loading remains the
 authoritative fallback.
 
-** 3.3 Lisp Worker
+** 3.3 Lisp Workers and Images
 
-The =lisp.*= tools operate in a separate, disposable SBCL process.
+The =lisp.*= tools operate in named, persistent SBCL REPL processes managed as
+a pool. Each REPL starts from either the pristine pinned SBCL image or one
+compatible saved worker image selected explicitly by the agent. REPLs do not
+share heap state with each other or the active agent and cannot modify another
+image through ordinary object references.
 
-The worker may use the bundled Lisp systems, Quicklisp distribution,
-and installed external programs. It does not share heap state with the
-active agent and cannot modify it through ordinary object references.
+A saved worker image contains the complete Lisp heap of one REPL, including
+intentional changes to SBCL's Lisp implementation. It never replaces or
+modifies the pinned low-level SBCL runtime executable. Its immutable manifest
+records its identity, parent image, exact runtime, creation time, and a durable
+note explaining the changes and intended use. The pristine image is a virtual,
+immutable root and cannot be overwritten.
 
-The worker is used for:
+The active agent receives a bounded inventory of saved worker-image notes on
+every model request. It can list compatible images and live REPLs, compare a
+modified REPL with a pristine one, and choose an image whenever it starts or
+resets a named REPL. A worker image is never loaded by the pristine recovery
+process.
+
+Workers may use the bundled Lisp systems, Quicklisp distribution, matching SBCL
+source, and installed external programs. They are used for:
 
 - Fresh REPL evaluation.
 - Compiling experimental code.
@@ -145,7 +159,11 @@ but in-process tools do not require loopback MCP transport.
 
 ** 5.1 =lisp.*=
 
-=lisp.*= tools operate only in a separate disposable Lisp worker.
+=lisp.*= tools operate only in named, heap-isolated Lisp workers. Operations
+that evaluate, compile, load, describe, inspect source, or run tests accept a
+REPL name and default to =default=. A nonexistent REPL starts from pristine
+SBCL. An explicit start or reset may instead select any compatible saved worker
+image. An existing REPL never changes its base image implicitly.
 
 Initial operations should include:
 
@@ -153,8 +171,19 @@ Initial operations should include:
 - =lisp.compile=
 - =lisp.load-system=
 - =lisp.describe=
+- =lisp.source=
 - =lisp.run-tests=
+- =lisp.start=
+- =lisp.stop=
 - =lisp.reset=
+- =lisp.repls=
+- =lisp.images=
+- =lisp.save-image=
+
+=lisp.save-image= forks a saver from the selected REPL, validates the saved
+core with the pinned runtime, and atomically publishes its core, manifest, and
+note without stopping the parent REPL. Saved images may include Lisp-level SBCL
+changes and ordinary experimental heap state.
 
 ** 5.2 =self.*=
 
@@ -295,13 +324,14 @@ with a distinguished recovery status.
 
 * 8. Persistence
 
-Autolith persists five kinds of state:
+Autolith persists six kinds of state:
 
 - Source in Git.
 - Conversations as S-expression files.
 - Mutations in an append-only journal.
 - Private image commits as manifests and complete Lisp replay scripts.
 - Working generations as saved Lisp cores and reconstruction scripts.
+- Worker images as immutable SBCL cores with manifests and durable notes.
 
 ** 8.1 Conversation Files
 
@@ -495,6 +525,7 @@ Recovery must remain possible without loading the damaged active core.
 Autolith should include or locate:
 
 - A pinned SBCL runtime.
+- The exact source corresponding to the pinned SBCL runtime.
 - A local, pinned Quicklisp distribution or equivalent dependency set.
 - Required Lisp source dependencies.
 - A documented set of useful external binaries.
@@ -509,6 +540,12 @@ On the initial Linux x86-64 target, setup may install a hash-verified pinned
 SBCL binary beneath the data root when no compatible runtime is available. The
 launcher and development commands use the recorded executable without changing
 the user's system Lisp installation.
+
+The matching SBCL source is a reference and reconstruction input for
+implementation-aware inspection. Live implementation mutation changes only a
+Lisp heap or a newly published worker core. Normal tools never overwrite the
+pinned SBCL runtime executable, and the recovery image continues to boot with
+its separately validated pristine runtime and core.
 
 Autolith should not generate ad hoc Python or shell files unless a
 non-Lisp dependency genuinely requires them.
