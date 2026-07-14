@@ -388,7 +388,7 @@
                         (json-object
                          "type" "summary_text"
                          "text" (format nil
-                                        "Checked the safe path.~%Compared fallback behavior.~C[31m"
+                                        "**<thought>** Checked the safe path.~%Compared fallback behavior.~C[31m"
                                         +terminal-escape-character+)))
              "content" (json-array
                         (json-object "type" "reasoning_text"
@@ -406,11 +406,11 @@
          "trace mode labels provider-visible reasoning summaries")
         (test-assert
          (and (find (terminal-span :dim "  │ ") entry :test #'equal)
-              (find (terminal-span :plain "Checked the safe path.")
-                    entry
-                    :test #'equal)
-              (search "Compared fallback behavior." text))
-         "trace mode presents readable summaries beside a subdued rail")
+              (find (terminal-span :strong "<thought>") entry :test #'equal)
+              (search "Checked the safe path." text)
+              (search "Compared fallback behavior." text)
+              (not (search "**" text)))
+         "trace mode renders inline Markdown beside a subdued rail")
         (test-assert
          (every (lambda (line)
                   (<= (text-cell-width line) 39))

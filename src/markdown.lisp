@@ -462,6 +462,24 @@ inline Markdown styling."
 
 ;;;; -- Public Rendering Operations --
 
+(-> markdown-render-inline (string integer) list)
+(defun markdown-render-inline (text width)
+  "Return TEXT as wrapped rows with inline Markdown styles within WIDTH cells."
+  (multiple-value-bind (rendered styles)
+      (markdown--parse-inline (sanitize-text text))
+    (let ((rows nil)
+          (cursor 0))
+      (dolist (row-text (wrap-text rendered (max 1 width)) (nreverse rows))
+        (let ((start (if (zerop (length row-text))
+                         cursor
+                         (search row-text rendered :start2 cursor))))
+          (push (markdown--style-runs rendered
+                                      styles
+                                      :start start
+                                      :end (+ start (length row-text)))
+                rows)
+          (setf cursor (+ start (length row-text))))))))
+
 (-> markdown-render-line (markdown-renderer string) list)
 (defun markdown-render-line (renderer line)
   "Return sanitized logical LINE as styled transcript rows, updating RENDERER."

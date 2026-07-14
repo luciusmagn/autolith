@@ -25,6 +25,19 @@
                  "paired backticks render an inline code span")
     (test-assert (not (find #\* (markdown-tests--row-text row)))
                  "paired inline markers are consumed"))
+  (let* ((rows (markdown-render-inline
+                "**<thought>** compare the available paths"
+                16))
+         (spans (apply #'append rows)))
+    (test-assert (find (terminal-span :strong "<thought>")
+                       spans
+                       :test #'equal)
+                 "inline-only rendering preserves strong spans")
+    (test-assert (and (> (length rows) 1)
+                      (every (lambda (row)
+                               (<= (terminal--spans-width row) 16))
+                             rows))
+                 "inline-only rendering wraps within its exact width"))
   (let ((literal-cases '(("2 * 3 * 4" "spaced asterisks stay literal")
                          ("unclosed **bold" "unclosed markers stay literal")
                          ("lonely ` backtick" "unpaired backticks stay literal"))))

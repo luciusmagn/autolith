@@ -435,10 +435,10 @@
                    5))))
     (append
      (list (terminal-span ':hint "◇ reasoning summary"))
-     (loop for row in (wrap-text safe-summary body-width)
-           append (list (terminal-span ':plain (string #\Newline))
-                        (terminal-span ':dim "  │ ")
-                        (terminal-span ':plain row))))))
+     (loop for row in (markdown-render-inline safe-summary body-width)
+           append (append (list (terminal-span ':plain (string #\Newline))
+                                (terminal-span ':dim "  │ "))
+                          row)))))
 
 (-> response-item-entry (application json-object) (option list))
 (defun response-item-entry (application item)
