@@ -49,7 +49,11 @@
              (test-assert
               (search "Traces compiler type derivation"
                       (lisp-image-prompt-notes configuration))
-              "the prompt inventory includes durable image notes"))
+              "the prompt inventory includes durable image notes")
+             (test-assert
+              (search "Traces compiler type derivation"
+                      (system-prompt configuration))
+              "every model request is reminded of durable image notes"))
            (handler-case
                (progn
                  (lisp-image-publish-manifest
