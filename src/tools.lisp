@@ -180,6 +180,8 @@
   (cond
     ((string= namespace "fs")
      "Workspace file reading and listing.")
+    ((string= namespace "search")
+     "Fast indexed workspace path and content discovery through fff.")
     ((string= namespace "shell")
      "External commands run in the workspace.")
     ((string= namespace "memory")
@@ -225,7 +227,13 @@
     :initform nil
     :reader tool-context-mutation-checker
     :type t
-    :documentation "The optional durable-mutation check strategy."))
+    :documentation "The optional durable-mutation check strategy.")
+   (registry
+    :initarg :registry
+    :initform nil
+    :reader tool-context-registry
+    :type t
+    :documentation "The registry dispatching this execution, when available."))
   (:documentation "The explicit capabilities supplied to one tool execution."))
 
 (defclass tool-result ()
@@ -397,17 +405,21 @@
 
 (-> make-default-tool-registry () tool-registry)
 (defun make-default-tool-registry ()
-  "Create the initial documented lisp.* and self.* tool registry."
+  "Create the documented default Autolith tool registry."
   (let ((registry (make-instance 'tool-registry))
+        (search-engine (make-instance 'search-engine))
         (empty-schema (tool-object-schema (json-object) nil)))
-    (flet ((register (class namespace name description parameters)
+    (flet ((register (class namespace name description parameters
+                      &rest initialization-arguments)
              (tool-registry-register
               registry
-              (make-instance class
-                             :namespace namespace
-                             :name name
-                             :description description
-                             :parameters parameters))))
+              (apply #'make-instance
+                     class
+                     :namespace namespace
+                     :name name
+                     :description description
+                     :parameters parameters
+                     initialization-arguments))))
       (register 'fs-read-tool
                 "fs" "read"
                 "Read one workspace file, returning numbered lines from an optional window."
@@ -452,6 +464,76 @@
                   "replace-all" (tool-boolean-property
                                  "Replace every occurrence instead of requiring a unique match."))
                  '("path" "old-text" "new-text")))
+      (register 'search-files-tool
+                "search" "files"
+                "Fuzzy-search indexed workspace file paths. Use a short one- or two-term topic, filename, or path query."
+                (tool-object-schema
+                 (json-object
+                  "query" (tool-string-property
+                           "A short fuzzy filename, topic, or path query.")
+                  "page" (tool-integer-property
+                          "Zero-based result page; default 0.")
+                  "max-results" (tool-integer-property
+                                 "Results per page from 1 to 100; default 20."))
+                 '("query"))
+                :engine search-engine)
+      (register 'search-glob-tool
+                "search" "glob"
+                "Filter indexed workspace paths with one literal glob such as **/*.lisp."
+                (tool-object-schema
+                 (json-object
+                  "pattern" (tool-string-property
+                             "One literal glob matched against workspace-relative paths.")
+                  "page" (tool-integer-property
+                          "Zero-based result page; default 0.")
+                  "max-results" (tool-integer-property
+                                 "Results per page from 1 to 100; default 20."))
+                 '("pattern"))
+                :engine search-engine)
+      (register 'search-content-tool
+                "search" "content"
+                "Search indexed workspace contents. Plain matching is the default; put file or path constraints in the query, for example '*.lisp symbol', 'src/ symbol', or '!tests/ symbol'."
+                (tool-object-schema
+                 (json-object
+                  "query" (tool-string-property
+                           "Text plus optional inline file constraints to find.")
+                  "mode" (json-object
+                          "type" "string"
+                          "enum" #("plain" "regex" "fuzzy")
+                          "description" "Matching mode; default plain.")
+                  "file-offset" (tool-integer-property
+                                 "Pagination cursor from next-file-offset; default 0.")
+                  "max-results" (tool-integer-property
+                                 "Matches returned from 1 to 100; default 20.")
+                  "max-matches-per-file" (tool-integer-property
+                                          "Matches retained per file from 1 to 100; default 20.")
+                  "context" (tool-integer-property
+                             "Lines before and after each match from 0 to 10; default 0.")
+                  "time-budget-ms" (tool-integer-property
+                                    "Search budget from 1 to 10000 milliseconds; default 3000."))
+                 '("query"))
+                :engine search-engine)
+      (register 'search-multi-content-tool
+                "search" "multi-content"
+                "Search indexed contents once for any of several literal patterns, with optional file and path constraints."
+                (tool-object-schema
+                 (json-object
+                  "patterns" (tool-string-array-property
+                              "Non-empty literal alternatives searched in one pass.")
+                  "constraints" (tool-string-property
+                                 "Optional space-separated file constraints such as '*.lisp src/ !tests/'.")
+                  "file-offset" (tool-integer-property
+                                 "Pagination cursor from next-file-offset; default 0.")
+                  "max-results" (tool-integer-property
+                                 "Matches returned from 1 to 100; default 20.")
+                  "max-matches-per-file" (tool-integer-property
+                                          "Matches retained per file from 1 to 100; default 20.")
+                  "context" (tool-integer-property
+                             "Lines before and after each match from 0 to 10; default 0.")
+                  "time-budget-ms" (tool-integer-property
+                                    "Search budget from 1 to 10000 milliseconds; default 3000."))
+                 '("patterns"))
+                :engine search-engine)
       (register 'shell-run-tool
                 "shell" "run"
                 "Run one external command line in the workspace and return its exit code and combined output."

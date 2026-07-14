@@ -557,7 +557,13 @@
     :initarg :worker
     :reader checkpoint-backend-worker
     :type t
-    :documentation "The disposable worker whose inherited descriptors are detached."))
+    :documentation "The disposable worker whose inherited descriptors are detached.")
+   (tool-registry
+    :initarg :tool-registry
+    :initform nil
+    :reader checkpoint-backend-tool-registry
+    :type t
+    :documentation "The active registry whose native search state must be stopped."))
   (:documentation "The platform boundary for non-stopping live-image checkpoints."))
 
 (defclass linux-sbcl-checkpoint-backend (checkpoint-backend)
@@ -579,14 +585,17 @@
   "Leave unrecognized checkpoint STATE unchanged."
   state)
 
-(-> checkpoint-backend-create (configuration t) checkpoint-backend)
-(defun checkpoint-backend-create (configuration worker)
+(-> checkpoint-backend-create
+    (configuration t &key (:tool-registry (option tool-registry)))
+    checkpoint-backend)
+(defun checkpoint-backend-create (configuration worker &key tool-registry)
   "Return the checkpoint backend supported by this runtime."
   (if (and (member :linux *features*)
            (member :sbcl *features*))
       (make-instance 'linux-sbcl-checkpoint-backend
                      :configuration configuration
-                     :worker worker)
+                     :worker worker
+                     :tool-registry tool-registry)
       (error 'checkpoint-error
              :message "Non-stopping checkpoints currently require SBCL on Linux."
              :stage ':backend
@@ -788,6 +797,9 @@
            :message "A checkpoint cannot run inside a credential request scope."
            :stage ':validation
            :pathname nil))
+  (let ((registry (checkpoint-backend-tool-registry backend)))
+    (when registry
+      (tool-registry-close-search-state registry)))
   (let* ((configuration (checkpoint-backend-configuration backend))
          (worker (checkpoint-backend-worker backend))
          (source-commit (checkpoint--source-snapshot configuration))
@@ -848,7 +860,8 @@
           (checkpoint-create
            (checkpoint-backend-create
             (tool-context-configuration context)
-            (tool-context-worker context)))))
+            (tool-context-worker context)
+            :tool-registry (tool-context-registry context)))))
     (tool-success
      (format nil "Checkpoint ~A is being published by coordinator process ~D."
              (generation-identifier generation)

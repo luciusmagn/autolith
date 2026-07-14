@@ -24,6 +24,8 @@ terminal-ui
     |
     +---------> tool registry
                     |
+                    +-------------> fff search index and native watcher
+                    |
                     +-------------> named lisp-worker pool
                     |                    |
                     |                    +-----> immutable worker images
@@ -94,6 +96,23 @@ terminal rendering logic.
 
 Defines tool metadata, namespaces, validation, dispatch, and output. Every
 tool call receives a matching result, including malformed and failed calls.
+
+** =search-tools.lisp=
+
+Owns the in-process CFFI binding to fff, the lazy workspace-aware search index,
+bounded result rendering, and the =search.*= tools. One registry shares one
+engine across fuzzy path, glob, content, and multi-pattern search. The Rust
+library is built from pinned fff commit
+=44a5b259570730a4236ecbf06673d43ef7b2263e= and published privately under the
+Autolith data root. It is neither a command subprocess nor a program installed
+on the user's =PATH=. This integration was reviewed against that exact upstream
+commit's generated C header and Rust implementation.
+
+The fff instance owns native watcher threads, caches, and database handles.
+Checkpoint entry destroys the instance before the first fork. The saver child
+also detaches any inherited pointer as a defensive invariant, and a resumed
+application constructs a fresh instance on its next search. Normal application
+exit destroys the instance after input and worker shutdown.
 
 ** =lisp-worker.lisp=
 

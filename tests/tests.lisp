@@ -57,6 +57,7 @@
     (test-provider-authentication-retries)
     (test-tool-registry)
     (test-workspace-tools)
+    (test-search-tools)
     (test-lisp-image-manifests)
     (test-lisp-worker-protocol)
     (test-lisp-worker-image-snapshot)

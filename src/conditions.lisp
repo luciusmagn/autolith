@@ -107,6 +107,26 @@
 
 ;;;; -- Persistence and Tool Conditions --
 
+(define-condition search-error (autolith-error)
+  ((operation
+    :initarg :operation
+    :reader search-error-operation
+    :type keyword
+    :documentation "The native search operation that failed.")
+   (pathname
+    :initarg :pathname
+    :initform nil
+    :reader search-error-pathname
+    :type (option pathname)
+    :documentation "The native library or workspace path involved, when known.")
+   (cause
+    :initarg :cause
+    :initform nil
+    :reader search-error-cause
+    :type t
+    :documentation "The underlying native or Lisp failure, when available."))
+  (:documentation "The private fff search library could not complete an operation."))
+
 (define-condition preferences-error (autolith-error)
   ((pathname
     :initarg :pathname

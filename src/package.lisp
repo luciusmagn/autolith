@@ -4,6 +4,18 @@
                 #:define-constant)
   (:import-from #:cl-base64
                 #:base64-string-to-string)
+  (:import-from #:cffi
+                #:defcstruct
+                #:defcfun
+                #:foreign-slot-value
+                #:foreign-string-to-lisp
+                #:foreign-type-size
+                #:load-foreign-library
+                #:mem-aref
+                #:null-pointer
+                #:null-pointer-p
+                #:with-foreign-object
+                #:with-foreign-string)
   (:import-from #:clinedi
                 #:line-editor
                 #:line-editor-text

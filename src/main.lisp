@@ -254,7 +254,10 @@
       (when input-controller
         (application-input-controller-stop input-controller))
       (when worker
-        (lisp-worker-manager-stop worker))))
+        (lisp-worker-manager-stop worker))
+      (ignore-errors
+        (tool-registry-close-search-state
+         (application-tool-registry application)))))
   nil)
 
 ;;;; -- Command-Line Entry --

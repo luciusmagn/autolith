@@ -374,7 +374,8 @@
           (make-instance 'tool-context
                          :configuration (agent-configuration agent)
                          :worker (agent-worker agent)
-                         :conversation (agent-conversation agent))))
+                         :conversation (agent-conversation agent)
+                         :registry (agent-tool-registry agent))))
     (dolist (call calls)
       (let* ((call-id (json-get call "call_id"))
              (tool-name (function-call-canonical-name call)))

@@ -292,6 +292,8 @@
 
 (defmethod checkpoint-detach-state ((application application))
   "Detach APPLICATION's ephemeral object graph in a checkpoint saver child."
+  (tool-registry-detach-search-state
+   (application-tool-registry application))
   (setf (application-provider application) nil
         (application-worker application) nil
         (application-agent application) nil

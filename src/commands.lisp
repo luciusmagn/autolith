@@ -530,7 +530,8 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
                (checkpoint-create
                 (checkpoint-backend-create
                  (application-configuration application)
-                 (application-worker application)))))
+                 (application-worker application)
+                 :tool-registry (application-tool-registry application)))))
          (application-present
           application
           (format nil "Checkpoint ~A is publishing in process ~D."

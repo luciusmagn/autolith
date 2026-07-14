@@ -36,6 +36,7 @@ user's privileges.
 - Persistent, opt-in provider-visible reasoning summaries with =/trace on=.
 - Append-only portable conversation files with exact resume commands.
 - Workspace and global persistent memories with bounded prompt recall.
+- Warm in-process fff path, glob, plain, regex, fuzzy, and multi-pattern search.
 - Everyday filesystem and shell tools plus named, isolated Lisp REPLs.
 - Immutable modified worker images with notes and pristine side-by-side comparison.
 - Hash-verified matching SBCL source and Lisp-level implementation instrumentation.

@@ -4,6 +4,7 @@
   :version "0.9.9"
   :serial t
   :depends-on (#:alexandria
+               #:cffi
                #:cl-base64
                #:clinedi
                #:closer-mop
@@ -31,6 +32,7 @@
                              (:file "tools")
                              (:file "memory-tools")
                              (:file "workspace-tools")
+                             (:file "search-tools")
                              (:file "lisp-worker")
                              (:file "self-tools")
                              (:file "overlays")
@@ -66,6 +68,7 @@
                              (:file "authentication-tests")
                              (:file "provider-tests")
                              (:file "tool-tests")
+                             (:file "search-tool-tests")
                              (:file "generation-tests")
                              (:file "active-image-tests")
                              (:file "lisp-worker-tests")
