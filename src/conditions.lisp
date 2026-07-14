@@ -124,6 +124,20 @@
   ()
   (:documentation "Conversation persistence or replay violated a critical invariant."))
 
+(define-condition memory-error (autolith-error)
+  ((pathname
+    :initarg :pathname
+    :reader memory-error-pathname
+    :type pathname
+    :documentation "The persistent memory file being processed.")
+   (identifier
+    :initarg :identifier
+    :initform nil
+    :reader memory-error-identifier
+    :type (option string)
+    :documentation "The memory identifier involved in the failure, when known."))
+  (:documentation "Persistent memory data is invalid or cannot be updated."))
+
 (define-condition tool-error (autolith-error)
   ((tool-name
     :initarg :tool-name

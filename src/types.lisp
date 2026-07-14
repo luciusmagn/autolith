@@ -18,6 +18,14 @@
   "The normal, warning, or tools-disabled finalization phase of an agent turn."
   '(member :normal :warning :finalization))
 
+(deftype memory-scope ()
+  "The global or workspace-local reach of one persistent memory."
+  '(member :global :workspace))
+
+(deftype memory-visibility ()
+  "The subset of persistent memories selected for one operation."
+  '(member :relevant :global :workspace :all))
+
 (-> non-empty-string-p (t) boolean)
 (defun non-empty-string-p (value)
   "Return true when VALUE is a string containing a non-whitespace character."

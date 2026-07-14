@@ -286,6 +286,11 @@ Selecting a different model recomputes the context window for that model."
   "Return the directory containing append-only conversation files."
   (merge-pathnames "conversations/" (configuration-data-root configuration)))
 
+(-> configuration-memory-path (configuration) pathname)
+(defun configuration-memory-path (configuration)
+  "Return the append-only persistent memory pathname."
+  (merge-pathnames "memories.sexp" (configuration-data-root configuration)))
+
 (-> configuration-overlay-root (configuration) pathname)
 (defun configuration-overlay-root (configuration)
   "Return the legacy self-modification overlay directory used for migration."

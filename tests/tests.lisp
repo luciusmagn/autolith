@@ -40,6 +40,8 @@
                  "JSON object access preserves values")
     (test-assert (vectorp (json-decode "[1,2,3]"))
                  "JSON arrays have one consistent vector representation")
+    (test-memory-persistence)
+    (test-memory-tools)
     (test-system-prompt-context)
     (test-conversation-persistence)
     (test-conversation-origin-directory)

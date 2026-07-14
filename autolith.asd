@@ -24,9 +24,11 @@
                              (:file "lisp-images")
                              (:file "device-authentication")
                              (:file "conversation")
+                             (:file "memories")
                              (:file "prompt")
                              (:file "provider")
                              (:file "tools")
+                             (:file "memory-tools")
                              (:file "workspace-tools")
                              (:file "lisp-worker")
                              (:file "self-tools")
@@ -56,6 +58,7 @@
   :components ((:module "tests"
                 :serial t
                 :components ((:file "test-support")
+                             (:file "memory-tests")
                              (:file "prompt-tests")
                              (:file "conversation-tests")
                              (:file "authentication-tests")

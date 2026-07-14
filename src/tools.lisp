@@ -182,6 +182,8 @@
      "Workspace file reading and listing.")
     ((string= namespace "shell")
      "External commands run in the workspace.")
+    ((string= namespace "memory")
+     "Persistent facts, preferences, decisions, and guidance across conversations.")
     ((string= namespace "lisp")
      "Operations in named, heap-isolated Common Lisp REPLs.")
     ((string= namespace "self")
@@ -462,6 +464,58 @@
                   "timeout-seconds" (tool-integer-property
                                      "Seconds before the command is stopped; default 60."))
                  '("command")))
+      (register 'memory-remember-tool
+                "memory" "remember"
+                "Create one persistent memory, or completely replace an existing memory by id. Store only durable, useful facts, preferences, decisions, and guidance, never credentials or other secrets."
+                (tool-object-schema
+                 (json-object
+                  "title" (tool-string-property
+                           "A short retrieval-oriented title.")
+                  "content" (tool-string-property
+                             "Complete durable memory content, at most 5000 characters.")
+                  "scope" (tool-string-property
+                           "global or workspace; defaults to workspace for a new memory and preserves scope on replacement.")
+                  "tags" (tool-string-array-property
+                          "Optional short retrieval terms.")
+                  "id" (tool-string-property
+                        "An existing memory id to replace; omit to create."))
+                 '("title" "content")))
+      (register 'memory-list-tool
+                "memory" "list"
+                "List persistent memory metadata, newest first."
+                (tool-object-schema
+                 (json-object
+                  "scope" (tool-string-property
+                           "relevant, global, workspace, or all; defaults to relevant.")
+                  "max-results" (tool-integer-property
+                                 "Maximum entries to return; defaults to 20 and is capped at 50."))
+                 nil))
+      (register 'memory-search-tool
+                "memory" "search"
+                "Search persistent memory titles, bodies, tags, and workspace names. Every whitespace-delimited query term must match."
+                (tool-object-schema
+                 (json-object
+                  "query" (tool-string-property
+                           "Case-insensitive whitespace-delimited search terms.")
+                  "scope" (tool-string-property
+                           "relevant, global, workspace, or all; defaults to relevant.")
+                  "max-results" (tool-integer-property
+                                 "Maximum entries to return; defaults to 20 and is capped at 50."))
+                 '("query")))
+      (register 'memory-read-tool
+                "memory" "read"
+                "Read one complete active persistent memory by id."
+                (tool-object-schema
+                 (json-object
+                  "id" (tool-string-property "The exact memory identifier."))
+                 '("id")))
+      (register 'memory-forget-tool
+                "memory" "forget"
+                "Stop recalling one persistent memory by id. Use only when the user asks to forget it or confirms that it is obsolete."
+                (tool-object-schema
+                 (json-object
+                  "id" (tool-string-property "The exact memory identifier."))
+                 '("id")))
       (register 'lisp-eval-tool
                 "lisp" "eval"
                 "Evaluate one Common Lisp form in a named persistent REPL."
