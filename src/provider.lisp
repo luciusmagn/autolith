@@ -6,6 +6,11 @@
   ()
   (:documentation "A semantic event emitted while consuming a provider stream."))
 
+(defclass provider-progress-event (provider-event)
+  ()
+  (:documentation
+   "Provider activity with no assistant text or completed item to present."))
+
 (defclass assistant-delta-event (provider-event)
   ((text
     :initarg :text
@@ -678,7 +683,9 @@ asks for a context checkpoint handoff."
                    ((string= (or type "") "response.created")
                     (let ((response (json-get event "response")))
                       (when (json-object-p response)
-                        (setf response-id (json-get response "id")))))
+                        (setf response-id (json-get response "id"))))
+                    (funcall event-callback
+                             (make-instance 'provider-progress-event)))
                    ((string= (or type "") "response.output_text.delta")
                     (funcall event-callback
                              (make-instance 'assistant-delta-event
@@ -732,7 +739,10 @@ asks for a context checkpoint handoff."
                            :message (format nil "The provider ended with ~A." type)
                            :status nil
                            :request-id response-id
-                           :response (bounded-string data :limit 2000)))))))
+                           :response (bounded-string data :limit 2000)))
+                   (t
+                    (funcall event-callback
+                             (make-instance 'provider-progress-event)))))))
     (let* ((ordered-items (nreverse output-items))
            (tool-calls (remove-if-not #'function-call-item-p ordered-items)))
       (make-instance 'provider-result

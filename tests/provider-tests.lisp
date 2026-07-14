@@ -327,6 +327,11 @@
               "type" "response.reasoning_text.delta"
               "delta" "raw private reasoning"))
             (test-sse-event-string
+             (json-object
+              "type" "response.function_call_arguments.delta"
+              "item_id" "call-progress"
+              "delta" "{\"path\":"))
+            (test-sse-event-string
              (json-object "type" "response.output_text.delta" "delta" "hello"))
             (test-sse-event-string
              (json-object
@@ -390,7 +395,12 @@
                 (format nil
                         "I inspected the request.~2%I chose a safe response."))
        "summary part boundaries match the authoritative completed text"))
-    (test-assert (= (length events) 7)
+    (test-assert (= (count-if (lambda (event)
+                                (typep event 'provider-progress-event))
+                              events)
+                    3)
+                 "non-presentational stream events still report provider progress")
+    (test-assert (= (length events) 10)
                  "the stream emits safe deltas, items, and completion events"))
   nil)
 
