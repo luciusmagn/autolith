@@ -525,11 +525,16 @@ live unfinished line continuing that block, or removes it when NIL."
                    (terminal--write-safe-text terminal output))
                  (setf (terminal-ui-stream-tail ui) tail)
                  (terminal-ui--paint-live ui)))
-        (if (terminal-interactive-p terminal)
-            (call-with-live-region-suspended
-             (terminal-ui-live-region ui)
-             #'append-and-repaint)
-            (append-and-repaint)))
+        (cond
+          ((not (terminal-interactive-p terminal))
+           (append-and-repaint))
+          ((plusp (length output))
+           (call-with-live-region-suspended
+            (terminal-ui-live-region ui)
+            #'append-and-repaint))
+          (t
+           (setf (terminal-ui-stream-tail ui) tail)
+           (terminal-ui--paint-live ui))))
       (terminal-flush terminal)))
   ui)
 

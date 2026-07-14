@@ -623,6 +623,25 @@
          "streaming leaves cursor motion hidden")
         (test-assert (not (terminal-tests--forbidden-control-p output))
                      "streamed rows never erase the display"))
+      (terminal-ui-set-cursor-visible active-ui t)
+      (recording-terminal-reset terminal)
+      (terminal-ui-stream-update active-ui :tail "  partial response")
+      (let ((output (recording-terminal-output terminal)))
+        (test-assert (= (length (recording-terminal-chunks terminal)) 1)
+                     "a fluid-tail update is one terminal write")
+        (test-assert
+         (= (terminal-tests--substring-count
+             (format nil "~C[?25l" +terminal-escape-character+)
+             output)
+            1)
+         "a fluid-tail update hides cursor motion once")
+        (test-assert
+         (= (terminal-tests--substring-count
+             (format nil "~C[?25h" +terminal-escape-character+)
+             output)
+            1)
+         "a fluid-tail update restores the input cursor once"))
+      (terminal-ui-set-cursor-visible active-ui nil)
       (recording-terminal-reset terminal)
       (terminal-ui-stream-update active-ui :rows (list nil) :tail nil)
       (test-assert (not (search "partial" (recording-terminal-output terminal)))
