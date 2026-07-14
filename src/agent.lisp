@@ -301,11 +301,13 @@
   (lambda (event)
     (typecase event
       (assistant-delta-event
+       (agent-observer-status observer :provider-progress nil)
        (agent-observer-text observer (assistant-delta-event-text event)))
       (reasoning-delta-event
+       (agent-observer-status observer :provider-progress nil)
        (agent-observer-reasoning observer (reasoning-delta-event-text event)))
       (provider-event
-       nil)
+       (agent-observer-status observer :provider-progress nil))
       (t
        nil))))
 
@@ -477,7 +479,7 @@ persisted as history, only the durable summary record is."
                     #()
                     (lambda (event)
                       (declare (ignore event))
-                      nil)
+                      (agent-observer-status observer :provider-progress nil))
                     :compaction-p t))
            (summary (provider-result-assistant-text result)))
       (unless (non-empty-string-p summary)

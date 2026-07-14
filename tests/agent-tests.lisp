@@ -207,7 +207,9 @@
              (test-assert (equal (nreverse deltas) '("delta" "delta"))
                           "the observer receives deltas from every provider request")
              (test-assert (member :tool-call-completed statuses)
-                          "the observer receives correlated tool lifecycle status")))
+                          "the observer receives correlated tool lifecycle status")
+             (test-assert (= (count :provider-progress statuses) 2)
+                          "every streamed delta refreshes visible provider progress")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 

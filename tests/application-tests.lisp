@@ -756,6 +756,10 @@
            (test-assert (null (terminal-ui-preview-rows
                               (application-ui application)))
                         "assistant output replaces the live reasoning preview")
+           (test-assert
+            (string= (terminal-ui-status (application-ui application))
+                     "receiving response")
+            "assistant streaming keeps a timed activity phase visible")
            (funcall send-reasoning " late event")
            (test-assert (null (terminal-ui-preview-rows
                               (application-ui application)))

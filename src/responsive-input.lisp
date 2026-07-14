@@ -288,6 +288,7 @@
               (application-input-controller-application controller)))
          (terminal (terminal-ui-terminal ui)))
     (terminal-ui-refresh-size ui #'application-pending-terminal-size)
+    (terminal-ui-refresh-status ui)
     (if (terminal-input-ready-p terminal)
         t
         (progn

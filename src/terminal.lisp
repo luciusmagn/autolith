@@ -154,6 +154,29 @@
     :accessor terminal-ui-status
     :type (option string)
     :documentation "The optional unfinished activity shown above the prompt.")
+   (status-started-at
+    :initform nil
+    :accessor terminal-ui-status-started-at
+    :type (option real)
+    :documentation "The monotonic time at which the current activity phase began.")
+   (status-progress-at
+    :initform nil
+    :accessor terminal-ui-status-progress-at
+    :type (option real)
+    :documentation "The monotonic time of the newest progress within the activity phase.")
+   (status-rendered-signature
+    :initform nil
+    :accessor terminal-ui-status-rendered-signature
+    :type list
+    :documentation "The elapsed status values used by the newest live-region paint.")
+   (clock-function
+    :initarg :clock-function
+    :initform (lambda ()
+                (/ (get-internal-real-time)
+                   (coerce internal-time-units-per-second 'double-float)))
+    :reader terminal-ui-clock-function
+    :type function
+    :documentation "The injected monotonic clock function returning seconds.")
    (preview-rows
     :initform nil
     :accessor terminal-ui-preview-rows

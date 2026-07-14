@@ -7,6 +7,15 @@
   "Return the viewport row budget reserved for TERMINAL's unfinished content."
   (max 1 (1- (terminal-rows terminal))))
 
+(define-constant +terminal-ui-stale-status-seconds+ 30
+  :documentation "The idle duration after which live activity is labelled as stale.")
+
+(-> terminal-ui--monotonic-seconds () real)
+(defun terminal-ui--monotonic-seconds ()
+  "Return monotonic process time in seconds for live activity accounting."
+  (/ (get-internal-real-time)
+     (coerce internal-time-units-per-second 'double-float)))
+
 (-> terminal-completion-p (t) boolean)
 (defun terminal-completion-p (value)
   "Return true when VALUE describes one interactive completion entry."
@@ -17,10 +26,11 @@
 
 (-> terminal-ui-create
     (&key (:terminal terminal) (:editor (option line-editor)) (:prompt string)
-          (:placeholder string) (:completions list))
+          (:placeholder string) (:completions list) (:clock-function function))
     terminal-ui)
 (defun terminal-ui-create
-    (&key terminal editor (prompt "> ") (placeholder "") completions)
+    (&key terminal editor (prompt "> ") (placeholder "") completions
+          (clock-function #'terminal-ui--monotonic-seconds))
   "Create a scrollback-preserving UI for TERMINAL."
   (unless (typep terminal 'terminal)
     (error 'terminal-error
@@ -46,6 +56,7 @@
                                (line-editor-create
                                 :history-limit +terminal-history-limit+))
                    :live-region live-region
+                   :clock-function clock-function
                    :prompt prompt
                    :placeholder placeholder
                    :completions completions
@@ -314,6 +325,52 @@
 
 ;;;; -- Live Region Composition --
 
+(-> terminal-ui--status-times-at
+    (terminal-ui real)
+    (values integer integer))
+(defun terminal-ui--status-times-at (ui now)
+  "Return elapsed and idle whole seconds for UI's activity at monotonic NOW."
+  (let* ((started-at (or (terminal-ui-status-started-at ui) now))
+         (progress-at (or (terminal-ui-status-progress-at ui) started-at)))
+    (values (max 0 (floor (- now started-at)))
+            (max 0 (floor (- now progress-at))))))
+
+(-> terminal-ui--duration-text (integer) string)
+(defun terminal-ui--duration-text (seconds)
+  "Format non-negative SECONDS as a compact activity duration."
+  (let ((seconds (max 0 seconds)))
+    (multiple-value-bind (minutes remaining-seconds)
+        (floor seconds 60)
+      (multiple-value-bind (hours remaining-minutes)
+          (floor minutes 60)
+        (if (plusp hours)
+            (format nil "~D:~2,'0D:~2,'0D"
+                    hours remaining-minutes remaining-seconds)
+            (format nil "~2,'0D:~2,'0D"
+                    remaining-minutes remaining-seconds))))))
+
+(-> terminal-ui--status-signature-at (terminal-ui real) list)
+(defun terminal-ui--status-signature-at (ui now)
+  "Return the visible elapsed values identifying UI's status paint at NOW."
+  (multiple-value-bind (elapsed idle)
+      (terminal-ui--status-times-at ui now)
+    (list elapsed
+          (and (>= idle +terminal-ui-stale-status-seconds+) idle))))
+
+(-> terminal-ui--status-text-at (terminal-ui real) string)
+(defun terminal-ui--status-text-at (ui now)
+  "Return UI's activity and timing at monotonic NOW."
+  (multiple-value-bind (elapsed idle)
+      (terminal-ui--status-times-at ui now)
+    (if (>= idle +terminal-ui-stale-status-seconds+)
+        (format nil "~A · ~A · no update ~A"
+                (terminal-ui-status ui)
+                (terminal-ui--duration-text elapsed)
+                (terminal-ui--duration-text idle))
+        (format nil "~A · ~A"
+                (terminal-ui-status ui)
+                (terminal-ui--duration-text elapsed)))))
+
 (-> terminal-ui--rows-content
     (terminal list &key (:cursor-row integer) (:cursor-offset integer))
     (values string string integer))
@@ -349,12 +406,15 @@
             cursor-index)))
 
 (-> terminal-ui--live-content
-    (terminal-ui)
+    (terminal-ui &optional (option real))
     (values string string integer))
-(defun terminal-ui--live-content (ui)
+(defun terminal-ui--live-content (ui &optional status-now)
   "Return UI's complete plain and styled live content plus its cursor index."
   (let* ((terminal (terminal-ui-terminal ui))
          (row-width (max 1 (terminal-columns terminal)))
+         (status-now (or status-now
+                         (and (terminal-ui-status ui)
+                              (funcall (terminal-ui-clock-function ui)))))
          (rows nil))
     (dolist (row (terminal-ui-preview-rows ui))
       (setf rows
@@ -376,7 +436,9 @@
                     (list
                      (terminal--clip-spans
                       (list (terminal-span ':brand "∙ ")
-                            (terminal-span ':dim (terminal-ui-status ui)))
+                            (terminal-span ':dim
+                                           (terminal-ui--status-text-at
+                                            ui status-now)))
                       row-width)))))
     (when (plusp (terminal-ui-queued-input-count ui))
       (setf rows
@@ -471,13 +533,21 @@ live unfinished line continuing that block, or removes it when NIL."
       (terminal-flush terminal)))
   ui)
 
-(-> terminal-ui--paint-live (terminal-ui) null)
-(defun terminal-ui--paint-live (ui)
+(-> terminal-ui--paint-live
+    (terminal-ui &optional (option real))
+    null)
+(defun terminal-ui--paint-live (ui &optional status-now)
   "Present UI's unfinished content below ordinary terminal scrollback."
-  (let ((terminal (terminal-ui-terminal ui)))
+  (let* ((status-now (or status-now
+                         (and (terminal-ui-status ui)
+                              (funcall (terminal-ui-clock-function ui)))))
+         (terminal (terminal-ui-terminal ui)))
+    (setf (terminal-ui-status-rendered-signature ui)
+          (and (terminal-ui-status ui)
+               (terminal-ui--status-signature-at ui status-now)))
     (when (terminal-interactive-p terminal)
       (multiple-value-bind (text display cursor)
-          (terminal-ui--live-content ui)
+          (terminal-ui--live-content ui status-now)
         (live-region-present (terminal-ui-live-region ui)
                              text
                              :cursor cursor
@@ -657,14 +727,47 @@ when no resize needs to be applied."
 
 (-> terminal-ui-set-status (terminal-ui (option string)) terminal-ui)
 (defun terminal-ui-set-status (ui status)
-  "Replace UI's unfinished one-row STATUS and repaint only the live region."
+  "Begin or clear UI's timed one-row STATUS activity phase."
   (with-terminal-ui-locked (ui)
     (let ((safe-status (and status
                             (sanitize-text status :single-line-p t))))
-      (unless (equal safe-status (terminal-ui-status ui))
-        (setf (terminal-ui-status ui) safe-status)
-        (terminal-ui--paint-live ui))))
+      (cond
+        (safe-status
+         (let ((now (funcall (terminal-ui-clock-function ui))))
+           (setf (terminal-ui-status ui) safe-status
+                 (terminal-ui-status-started-at ui) now
+                 (terminal-ui-status-progress-at ui) now)
+           (terminal-ui--paint-live ui now)))
+        ((terminal-ui-status ui)
+         (setf (terminal-ui-status ui) nil
+               (terminal-ui-status-started-at ui) nil
+               (terminal-ui-status-progress-at ui) nil
+               (terminal-ui-status-rendered-signature ui) nil)
+         (terminal-ui--paint-live ui)))))
   ui)
+
+(-> terminal-ui-note-status-progress (terminal-ui) terminal-ui)
+(defun terminal-ui-note-status-progress (ui)
+  "Record current progress without restarting UI's elapsed activity clock."
+  (with-terminal-ui-locked (ui)
+    (when (terminal-ui-status ui)
+      (setf (terminal-ui-status-progress-at ui)
+            (funcall (terminal-ui-clock-function ui)))))
+  ui)
+
+(-> terminal-ui-refresh-status (terminal-ui) boolean)
+(defun terminal-ui-refresh-status (ui)
+  "Repaint UI when a visible elapsed activity value changed."
+  (with-terminal-ui-locked (ui)
+    (let* ((status-now (and (terminal-ui-status ui)
+                            (funcall (terminal-ui-clock-function ui))))
+           (signature (and status-now
+                           (terminal-ui--status-signature-at ui status-now))))
+      (if (equal signature (terminal-ui-status-rendered-signature ui))
+          nil
+          (progn
+            (terminal-ui--paint-live ui status-now)
+            t)))))
 
 (-> terminal-ui-set-queued-input-count (terminal-ui integer) terminal-ui)
 (defun terminal-ui-set-queued-input-count (ui count)

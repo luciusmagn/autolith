@@ -731,6 +731,7 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
              (stream-text-delta (delta)
                "Commit DELTA's completed markdown rows and repaint the fluid tail."
                (when (plusp (length delta))
+                 (terminal-ui-note-status-progress ui)
                  (setf stream-text
                        (concatenate 'string stream-text delta)
                        stream-pending
@@ -742,7 +743,7 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
                      (setf stream-open-p t
                            stream-renderer (application--markdown-renderer
                                             application))
-                     (terminal-ui-set-status ui nil)
+                     (terminal-ui-set-status ui "receiving response")
                      (push (list (terminal-span ':brand "● autolith")) rows))
                    (loop for newline = (position #\Newline stream-pending)
                          while newline
@@ -778,6 +779,8 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
        :text-callback #'stream-text-delta
        :reasoning-callback
        (lambda (delta)
+         (when (plusp (length delta))
+           (terminal-ui-note-status-progress ui))
          (when (and (application-reasoning-traces-p application)
                     (null presented-reasoning-text)
                     (plusp (length delta)))
@@ -788,6 +791,8 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
        :status-callback
        (lambda (status details)
          (case status
+           (:provider-progress
+            (terminal-ui-note-status-progress ui))
            (:provider-request-started
             (terminal-ui-set-preview-rows ui nil)
             (setf reasoning-text ""
