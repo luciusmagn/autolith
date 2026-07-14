@@ -71,6 +71,18 @@
   (merge-pathnames "fff/worker.log"
                    (configuration-cache-root configuration)))
 
+(-> search-worker--reset-databases (configuration) null)
+(defun search-worker--reset-databases (configuration)
+  "Discard CONFIGURATION's rebuildable fff ranking and history databases."
+  (let ((database-root
+          (merge-pathnames "fff/"
+                           (configuration-cache-root configuration))))
+    (dolist (name '("frecency/" "history/"))
+      (uiop:delete-directory-tree (merge-pathnames name database-root)
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil)
+
 
 ;;;; -- Parent-Side Lifecycle --
 
@@ -217,7 +229,7 @@
     (search-worker configuration keyword list)
     string)
 (defun search-worker-request (worker configuration operation arguments)
-  "Run one read-only search, restarting WORKER once after process failure."
+  "Run one read-only search, resetting fff caches before one process retry."
   (with-lock-held ((search-worker-lock worker))
     (loop for attempt from 1 to 2
           do (handler-case
@@ -236,15 +248,16 @@
                  (error condition))
                (error (condition)
                  (search-worker--close-unlocked worker)
-                 (when (= attempt 2)
-                   (search--fail
-                    operation
-                    (format nil
-                            "The isolated fff helper failed twice: ~A Diagnostic log: ~A"
-                            condition
-                            (search-worker--log-path configuration))
-                    :pathname (configuration-working-directory configuration)
-                    :cause condition)))))))
+                 (if (= attempt 1)
+                     (search-worker--reset-databases configuration)
+                     (search--fail
+                      operation
+                      (format nil
+                              "The isolated fff helper failed twice: ~A Diagnostic log: ~A"
+                              condition
+                              (search-worker--log-path configuration))
+                      :pathname (configuration-working-directory configuration)
+                      :cause condition)))))))
 
 (-> tool-registry--search-workers (tool-registry) list)
 (defun tool-registry--search-workers (registry)

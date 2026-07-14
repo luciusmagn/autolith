@@ -149,11 +149,25 @@
                             "search.multi-content honors separate file constraints"))
              (let* ((worker (search-tool-engine files-tool))
                     (failed-process (search-worker-process worker))
-                    (failed-pid (uiop:process-info-pid failed-process)))
+                    (failed-pid (uiop:process-info-pid failed-process))
+                    (frecency-marker
+                      (merge-pathnames "fff/frecency/test-marker"
+                                       (configuration-cache-root configuration)))
+                    (history-marker
+                      (merge-pathnames "fff/history/test-marker"
+                                       (configuration-cache-root configuration))))
+               (search-tests--write-file frecency-marker "discard me")
+               (search-tests--write-file history-marker "discard me")
                (sb-posix:kill failed-pid sb-posix:sigkill)
                (loop repeat 100
                      while (uiop:process-alive-p failed-process)
                      do (sleep 0.01))
+               (search-worker--reset-databases configuration)
+               (test-assert
+                (and (not (probe-file frecency-marker))
+                     (not (probe-file history-marker))
+                     (probe-file (search-worker--log-path configuration)))
+                "fff database reset preserves the private diagnostic log")
                (let ((result (search-tests--call registry context
                                                  "search" "files"
                                                  "query" "model selection")))

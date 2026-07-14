@@ -298,8 +298,10 @@ through its C ABI inside Autolith and is never installed on =PATH= or into the
 system library directories. Its watched content index and LMDB search metadata
 live below =${XDG_CACHE_HOME:-~/.cache}/autolith/fff/=. Autolith stops the native
 watcher before checkpoints and clean exit, then recreates it lazily when search
-is next used. =AUTOLITH_FFF_LIBRARY= may point at a compatible development
-build; ordinary installations should leave it unset.
+is next used. If the isolated helper fails, Autolith discards only the
+rebuildable ranking and history databases before retrying it once.
+=AUTOLITH_FFF_LIBRARY= may point at a compatible development build; ordinary
+installations should leave it unset.
 
 =AGENTS.md= files are discovered the way Codex discovers them: Autolith walks up
 from the workspace to the nearest =.git= project root, then includes every
