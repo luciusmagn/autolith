@@ -610,6 +610,8 @@
                    (list (terminal-span :plain "  first line")))
        :tail "  partial")
       (let ((output (recording-terminal-output terminal)))
+        (test-assert (= (length (recording-terminal-chunks terminal)) 1)
+                     "committed rows and tail use one terminal write")
         (test-assert (search "● autolith" output)
                      "streamed rows append the block header")
         (test-assert (search "  first line" output)

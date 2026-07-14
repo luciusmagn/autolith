@@ -493,10 +493,11 @@
               :cursor-row cursor-row
               :cursor-offset cursor-offset))))))))
 
-(-> terminal-ui--stream-output (terminal list) string)
+(-> terminal-ui--stream-output (terminal list) (values string string))
 (defun terminal-ui--stream-output (terminal rows)
-  "Return streamed ROWS as trusted styled output ending on a fresh line."
-  (with-output-to-string (stream)
+  "Return streamed ROWS as plain and styled output ending on a fresh line."
+  (let ((plain-stream (make-string-output-stream))
+        (display-stream (make-string-output-stream)))
     (dolist (row rows)
       (let ((safe-row
               (loop for span in row
@@ -504,8 +505,12 @@
                              (terminal-span-style span)
                              (sanitize-text (terminal-span-text span)
                                             :single-line-p t)))))
-        (write-string (terminal--render-spans terminal safe-row) stream)
-        (write-char #\Newline stream)))))
+        (write-string (terminal--spans-text safe-row) plain-stream)
+        (write-string (terminal--render-spans terminal safe-row) display-stream)
+        (write-char #\Newline plain-stream)
+        (write-char #\Newline display-stream)))
+    (values (get-output-stream-string plain-stream)
+            (get-output-stream-string display-stream))))
 
 (-> terminal-ui-stream-update
     (terminal-ui &key (:rows list) (:tail (or null string list)))
@@ -517,32 +522,30 @@ Each row is a styled span list appended once without a separating blank row, so
 consecutive updates build one continuous transcript block. TAIL replaces the
 live unfinished line continuing that block, or removes it when NIL."
   (with-terminal-ui-locked (ui)
-    (let* ((terminal (terminal-ui-terminal ui))
-           (output (terminal-ui--stream-output terminal rows)))
-      (labels ((append-and-repaint ()
-                 "Append committed rows and install the latest fluid tail."
-                 (when (plusp (length output))
-                   (terminal--write-safe-text terminal output))
-                 (setf (terminal-ui-stream-tail ui) tail)
-                 (terminal-ui--paint-live ui)))
-        (cond
-          ((not (terminal-interactive-p terminal))
-           (append-and-repaint))
-          ((plusp (length output))
-           (call-with-live-region-suspended
-            (terminal-ui-live-region ui)
-            #'append-and-repaint))
-          (t
-           (setf (terminal-ui-stream-tail ui) tail)
-           (terminal-ui--paint-live ui))))
-      (terminal-flush terminal)))
+    (let ((terminal (terminal-ui-terminal ui)))
+      (multiple-value-bind (plain-output display-output)
+          (terminal-ui--stream-output terminal rows)
+        (setf (terminal-ui-stream-tail ui) tail)
+        (if (terminal-interactive-p terminal)
+            (terminal-ui--present-live
+             ui
+             :appended-text plain-output
+             :appended-display display-output)
+            (progn
+              (when (plusp (length display-output))
+                (terminal--write-safe-text terminal display-output))
+              (terminal-ui--paint-live ui)))
+        (terminal-flush terminal))))
   ui)
 
-(-> terminal-ui--paint-live
-    (terminal-ui &optional (option real))
+(-> terminal-ui--present-live
+    (terminal-ui &key (:status-now (option real))
+                      (:appended-text string)
+                      (:appended-display string))
     null)
-(defun terminal-ui--paint-live (ui &optional status-now)
-  "Present UI's unfinished content below ordinary terminal scrollback."
+(defun terminal-ui--present-live
+    (ui &key status-now (appended-text "") (appended-display ""))
+  "Present UI live content, atomically preceding it with appended scrollback."
   (let* ((status-now (or status-now
                          (and (terminal-ui-status ui)
                               (funcall (terminal-ui-clock-function ui)))))
@@ -553,10 +556,26 @@ live unfinished line continuing that block, or removes it when NIL."
     (when (terminal-interactive-p terminal)
       (multiple-value-bind (text display cursor)
           (terminal-ui--live-content ui status-now)
-        (live-region-present (terminal-ui-live-region ui)
-                             text
-                             :cursor cursor
-                             :display display))))
+        (if (plusp (length appended-text))
+            (live-region-append-and-present
+             (terminal-ui-live-region ui)
+             appended-text
+             text
+             :appended-display appended-display
+             :cursor cursor
+             :display display)
+            (live-region-present (terminal-ui-live-region ui)
+                                 text
+                                 :cursor cursor
+                                 :display display)))))
+  nil)
+
+(-> terminal-ui--paint-live
+    (terminal-ui &optional (option real))
+    null)
+(defun terminal-ui--paint-live (ui &optional status-now)
+  "Present UI's unfinished content below ordinary terminal scrollback."
+  (terminal-ui--present-live ui :status-now status-now)
   nil)
 
 (-> terminal-ui--repaint-live (terminal-ui) null)

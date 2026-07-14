@@ -47,11 +47,11 @@
                 #:live-region-cursor-visible-p
                 #:live-region-set-cursor-visible
                 #:live-region-present
+                #:live-region-append-and-present
                 #:live-region-append
                 #:live-region-suspend
                 #:live-region-dismiss
-                #:live-region-resize
-                #:call-with-live-region-suspended)
+                #:live-region-resize)
   (:import-from #:bordeaux-threads
                 #:condition-notify
                 #:condition-wait
