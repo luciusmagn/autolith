@@ -218,7 +218,10 @@ Use a double slash to send a user message that begins with a literal slash.
 
 Conversations are append-only readable forms under
 =${XDG_DATA_HOME:-~/.local/share}/autolith/conversations/=. A truncated final form is
-ignored after a crash; malformed complete records are rejected.
+ignored after a crash; malformed complete records are rejected. If a crash
+leaves a complete provider function call without its correlated tool result,
+loading appends an explicit unknown-outcome failure and pairs it with that call
+before replay. Autolith never assumes that the interrupted tool had no effects.
 
 * Persistent memories
 

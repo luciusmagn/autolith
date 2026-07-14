@@ -135,9 +135,75 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-conversation-interrupted-tool-call () null)
+(defun test-conversation-interrupted-tool-call ()
+  "Test append-only repair of a function call whose process exited mid-tool."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation
+                  (conversation-create configuration :identifier "interrupted"))
+                (call
+                  (json-object
+                   "type" "function_call"
+                   "status" "completed"
+                   "arguments" "{\"patterns\":[\"one\",\"two\"]}"
+                   "call_id" "call-interrupted"
+                   "name" "multi-content"
+                   "namespace" "search")))
+           (conversation-append-user-message conversation "continue the task")
+           (conversation-append-provider-item conversation call)
+           ;; Reproduce a user message persisted after restart but before the
+           ;; malformed provider replay was rejected.
+           (conversation-append-user-message conversation "carry on")
+           (let* ((loaded
+                    (conversation-load-by-id configuration "interrupted"))
+                  (items (conversation-input-items loaded))
+                  (records
+                    (conversation--read-records
+                     (conversation-pathname loaded))))
+             (test-assert (= (length items) 4)
+                          "replay adds exactly one interrupted tool output")
+             (test-assert
+              (and (string= (json-get (second items) "type") "function_call")
+                   (string= (json-get (third items) "type")
+                            "function_call_output")
+                   (string= (json-get (third items) "call_id")
+                            "call-interrupted")
+                   (search "may have changed external state"
+                           (json-get (third items) "output"))
+                   (string= (json-get (fourth items) "role") "user"))
+              "repair places an honest failure output before later user input")
+             (let ((repair (first (last records))))
+               (test-assert
+                (and (eq (first repair) :tool-result)
+                     (eq (getf (rest repair) :status) :error)
+                     (string= (getf (rest repair) :call-id)
+                              "call-interrupted")
+                     (string= (getf (rest repair) :tool)
+                              "search.multi-content"))
+                "repair persists a correlated append-only failure record"))
+             (let ((record-count (length records))
+                   (reloaded
+                     (conversation-load-by-id configuration "interrupted")))
+               (test-assert
+                (= (length (conversation--read-records
+                            (conversation-pathname reloaded)))
+                   record-count)
+                "loading repaired history does not append duplicate outputs")
+               (test-assert
+                (string= (json-get
+                          (third (conversation-input-items reloaded))
+                          "type")
+                         "function_call_output")
+                "reloaded history keeps the repaired provider ordering"))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-conversation-persistence () null)
 (defun test-conversation-persistence ()
   "Test append-only conversation projection and incomplete-tail recovery."
+  (test-conversation-interrupted-tool-call)
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration)))
     (unwind-protect

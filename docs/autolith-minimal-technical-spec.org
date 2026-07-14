@@ -368,6 +368,13 @@ leaving an empty conversation does not create a conversation file.
 A conversation file is an append-only sequence of top-level
 S-expressions. It is not wrapped in one enclosing list.
 
+When a crash leaves a complete provider function-call record without a
+correlated complete tool-result record, loading must append an explicit
+unknown-outcome failure before replaying that history. The repaired provider
+projection places the failure with its call even when later messages were
+already appended. Recovery must not assume the interrupted tool had no effects
+and must not retry it automatically.
+
 Example:
 
 #+BEGIN_SRC lisp

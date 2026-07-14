@@ -237,6 +237,12 @@
    "call_id" call-id
    "output" output))
 
+(define-constant +conversation-interrupted-tool-output+
+  "Autolith restarted before recording this tool call's result. The call may have changed external state. Inspect the relevant state before deciding whether to retry it."
+  :test #'string=
+  :documentation
+  "The provider-visible result synthesized for a tool call interrupted by exit.")
+
 (-> conversation-append-tool-result (conversation string string string boolean) json-object)
 (defun conversation-append-tool-result (conversation call-id tool-name output success-p)
   "Persist and append one tool OUTPUT associated with CALL-ID and TOOL-NAME."
@@ -250,6 +256,123 @@
            :output output
            :wire-json (json-encode item)))
     (conversation--append-input-item conversation item)))
+
+(-> conversation--wire-item-type-p (json-object string) boolean)
+(defun conversation--wire-item-type-p (item type)
+  "Return true when provider ITEM has wire TYPE."
+  (string= (or (json-get item "type") "") type))
+
+(-> conversation--tool-call-id (conversation json-object) string)
+(defun conversation--tool-call-id (conversation item)
+  "Return ITEM's non-empty tool call identifier or signal corrupted history."
+  (let ((call-id (json-get item "call_id")))
+    (unless (non-empty-string-p call-id)
+      (error 'conversation-invariant-error
+             :message "A persisted tool item has no call identifier."
+             :pathname (conversation-pathname conversation)
+             :sequence nil))
+    call-id))
+
+(-> conversation--tool-call-name (json-object) string)
+(defun conversation--tool-call-name (item)
+  "Return a readable canonical name for function call ITEM."
+  (let ((namespace (json-get item "namespace"))
+        (name (json-get item "name")))
+    (cond
+      ((and (non-empty-string-p namespace) (non-empty-string-p name))
+       (format nil "~A.~A" namespace name))
+      ((non-empty-string-p name)
+       name)
+      ((non-empty-string-p namespace)
+       namespace)
+      (t
+       "unknown"))))
+
+(-> conversation--tool-item-tables
+    (conversation list)
+    (values hash-table hash-table))
+(defun conversation--tool-item-tables (conversation items)
+  "Return unique function calls and correlated outputs found in ITEMS."
+  (let ((calls (make-hash-table :test #'equal))
+        (outputs (make-hash-table :test #'equal)))
+    (dolist (item items)
+      (when (json-object-p item)
+        (cond
+          ((conversation--wire-item-type-p item "function_call")
+           (let ((call-id (conversation--tool-call-id conversation item)))
+             (when (gethash call-id calls)
+               (error 'conversation-invariant-error
+                      :message
+                      (format nil "Persisted history repeats tool call ~S."
+                              call-id)
+                      :pathname (conversation-pathname conversation)
+                      :sequence nil))
+             (setf (gethash call-id calls) item)))
+          ((conversation--wire-item-type-p item "function_call_output")
+           (let ((call-id (conversation--tool-call-id conversation item)))
+             (when (gethash call-id outputs)
+               (error 'conversation-invariant-error
+                      :message
+                      (format nil "Persisted history repeats output for tool call ~S."
+                              call-id)
+                      :pathname (conversation-pathname conversation)
+                      :sequence nil))
+             (setf (gethash call-id outputs) item))))))
+    (values calls outputs)))
+
+(-> conversation--repair-incomplete-tool-calls (conversation) null)
+(defun conversation--repair-incomplete-tool-calls (conversation)
+  "Pair every persisted function call with an output after an interrupted exit.
+
+Existing outputs are moved beside their calls in the provider projection. A
+missing output is recorded append-only as an explicit unknown-outcome failure
+before the repaired projection can be sent to the provider."
+  (let ((items (copy-list (conversation-input-items conversation))))
+    (multiple-value-bind (calls outputs)
+        (conversation--tool-item-tables conversation items)
+      (let ((remaining items)
+            (repaired nil))
+        (loop while remaining
+              for item = (pop remaining)
+              do (cond
+                   ((and (json-object-p item)
+                         (conversation--wire-item-type-p
+                          item "function_call_output"))
+                    (let ((call-id
+                            (conversation--tool-call-id conversation item)))
+                      ;; Correlated outputs are emitted with their call group.
+                      ;; Orphaned legacy outputs retain their original position.
+                      (unless (gethash call-id calls)
+                        (push item repaired))))
+                   ((and (json-object-p item)
+                         (conversation--wire-item-type-p item "function_call"))
+                    (let ((group (list item)))
+                      (loop while (and remaining
+                                       (json-object-p (first remaining))
+                                       (conversation--wire-item-type-p
+                                        (first remaining) "function_call"))
+                            do (setf group
+                                     (nconc group (list (pop remaining)))))
+                      (dolist (call group)
+                        (push call repaired))
+                      (dolist (call group)
+                        (let* ((call-id
+                                 (conversation--tool-call-id conversation call))
+                               (output (gethash call-id outputs)))
+                          (unless output
+                            (setf output
+                                  (conversation-append-tool-result
+                                   conversation
+                                   call-id
+                                   (conversation--tool-call-name call)
+                                   +conversation-interrupted-tool-output+
+                                   nil)
+                                  (gethash call-id outputs) output))
+                          (push output repaired)))))
+                   (t
+                    (push item repaired))))
+        (setf (conversation-input-items conversation) (nreverse repaired)))))
+  nil)
 
 (-> conversation--usage-total (t) (option integer))
 (defun conversation--usage-total (usage)
@@ -471,6 +594,7 @@ conversation files."
                :sequence nil))
       (dolist (record (rest records))
         (conversation--apply-record conversation record))
+      (conversation--repair-incomplete-tool-calls conversation)
       conversation)))
 
 (-> conversation-pathname-for-id (configuration string) pathname)
