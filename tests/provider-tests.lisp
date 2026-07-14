@@ -179,6 +179,10 @@
             (string= (json-get (json-get request "reasoning") "effort") "max")
             "the provider request maps Ultra reasoning to Max")
            (test-assert
+            (string= (json-get (json-get request "reasoning") "summary")
+                     "detailed")
+            "the provider request asks for visible detailed reasoning summaries")
+           (test-assert
             (string= (json-get (json-get request "reasoning") "context")
                      "all_turns")
             "the provider request retains reasoning across the current context")
@@ -255,6 +259,14 @@
            (json-object
             "id" "ephemeral-reasoning-id"
             "type" "reasoning"
+            "summary" (json-array
+                       (json-object "type" "summary_text"
+                                    "text" "I inspected the request.")
+                       (json-object "type" "summary_text"
+                                    "text" "I chose a safe response."))
+            "content" (json-array
+                       (json-object "type" "reasoning_text"
+                                    "text" "raw private reasoning"))
             "encrypted_content" "opaque-test-ciphertext"))
          (source
            (concatenate
@@ -263,6 +275,14 @@
              (json-object
               "type" "response.created"
               "response" (json-object "id" "response-1")))
+            (test-sse-event-string
+             (json-object
+              "type" "response.reasoning_summary_text.delta"
+              "delta" "I inspected the request."))
+            (test-sse-event-string
+             (json-object
+              "type" "response.reasoning_text.delta"
+              "delta" "raw private reasoning"))
             (test-sse-event-string
              (json-object "type" "response.output_text.delta" "delta" "hello"))
             (test-sse-event-string
@@ -303,8 +323,26 @@
                         "encrypted_content")
               "opaque-test-ciphertext")
      "completed encrypted reasoning remains available for replay")
-    (test-assert (= (length events) 4)
-                 "the stream emits delta, item, and completion events"))
+    (let* ((reasoning-output (second (provider-result-output-items result)))
+           (summary (response-item-reasoning-summary reasoning-output)))
+      (test-assert
+       (string= summary
+                (format nil "I inspected the request.~2%I chose a safe response."))
+       "completed reasoning exposes only its dedicated visible summary")
+      (test-assert (not (search "raw private reasoning" summary))
+                   "raw reasoning content is never folded into the summary"))
+    (let ((reasoning-events
+            (remove-if-not (lambda (event)
+                             (typep event 'reasoning-delta-event))
+                           events)))
+      (test-assert (= (length reasoning-events) 1)
+                   "only summary deltas become visible reasoning events")
+      (test-assert
+       (string= (reasoning-delta-event-text (first reasoning-events))
+                "I inspected the request.")
+       "the visible reasoning event retains the summary text"))
+    (test-assert (= (length events) 5)
+                 "the stream emits safe deltas, items, and completion events"))
   nil)
 
 (-> test-provider-stream-failures () null)

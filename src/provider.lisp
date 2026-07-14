@@ -240,6 +240,22 @@
     (when parts
       (format nil "~{~A~^~%~}" parts))))
 
+(-> response-item-reasoning-summary (json-object) (option string))
+(defun response-item-reasoning-summary (item)
+  "Return ITEM's provider-visible reasoning summary, never raw reasoning text."
+  (when (string= (or (json-get item "type") "") "reasoning")
+    (let ((summary (json-get item "summary")))
+      (when (vectorp summary)
+        (let ((parts
+                (loop for part across summary
+                      when (and (json-object-p part)
+                                (string= (or (json-get part "type") "")
+                                         "summary_text")
+                                (non-empty-string-p (json-get part "text")))
+                        collect (json-get part "text"))))
+          (when parts
+            (format nil "~{~A~^~2%~}" parts)))))))
+
 (-> provider-web-search-tool (configuration) (option json-object))
 (defun provider-web-search-tool (configuration)
   "Return the hosted web search tool for CONFIGURATION, or NIL when disabled.
@@ -319,6 +335,7 @@ asks for a context checkpoint handoff."
      "parallel_tool_calls" false
      "reasoning" (json-object
                   "effort" (configuration-wire-effort configuration)
+                  "summary" "detailed"
                   "context" "all_turns")
      "store" false
      "stream" t
@@ -618,11 +635,8 @@ asks for a context checkpoint handoff."
                     (funcall event-callback
                              (make-instance 'assistant-delta-event
                                             :text (or (json-get event "delta") ""))))
-                   ((and type
-                         (member type
-                                 '("response.reasoning_summary_text.delta"
-                                   "response.reasoning_text.delta")
-                                 :test #'string=))
+                   ((string= (or type "")
+                             "response.reasoning_summary_text.delta")
                     (funcall event-callback
                              (make-instance 'reasoning-delta-event
                                             :text (or (json-get event "delta") ""))))

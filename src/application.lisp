@@ -43,6 +43,12 @@
     :accessor application-goal
     :type list
     :documentation "The session goal plist holding objective, status, and continuations.")
+   (reasoning-traces-p
+    :initarg :reasoning-traces-p
+    :initform nil
+    :accessor application-reasoning-traces-p
+    :type boolean
+    :documentation "Whether provider-visible reasoning summaries appear in the transcript.")
    (overlay-failures
     :initform nil
     :accessor application-overlay-failures
@@ -77,6 +83,7 @@
     (:name "/auth"          :argument nil :description "authenticate Autolith with ChatGPT")
     (:name "/model"         :argument nil :description "pick the 5.6 model")
     (:name "/effort"        :argument nil :description "pick the reasoning effort")
+    (:name "/trace"         :argument "on|off" :description "show visible reasoning summaries")
     (:name "/goal"          :argument "OBJECTIVE" :description "set or view the session goal")
     (:name "/checkpoint"    :argument nil :description "save a retained live generation")
     (:name "/generations"   :argument nil :description "list retained generations")
@@ -423,6 +430,16 @@
            (append (list (terminal-span ':brand "● autolith")
                          (terminal-span ':plain (string #\Newline)))
                    (application--markdown-body application text)))))
+      ((string= (or type "") "reasoning")
+       (when (application-reasoning-traces-p application)
+         (let ((summary (response-item-reasoning-summary item)))
+           (when summary
+             (application--transcript-entry
+              application
+              :style ':hint
+              :header "◇ reasoning summary"
+              :body summary
+              :body-style ':dim)))))
       ((string= (or type "") "function_call")
        (let* ((canonical-name (function-call-canonical-name item))
               (tool (application--find-tool application canonical-name)))
@@ -696,10 +713,11 @@ later conversation replay cannot duplicate their streamed transcript rows."
        :text-callback #'stream-text-delta
        :reasoning-callback
        (lambda (delta)
-         (let ((combined (concatenate 'string reasoning-tail delta)))
-           (setf reasoning-tail
-                 (subseq combined (max 0 (- (length combined) 500)))))
-         (application-stream-status application activity-label reasoning-tail))
+         (when (application-reasoning-traces-p application)
+           (let ((combined (concatenate 'string reasoning-tail delta)))
+             (setf reasoning-tail
+                   (subseq combined (max 0 (- (length combined) 500)))))
+           (application-stream-status application activity-label reasoning-tail)))
        :status-callback
        (lambda (status details)
          (case status

@@ -129,6 +129,10 @@
                                        (configuration-model configuration)
                                        (configuration-reasoning-effort
                                         configuration)))
+     (application--field-spans "reasoning trace"
+                               (if (application-reasoning-traces-p application)
+                                   "visible summaries"
+                                   "hidden"))
      (application--field-spans "conversation"
                                (conversation-identifier
                                 (application-conversation application)))
@@ -305,6 +309,35 @@
    application
    (configuration-with-reasoning-effort (application-configuration application)
                                         effort)))
+
+(-> application-set-reasoning-traces (application boolean) null)
+(defun application-set-reasoning-traces (application enabled-p)
+  "Show future provider-visible reasoning summaries when ENABLED-P is true."
+  (setf (application-reasoning-traces-p application) enabled-p)
+  nil)
+
+(-> application-trace-command (application (option string)) null)
+(defun application-trace-command (application argument)
+  "Show or change APPLICATION's visible reasoning-summary setting."
+  (let ((mode (and argument (string-downcase argument))))
+    (cond
+      ((null mode)
+       (application-present
+        application
+        (format nil "Reasoning summaries are ~:[hidden~;shown~]. Use /trace on or /trace off."
+                (application-reasoning-traces-p application))))
+      ((string= mode "on")
+       (application-set-reasoning-traces application t)
+       (application-present
+        application
+        "Visible reasoning summaries will be shown for future responses."))
+      ((string= mode "off")
+       (application-set-reasoning-traces application nil)
+       (application-present application "Reasoning summaries are hidden."))
+      (t
+       (error 'configuration-error
+              :message "Usage: /trace on or /trace off."))))
+  nil)
 
 (-> application--model-items (application) list)
 (defun application--model-items (application)
@@ -572,6 +605,9 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
             (format nil "Reasoning effort is now ~A."
                     (configuration-reasoning-effort
                      (application-configuration application))))))
+       :continue)
+      ((string= command "/trace")
+       (application-trace-command application argument)
        :continue)
       ((string= command "/goal")
        (application-goal-command application

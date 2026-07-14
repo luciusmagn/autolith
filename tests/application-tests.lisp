@@ -2,10 +2,14 @@
 
 ;;;; -- Presentation Test Support --
 
-(-> application-tests--ui-application (&key (:columns integer)) application)
-(defun application-tests--ui-application (&key (columns 40))
+(-> application-tests--ui-application
+    (&key (:columns integer) (:reasoning-traces-p boolean))
+    application)
+(defun application-tests--ui-application
+    (&key (columns 40) reasoning-traces-p)
   "Return a minimal application presenting into a recording terminal."
   (make-instance 'application
+                 :reasoning-traces-p reasoning-traces-p
                  :tool-registry (make-default-tool-registry)
                  :ui (terminal-ui-create
                       :terminal (make-instance 'recording-terminal
@@ -251,6 +255,38 @@
                  "an empty exploratory word set retains a safe fallback"))
   nil)
 
+(-> test-reasoning-trace-command () null)
+(defun test-reasoning-trace-command ()
+  "Test explicit control of provider-visible reasoning summaries."
+  (let* ((application (application-tests--ui-application :columns 60))
+         (ui (application-ui application))
+         (terminal (terminal-ui-terminal ui)))
+    (terminal-ui-start ui)
+    (unwind-protect
+         (progn
+           (application-trace-command application "on")
+           (test-assert (application-reasoning-traces-p application)
+                        "/trace on enables reasoning-summary presentation")
+           (test-assert (search "future responses"
+                                (recording-terminal-output terminal))
+                        "/trace on confirms its future-response scope")
+           (recording-terminal-reset terminal)
+           (application-trace-command application "off")
+           (test-assert (not (application-reasoning-traces-p application))
+                        "/trace off disables reasoning-summary presentation")
+           (test-assert (search "hidden" (recording-terminal-output terminal))
+                        "/trace off confirms summaries are hidden")
+           (test-assert
+            (handler-case
+                (progn
+                  (application-trace-command application "raw")
+                  nil)
+              (configuration-error ()
+                t))
+            "unsupported trace modes signal a typed usage error"))
+      (terminal-ui-stop ui)))
+  nil)
+
 (-> test-interrupt-resume-instruction () null)
 (defun test-interrupt-resume-instruction ()
   "Test that Ctrl-C exits with an exact command only for durable conversations."
@@ -329,6 +365,30 @@
                                    \"text\":\"see **bold** move\"}]}"))))
       (test-assert (find (terminal-span :strong "bold") entry :test #'equal)
                    "assistant bodies render markdown emphasis"))
+    (let ((item
+            (json-object
+             "type" "reasoning"
+             "summary" (json-array
+                        (json-object "type" "summary_text"
+                                     "text" "Checked the safe path."))
+             "content" (json-array
+                        (json-object "type" "reasoning_text"
+                                     "text" "raw private reasoning")))))
+      (test-assert (null (response-item-entry application item))
+                   "reasoning summaries stay hidden by default")
+      (let* ((visible-application
+               (application-tests--ui-application
+                :columns 40
+                :reasoning-traces-p t))
+             (entry (response-item-entry visible-application item))
+             (text (markdown-tests--row-text entry)))
+        (test-assert
+         (equal (first entry) (terminal-span :hint "◇ reasoning summary"))
+         "trace mode labels provider-visible reasoning summaries")
+        (test-assert (search "Checked the safe path." text)
+                     "trace mode shows completed reasoning summaries")
+        (test-assert (not (search "raw private reasoning" text))
+                     "trace mode never shows raw reasoning content")))
     (let* ((source (format nil "~{form-line-~D~^~%~}"
                            (loop for index from 1 to 10 collect index)))
            (entry (response-item-entry
@@ -592,15 +652,22 @@
                 (application (make-instance 'application
                                             :configuration configuration
                                             :conversation conversation
+                                            :reasoning-traces-p t
                                             :ui (terminal-ui-create
                                                  :terminal terminal)))
                 (observer (application-agent-observer application))
                 (send-text (callback-agent-observer-text-callback observer))
+                (send-reasoning
+                  (callback-agent-observer-reasoning-callback observer))
                 (send-status (callback-agent-observer-status-callback observer))
                 (streamed-text (format nil
                                        "The quick brown fox jumps over~%the lazy dog")))
            (terminal-ui-start (application-ui application))
            (funcall send-status :provider-request-started nil)
+           (funcall send-reasoning "Checking the safe path.")
+           (test-assert (search "Checking"
+                                (recording-terminal-output terminal))
+                        "trace mode shows live reasoning-summary progress")
            (funcall send-text (format nil
                                       "The quick brown fox jumps over~%"))
            (funcall send-text "the lazy dog")
@@ -1109,6 +1176,9 @@
                           "status draws usage bars")
              (test-assert (search "standard" text)
                           "status names the standard service path")
+             (test-assert (and (search "reasoning trace" text)
+                               (search "hidden" text))
+                          "status reports the reasoning-summary display mode")
              (test-assert (search "compacts at 80%" text)
                           "status reports the compaction threshold")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
@@ -1233,6 +1303,7 @@
   "Run focused application presentation tests and return true on success."
   (test-application-banner-version)
   (test-thinking-label-selection)
+  (test-reasoning-trace-command)
   (test-interrupt-resume-instruction)
   (test-transcript-entries)
   (test-streaming-presentation)

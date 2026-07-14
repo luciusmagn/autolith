@@ -158,6 +158,7 @@ prefix from before selection. The commands are:
 /auth           authenticate Autolith with ChatGPT
 /model          pick the 5.6 model
 /effort         pick the reasoning effort
+/trace on|off   show visible reasoning summaries
 /goal OBJECTIVE set or view the session goal
 /checkpoint     save a retained live generation
 /generations    list retained generations
@@ -183,6 +184,11 @@ goal. Goals persist with their conversation across =/resume=.
 
 =/model= switches between the 5.6 family models (sol, luna, terra) for the
 current session; =AUTOLITH_MODEL= still selects any model at startup.
+
+=/trace on= shows the provider's dedicated reasoning summaries in the live
+status and transcript for future responses. =/trace off= hides them. Autolith
+never displays raw reasoning text or encrypted reasoning payloads; these are
+model-provided summaries, not hidden chain-of-thought.
 
 Context compaction keeps long conversations going. When the newest provider
 step reports total token usage at or beyond the compaction limit, Autolith asks

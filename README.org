@@ -33,6 +33,7 @@ user's privileges.
 - A responsive primary-screen terminal interface with ordinary scrollback.
 - Multiline editing and reusable completion widgets provided by Clinedi.
 - Input remains editable while model responses and tools are running.
+- Opt-in provider-visible reasoning summaries with =/trace on=.
 - Append-only portable conversation files with exact resume commands.
 - Workspace and global persistent memories with bounded prompt recall.
 - Everyday filesystem and shell tools plus named, isolated Lisp REPLs.
