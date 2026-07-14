@@ -2,11 +2,11 @@
 
 ;;;; -- Agent Events --
 
-(define-constant +default-maximum-provider-steps+ 64
-  :documentation "The final, tools-disabled provider step available to one user turn.")
+(define-constant +default-maximum-provider-steps+ nil
+  :documentation "The optional final provider step, disabled by default.")
 
-(define-constant +default-provider-step-warning+ 48
-  :documentation "The provider step at which Autolith starts reminding the model to finish.")
+(define-constant +default-provider-step-warning+ nil
+  :documentation "The optional provider step that starts budget reminders.")
 
 (define-constant +default-maximum-tool-calls+ 256
   :documentation "The maximum number of individual tool calls executed in one user turn.")
@@ -65,8 +65,8 @@
    (maximum-provider-steps
     :initarg :maximum-provider-steps
     :reader agent-maximum-provider-steps
-    :type (integer 1)
-    :documentation "The final tools-disabled provider step for one user message.")
+    :type (option (integer 1))
+    :documentation "The optional final tools-disabled step for one user message.")
    (provider-step-warning
     :initarg :provider-step-warning
     :reader agent-provider-step-warning
@@ -204,7 +204,7 @@
      (:conversation (option conversation))
      (:tool-registry (option tool-registry))
      (:worker t)
-     (:maximum-provider-steps integer)
+     (:maximum-provider-steps (option integer))
      (:provider-step-warning (option integer))
      (:maximum-tool-calls integer))
     agent)
@@ -222,14 +222,16 @@
   (unless (typep configuration 'configuration)
     (error 'configuration-error
            :message "AGENT-CREATE requires a CONFIGURATION instance."))
-  (unless (typep maximum-provider-steps '(integer 1))
+  (unless (or (null maximum-provider-steps)
+              (typep maximum-provider-steps '(integer 1)))
     (error 'configuration-error
-           :message "The maximum provider steps must be a positive integer."))
+           :message "The maximum provider steps must be NIL or a positive integer."))
   (unless (or (null provider-step-warning)
-              (and (typep provider-step-warning '(integer 1))
+              (and maximum-provider-steps
+                   (typep provider-step-warning '(integer 1))
                    (< provider-step-warning maximum-provider-steps)))
     (error 'configuration-error
-           :message "The provider step warning must precede the final step."))
+           :message "The provider step warning requires and must precede the final step."))
   (unless (typep maximum-tool-calls '(integer 1))
     (error 'configuration-error
            :message "The maximum tool calls must be a positive integer."))
@@ -435,14 +437,16 @@
 (-> agent--budget-state (agent integer) turn-budget-state)
 (defun agent--budget-state (agent provider-step)
   "Return AGENT's budget phase for PROVIDER-STEP."
-  (cond
-    ((= provider-step (agent-maximum-provider-steps agent))
-     :finalization)
-    ((and (agent-provider-step-warning agent)
-          (>= provider-step (agent-provider-step-warning agent)))
-     :warning)
-    (t
-     :normal)))
+  (let ((maximum-provider-steps (agent-maximum-provider-steps agent)))
+    (cond
+      ((and maximum-provider-steps
+            (= provider-step maximum-provider-steps))
+       :finalization)
+      ((and (agent-provider-step-warning agent)
+            (>= provider-step (agent-provider-step-warning agent)))
+       :warning)
+      (t
+       :normal))))
 
 (-> agent--signal-budget-exhausted
     (agent integer integer keyword string)

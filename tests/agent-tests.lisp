@@ -518,6 +518,68 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-agent-default-turn-has-no-step-guillotine () null)
+(defun test-agent-default-turn-has-no-step-guillotine ()
+  "Test the default turn may keep working beyond the former provider-step limit."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration :identifier "unbounded-turn"))
+         (continuations
+           (loop for index from 1 below 64
+                 collect
+                 (agent-test-result
+                  (format nil "continue-~D" index)
+                  (list (agent-test-message "Still working."))
+                  :turn-completion :continue)))
+         (provider
+           (make-instance
+            'scripted-provider
+            :results
+            (append continuations
+                    (list
+                     (agent-test-result
+                      "step-64-tool"
+                      (list (agent-test-call :call-id "late-tool"
+                                             :arguments "{\"value\":\"late\"}")))
+                     (agent-test-result
+                      "step-65-final"
+                      (list (agent-test-message "Done."))
+                      :turn-completion :end)))))
+         (agent
+           (agent-create :configuration configuration
+                         :provider provider
+                         :conversation conversation
+                         :tool-registry (agent-test-registry)
+                         :worker ':unused)))
+    (unwind-protect
+         (progn
+           (test-assert
+            (string= (provider-result-response-id
+                      (agent-run-user-turn agent "finish a long task"))
+                     "step-65-final")
+            "the default turn continues past provider step 64")
+           (test-assert
+            (every (lambda (state) (eq state :normal))
+                   (scripted-provider-turn-budget-states provider))
+            "the default turn never enters forced finalization")
+           (test-assert
+            (every #'plusp
+                   (scripted-provider-tool-schema-counts provider))
+            "tools stay available throughout the default turn")
+           (test-assert
+            (find "late-tool"
+                  (conversation--read-records
+                   (conversation-pathname conversation))
+                  :key (lambda (record)
+                         (and (listp record)
+                              (eq (first record) :tool-result)
+                              (getf (rest record) :call-id)))
+                  :test #'string=)
+            "the tool requested on provider step 64 executes normally"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-agent-compaction () null)
 (defun test-agent-compaction ()
   "Test threshold-triggered compaction through the scripted provider."
@@ -596,5 +658,6 @@
   (test-agent-invalid-call-history)
   (test-agent-bounds-and-tool-failures)
   (test-agent-long-tool-turn)
+  (test-agent-default-turn-has-no-step-guillotine)
   (test-agent-compaction)
   t)
