@@ -48,9 +48,13 @@
            (configuration-create
             :source-root (asdf:system-source-directory :autolith)
             :working-directory (asdf:system-source-directory :autolith)))
-         (library (merge-pathnames "native/fff/libfff_c.so"
-                                   (configuration-data-root
-                                    default-configuration)))
+         (configured-library (uiop:getenv "AUTOLITH_FFF_LIBRARY"))
+         (library
+           (if (non-empty-string-p configured-library)
+               (pathname configured-library)
+               (merge-pathnames "native/fff/libfff_c.so"
+                                (configuration-data-root
+                                 default-configuration))))
          (previous-library (uiop:getenv "AUTOLITH_FFF_LIBRARY"))
          (workspace-root (uiop:ensure-directory-pathname
                           (merge-pathnames
