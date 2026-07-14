@@ -79,15 +79,15 @@
 
 (defclass self-persist-definition-tool (self-tool)
   ()
-  (:documentation "Install and persist one complete top-level definition."))
+  (:documentation "Install and privately commit one complete definition."))
 
 (defclass self-diff-tool (self-tool)
   ()
-  (:documentation "Show tracked source changes in the Autolith repository."))
+  (:documentation "Show uncommitted reconstructible active-image mutations."))
 
 (defclass self-commit-tool (self-tool)
   ()
-  (:documentation "Commit an explicit set of checked Autolith source paths."))
+  (:documentation "Persist pending live mutations as a private image commit."))
 
 (defclass self-checkpoint-tool (self-tool)
   ()
@@ -504,7 +504,7 @@
                  '("symbol" "value")))
       (register 'self-persist-definition-tool
                 "self" "persist-definition"
-                "Compile, install, and persist one complete top-level definition to the startup overlay. The tracked source repository is never modified."
+                "Compile, install, check, and persist one complete definition in a private image commit. The tracked source repository is never modified."
                 (tool-object-schema
                  (json-object
                   "definition" (tool-string-property
@@ -514,17 +514,16 @@
                  '("definition")))
       (register 'self-diff-tool
                 "self" "diff"
-                "Show the current tracked source diff without modifying the repository."
+                "Show successful self.redefine and self.set mutations not yet persisted by self.commit."
                 empty-schema)
       (register 'self-commit-tool
                 "self" "commit"
-                "Commit explicit user-directed paths in Autolith's own checked source repository, only while that repository is the current workspace. This never commits an unrelated workspace repository and is not for live self-modifications."
+                "Check and persist all pending self.redefine and self.set mutations as an immutable private image commit and complete Lisp replay script. This never invokes Git or changes a workspace repository."
                 (tool-object-schema
                  (json-object
-                  "title" (tool-string-property "A single commit title under 72 characters.")
-                  "paths" (tool-string-array-property
-                           "Paths relative to Autolith's source root, not the general workspace repository."))
-                 '("title" "paths")))
+                  "title" (tool-string-property
+                           "A single private image-commit title under 72 characters."))
+                 '("title")))
       (register 'self-checkpoint-tool
                 "self" "checkpoint"
                 "Validate and asynchronously save the active image as a generation."

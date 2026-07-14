@@ -165,7 +165,7 @@
   "Create a connected application, loading CONVERSATION-ID when supplied."
   (configuration-ensure-directories configuration)
   (durable-mutations-load configuration)
-  (let* ((overlay-failures (overlay-load-all configuration))
+  (let* ((overlay-failures (image-state-load configuration))
          (conversation (if conversation-id
                            (conversation-load-by-id configuration conversation-id)
                            (conversation-create configuration)))
@@ -195,6 +195,7 @@
     application)
 (defun application-reconnect (application &key conversation-id)
   "Reconnect retained APPLICATION resources, optionally selecting CONVERSATION-ID."
+  (image-state-reconnect)
   (let* ((previous (application-configuration application))
          (retained-conversation (application-conversation application))
          (configuration
@@ -205,7 +206,7 @@
          (recovery-conversation-id
            (let ((value (uiop:getenv "AUTOLITH_RECOVERY_CONVERSATION_ID")))
              (and (non-empty-string-p value) value)))
-         (overlay-failures (overlay-load-all configuration))
+         (overlay-failures nil)
          (conversation
            (cond
              (conversation-id

@@ -144,6 +144,15 @@
     :documentation "The source file involved in the failed mutation."))
   (:documentation "An active-image or durable source mutation failed."))
 
+(define-condition image-commit-error (source-mutation-error)
+  ((stage
+    :initarg :stage
+    :reader image-commit-error-stage
+    :type keyword
+    :documentation "The private image-commit stage that failed."))
+  (:documentation
+   "A private live-image mutation commit could not be validated or published."))
+
 (define-condition self-correctable-error (autolith-error)
   ((restart-names
     :initarg :restart-names

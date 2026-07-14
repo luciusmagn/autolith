@@ -641,23 +641,15 @@
 
 (defmethod application-tool-call-entry
     ((tool self-commit-tool) (application application) (call hash-table))
-  "Present a commit title and its explicit paths without raw JSON."
+  "Present a private image-commit title without raw JSON."
   (declare (ignore tool))
   (let* ((arguments (application--function-call-arguments call))
-         (title (or (and arguments (json-get arguments "title")) ""))
-         (paths (and arguments (json-get arguments "paths"))))
+         (title (or (and arguments (json-get arguments "title")) "")))
     (application--tool-entry
      application
      :style ':tool
      :header "▸ self.commit"
-     :rows (append
-            (list (application--tool-field-row "title" title))
-            (when (vectorp paths)
-              (append (list (application--tool-section-row "paths"))
-                      (loop for path across paths
-                            collect (list (terminal-span
-                                           ':code
-                                           (format nil "│ ~A" path))))))))))
+     :rows (list (application--tool-field-row "title" title)))))
 
 
 ;;; Tool result layout
@@ -1001,7 +993,7 @@
 
 (defmethod application-tool-result-entry
     ((tool self-diff-tool) (application application) record)
-  "Present tracked source differences as bounded code text."
+  "Present pending active-image mutations as bounded code text."
   (if (application--tool-result-success-p record)
       (application--tool-result-entry
        application

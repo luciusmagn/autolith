@@ -211,7 +211,7 @@
               (application--transcript-entry
                application
                :style ':failure
-               :header "✗ overlay skipped"
+               :header "✗ mutation replay skipped"
                :body (format nil "~A~%~A"
                              (namestring (first failure))
                              (rest failure)))))

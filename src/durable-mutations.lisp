@@ -112,7 +112,7 @@
     :initarg :pathname
     :reader durable-mutation-pathname
     :type non-empty-string
-    :documentation "The repository-relative source pathname being changed.")
+    :documentation "The private reconstruction artifact receiving the change.")
    (previous-source
     :initarg :previous-source
     :reader durable-mutation-previous-source
@@ -128,7 +128,7 @@
     :initform nil
     :reader durable-mutation-base-commit
     :type (option string)
-    :documentation "The Git revision preceding the source mutation.")
+    :documentation "The tracked base revision preceding the mutation, when known.")
    (phase
     :initarg :phase
     :accessor durable-mutation-phase
@@ -138,8 +138,8 @@
     :initform nil
     :accessor durable-mutation-git-commit
     :type (option string)
-    :documentation "The Git commit making the mutation durable, when complete."))
-  (:documentation "One checked live-to-source definition transaction."))
+    :documentation "A legacy Git commit recorded by an older journal format."))
+  (:documentation "One checked live-to-private-reconstruction transaction."))
 
 (defvar *durable-mutations* (make-hash-table :test #'equal)
   "Durable mutation transactions retained by the active Lisp image.")
@@ -245,148 +245,30 @@
     (durable-mutation-journal configuration mutation)
     mutation))
 
-(-> durable-mutation-source-current-p
-    (configuration durable-mutation)
-    boolean)
-(defun durable-mutation-source-current-p (configuration mutation)
-  "Return true when MUTATION's complete proposed form is authoritative source."
-  (handler-case
-      (let* ((pathname
-               (merge-pathnames (durable-mutation-pathname mutation)
-                                (configuration-source-root configuration)))
-             (proposed
-               (self-read-form (durable-mutation-proposed-source mutation)
-                               :read-eval nil)))
-        (multiple-value-bind (source-form source)
-            (source-find-definition pathname proposed)
-          (declare (ignore source))
-          (and (equal (source-form-form source-form) proposed) t)))
-    (error ()
-      nil)))
-
-(-> durable-mutation--revision-source
-    (configuration durable-mutation string)
-    (option string))
-(defun durable-mutation--revision-source (configuration mutation revision)
-  "Return MUTATION's source file at REVISION, or NIL when Git cannot read it."
-  (handler-case
-      (self-git-command
-       configuration
-       (list "show"
-             (format nil
-                     "~A:~A"
-                     revision
-                     (durable-mutation-pathname mutation))))
-    (error ()
-      nil)))
-
-(-> durable-mutation--source-contains-definition-p (string list) boolean)
-(defun durable-mutation--source-contains-definition-p (source definition)
-  "Return true when SOURCE contains a top-level form exactly equal to DEFINITION."
-  (handler-case
-      (and (definition-form-p definition)
-           (some (lambda (source-form)
-                   (equal (source-form-form source-form) definition))
-                 (source-read-forms source))
-           t)
-    (error ()
-      nil)))
-
-(-> durable-mutation-committing-revision
-    (configuration durable-mutation)
-    (option string))
-(defun durable-mutation-committing-revision (configuration mutation)
-  "Return the first post-base commit containing MUTATION's proposed definition."
-  (let ((base-commit (durable-mutation-base-commit mutation)))
-    (when (non-empty-string-p base-commit)
-      (handler-case
-          (let* ((output
-                   (self-git-command
-                    configuration
-                    (list "log"
-                          "--format=%H"
-                          "--reverse"
-                          (format nil "~A..HEAD" base-commit)
-                          "--"
-                          (durable-mutation-pathname mutation))))
-                 (commits
-                   (remove-if-not
-                    #'non-empty-string-p
-                    (uiop:split-string output
-                                       :separator '(#\Newline #\Return))))
-                 (proposed
-                   (self-read-form
-                    (durable-mutation-proposed-source mutation)
-                    :read-eval nil)))
-            (loop for commit in commits
-                  for source = (durable-mutation--revision-source
-                                configuration mutation commit)
-                  when (and source
-                            (durable-mutation--source-contains-definition-p
-                             source proposed))
-                    return commit))
-        (error ()
-          nil)))))
-
-(-> durable-mutation-mark-paths
-    (configuration list string)
-    list)
-(defun durable-mutation-mark-paths (configuration paths git-commit)
-  "Mark source-written mutations in committed PATHS durable at GIT-COMMIT."
-  (let ((marked nil))
-    (maphash
-     (lambda (identifier mutation)
-       (declare (ignore identifier))
-       (when (and (eq (durable-mutation-phase mutation) :source-written)
-                  (member (durable-mutation-pathname mutation)
-                          paths
-                          :test #'string=))
-         (if (durable-mutation-source-current-p configuration mutation)
-             (progn
-               (durable-mutation-transition configuration
-                                            mutation
-                                            :durable
-                                            :git-commit git-commit)
-               (push mutation marked))
-             (durable-mutation-transition
-              configuration
-              mutation
-              :superseded
-              :detail "Committed source no longer contains the proposed definition."))))
-     *durable-mutations*)
-    (nreverse marked)))
-
 (-> durable-mutations-reconcile (configuration) list)
 (defun durable-mutations-reconcile (configuration)
-  "Finish journal state for source-written mutations already committed to Git."
+  "Finish source-written mutations already present in a private image commit."
   (let ((reconciled nil))
     (maphash
      (lambda (identifier mutation)
-       (declare (ignore identifier))
-       (when (eq (durable-mutation-phase mutation) :source-written)
-         (let* ((pathname (durable-mutation-pathname mutation))
-                (dirty
-                  (self-git-command configuration
-                                    (list "status" "--porcelain" "--" pathname)))
-                (commit
-                  (and (zerop (length dirty))
-                       (durable-mutation-committing-revision
-                        configuration mutation))))
-           (when commit
-             (if (durable-mutation-source-current-p configuration mutation)
-                 (progn
-                   (durable-mutation-transition configuration
-                                                mutation
-                                                :durable
-                                                :git-commit commit
-                                                :detail
-                                                "Reconciled after Git committed before journal publication.")
-                   (push mutation reconciled))
-                 (durable-mutation-transition
-                  configuration
-                  mutation
-                  :superseded
-                  :detail "Committed source superseded the proposed definition."))))))
+       (when (member (durable-mutation-phase mutation)
+                     '(:checked :source-written)
+                     :test #'eq)
+         (when (image-commit-contains-mutation-p configuration identifier)
+           (when (eq (durable-mutation-phase mutation) :checked)
+             (durable-mutation-transition
+              configuration
+              mutation
+              :source-written
+              :detail
+              "Reconciled published private image-commit source."))
+           (durable-mutation-transition
+            configuration
+            mutation
+            :durable
+            :detail
+            "Reconciled after private image-commit publication.")
+           (push mutation reconciled))))
      *durable-mutations*)
     (nreverse reconciled)))
 
@@ -442,6 +324,8 @@ written before overlays existed, a tracked src/ file."
                              (configuration-source-root configuration)))
              (uiop:subpathp pathname
                             (configuration-overlay-root configuration))
+             (uiop:subpathp pathname
+                            (configuration-image-commit-root configuration))
              ;; Journals may be replayed under a different data root, so a
              ;; foreign overlays directory is still a recognizable location.
              (find "overlays"
@@ -536,10 +420,7 @@ written before overlays existed, a tracked src/ file."
 (defmethod tool-execute ((tool self-persist-definition-tool)
                          (context tool-context)
                          (arguments hash-table))
-  "Install, check, and persist one journaled definition to the overlay.
-
-The tracked source repository is never patched; the definition is written to
-an overlay file under the data root and loaded again at every startup."
+  "Install, check, and persist one definition in a private image commit."
   (declare (ignore tool))
   (with-live-mutation
     (let* ((definition-source
@@ -552,17 +433,23 @@ an overlay file under the data root and loaded again at every startup."
                :tool-name "self.persist-definition"
                :pathname (configuration-overlay-root configuration)))
       (let* ((target (definition-key definition))
-             (previous-source (or (overlay-read configuration target)
+             (commit-identifier (make-identifier))
+             (commit-directory
+               (image-commit--directory configuration commit-identifier))
+             (commit-script (merge-pathnames "reconstruct.lisp"
+                                             commit-directory))
+             (previous-source (or (image-commit-definition-source
+                                   configuration target)
+                                  (overlay-read configuration target)
                                   (durable-mutation--fallback-source
                                    configuration
                                    definition)
                                   ""))
-             (overlay (overlay-pathname configuration target))
              (mutation
                (durable-mutation-create configuration
                                         definition
                                         :relative-pathname
-                                        (namestring overlay)
+                                        (namestring commit-script)
                                         :previous-source previous-source
                                         :proposed-source definition-source))
              (checker (tool-context-effective-mutation-checker context)))
@@ -578,17 +465,28 @@ an overlay file under the data root and loaded again at every startup."
                                              configuration
                                              definition-source)
               (durable-mutation-transition configuration mutation :checked)
-              (overlay-write configuration target definition-source)
+              (let ((commit
+                      (image-commit-publish
+                       configuration
+                       (format nil "Persist definition ~A" target)
+                       nil
+                       (list
+                        (list :kind ':definition
+                              :id (durable-mutation-identifier mutation)
+                              :target target
+                              :source definition-source))
+                       :identifier commit-identifier)))
+                (declare (ignore commit)))
               (durable-mutation-transition configuration mutation
                                            :source-written)
               (durable-mutation-transition configuration mutation :durable)
               (tool-success
                (format nil
-                       "Mutation ~A installed, checked, and persisted to ~
-                        overlay ~A. Overlays load automatically at startup; ~
-                        the tracked source repository was not modified."
+                       "Mutation ~A installed, checked, and persisted as ~
+                        private image commit ~A.~%Replay script: ~A"
                        (durable-mutation-identifier mutation)
-                       (namestring overlay))))
+                       commit-identifier
+                       (namestring commit-script))))
           (error (condition)
             (when (and (member (durable-mutation-phase mutation)
                                '(:pending :installed :checked)
@@ -617,7 +515,7 @@ an overlay file under the data root and loaded again at every startup."
             (error condition)))))))
 
 
-;;;; -- Git Operations --
+;;;; -- Source Revision Boundary --
 
 (-> self-git-command (configuration list &key (:ignore-error-status boolean)) string)
 (defun self-git-command (configuration arguments &key ignore-error-status)
@@ -630,18 +528,6 @@ an overlay file under the data root and loaded again at every startup."
    :error-output :output
    :ignore-error-status ignore-error-status))
 
-(defmethod tool-execute ((tool self-diff-tool)
-                         (context tool-context)
-                         (arguments hash-table))
-  "Return the active Autolith source diff."
-  (declare (ignore tool arguments))
-  (let ((output (self-git-command
-                 (tool-context-configuration context)
-                 '("diff" "--"))))
-    (tool-success (if (non-empty-string-p output)
-                      output
-                      "The tracked worktree has no unstaged diff."))))
-
 (-> self-validate-commit-title (string) string)
 (defun self-validate-commit-title (title)
   "Return valid commit TITLE or signal a tool error."
@@ -653,98 +539,3 @@ an overlay file under the data root and loaded again at every startup."
            :message "A commit title must be one non-empty line under 72 characters."
            :tool-name "self.commit"))
   title)
-
-(-> self-require-source-workspace (configuration) null)
-(defun self-require-source-workspace (configuration)
-  "Require Autolith's tracked source tree to contain the current workspace."
-  (unless (uiop:subpathp (configuration-working-directory configuration)
-                         (configuration-source-root configuration))
-    (error 'tool-error
-           :message
-           "self.commit only commits user-directed changes to Autolith's own source repository while that repository is the current workspace. Use ordinary workspace Git commands for an unrelated repository."
-           :tool-name "self.commit"))
-  nil)
-
-(-> self-validate-commit-paths (configuration vector) list)
-(defun self-validate-commit-paths (configuration paths)
-  "Return validated repository-relative PATHS beneath CONFIGURATION's source root."
-  (unless (plusp (length paths))
-    (error 'tool-error
-           :message "self.commit requires at least one explicit path."
-           :tool-name "self.commit"))
-  (let* ((source-root (configuration-source-root configuration))
-         (launcher-root (merge-pathnames "bin/" source-root))
-         (recovery-root (merge-pathnames "recovery/" source-root)))
-    (loop for path across paths
-          for pathname = (and (non-empty-string-p path)
-                              (merge-pathnames path source-root))
-          do (unless (and pathname (uiop:subpathp pathname source-root))
-               (error 'tool-error
-                      :message (format nil "Commit path ~S is outside the repository." path)
-                      :tool-name "self.commit"))
-             (when (or (uiop:subpathp pathname launcher-root)
-                       (uiop:subpathp pathname recovery-root)
-                       (string= (enough-namestring pathname source-root)
-                                "script/build-recovery"))
-               (error 'tool-error
-                      :message (format nil
-                                       "Normal self tools cannot commit stable artifact ~S."
-                                       path)
-                      :tool-name "self.commit"))
-          collect (enough-namestring pathname source-root))))
-
-(defmethod tool-execute ((tool self-commit-tool)
-                         (context tool-context)
-                         (arguments hash-table))
-  "Check, commit, and durably journal the explicit paths supplied in ARGUMENTS."
-  (declare (ignore tool))
-  (with-live-mutation
-    (let* ((configuration (tool-context-configuration context))
-           (title (self-validate-commit-title
-                   (tool-argument arguments "title" :required t)))
-           (raw-paths (tool-argument arguments "paths" :required t)))
-      (self-require-source-workspace configuration)
-      (unless (vectorp raw-paths)
-        (error 'tool-error
-               :message "self.commit paths must be a JSON array."
-               :tool-name "self.commit"))
-      (let ((paths (self-validate-commit-paths configuration raw-paths)))
-        (handler-case
-            (progn
-              (mutation-checker-check-source
-               (tool-context-effective-mutation-checker context)
-               configuration
-               paths)
-              (self-git-command configuration
-                                (append '("diff" "--check" "--") paths))
-              (let* ((output
-                       (self-git-command
-                        configuration
-                        (append (list "commit" "-m" title "--only" "--") paths)))
-                     (commit
-                       (string-trim
-                        '(#\Space #\Tab #\Newline #\Return)
-                        (self-git-command configuration '("rev-parse" "HEAD"))))
-                     (durable-mutations
-                       (durable-mutation-mark-paths configuration paths commit)))
-                (mutation-journal-append
-                 configuration
-                 (list :mutation
-                       :kind :commit
-                       :paths paths
-                       :title title
-                       :git-commit commit
-                       :durable-mutations
-                       (mapcar #'durable-mutation-identifier durable-mutations)
-                       :result :committed))
-                (tool-success output)))
-          (error (condition)
-            (mutation-journal-append
-             configuration
-             (list :mutation
-                   :kind :commit
-                   :paths paths
-                   :title title
-                   :result :failed
-                   :condition (bounded-string condition :limit 2000)))
-            (error condition)))))))

@@ -31,6 +31,7 @@
                              (:file "self-tools")
                              (:file "overlays")
                              (:file "durable-mutations")
+                             (:file "image-commits")
                              (:file "generations")
                              (:file "agent")
                              (:file "terminal")

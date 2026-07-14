@@ -90,6 +90,15 @@
 (defvar *live-mutation-lock* (make-recursive-lock "Autolith live mutation")
   "The process-wide lock serializing active-image and durable mutations.")
 
+(defvar *active-image-lineage-identifier* nil
+  "The journal lineage receiving mutations from the running image branch.")
+
+(defvar *image-state-initialized-p* nil
+  "True after startup selected the image commit represented by this heap.")
+
+(defvar *active-image-commit-identifier* nil
+  "The private image commit represented by the running image, or NIL for base.")
+
 (defmacro with-live-mutation (&body body)
   "Evaluate BODY while excluding checkpoints and other live mutations."
   `(with-recursive-lock-held (*live-mutation-lock*)
@@ -359,12 +368,15 @@ protocol."
                :message "self.redefine accepts one complete supported definition."
                :tool-name "self.redefine"
                :pathname nil))
-      (let ((key (definition-key definition))
+      (let ((identifier (make-identifier))
+            (key (definition-key definition))
             (previous (self-previous-definition definition)))
         (mutation-journal-append
          configuration
          (list :mutation
                :kind :definition
+               :id identifier
+               :lineage *active-image-lineage-identifier*
                :target key
                :previous previous
                :proposed source
@@ -375,6 +387,8 @@ protocol."
                configuration
                (list :mutation
                      :kind :definition
+                     :id identifier
+                     :lineage *active-image-lineage-identifier*
                      :target key
                      :previous previous
                      :proposed source
@@ -385,6 +399,8 @@ protocol."
              configuration
              (list :mutation
                    :kind :definition
+                   :id identifier
+                   :lineage *active-image-lineage-identifier*
                    :target key
                    :previous previous
                    :proposed source
@@ -411,7 +427,8 @@ protocol."
   "Set one active global binding after journaling its previous value."
   (declare (ignore tool))
   (with-live-mutation
-    (let* ((symbol (self-resolve-symbol
+    (let* ((identifier (make-identifier))
+           (symbol (self-resolve-symbol
                     (tool-argument arguments "symbol" :required t)))
            (value-source (tool-argument arguments "value" :required t))
            (configuration (tool-context-configuration context))
@@ -421,28 +438,46 @@ protocol."
        configuration
        (list :mutation
              :kind :set
+             :id identifier
+             :lineage *active-image-lineage-identifier*
              :target (write-to-string symbol)
              :previous previous
              :proposed value-source
              :result :pending))
-      (let ((value (self-call-with-restarts
-                    (lambda ()
-                      (let ((evaluated (eval (self-read-form value-source))))
-                        (setf (symbol-value symbol) evaluated)
-                        evaluated))
-                    :restart-name (tool-argument arguments "restart")
-                    :restart-value-source (tool-argument arguments
-                                                         "restart-value"))))
-        (mutation-journal-append
-         configuration
-         (list :mutation
-               :kind :set
-               :target (write-to-string symbol)
-               :previous previous
-               :proposed value-source
-               :result :installed))
-        (tool-success
-         (format nil "~S is now ~A." symbol (worker-render-value value)))))))
+      (handler-case
+          (let ((value (self-call-with-restarts
+                        (lambda ()
+                          (let ((evaluated (eval (self-read-form value-source))))
+                            (setf (symbol-value symbol) evaluated)
+                            evaluated))
+                        :restart-name (tool-argument arguments "restart")
+                        :restart-value-source (tool-argument arguments
+                                                             "restart-value"))))
+            (mutation-journal-append
+             configuration
+             (list :mutation
+                   :kind :set
+                   :id identifier
+                   :lineage *active-image-lineage-identifier*
+                   :target (write-to-string symbol)
+                   :previous previous
+                   :proposed value-source
+                   :result :installed))
+            (tool-success
+             (format nil "~S is now ~A." symbol (worker-render-value value))))
+        (error (condition)
+          (mutation-journal-append
+           configuration
+           (list :mutation
+                 :kind :set
+                 :id identifier
+                 :lineage *active-image-lineage-identifier*
+                 :target (write-to-string symbol)
+                 :previous previous
+                 :proposed value-source
+                 :result :failed
+                 :condition (bounded-string condition :limit 2000)))
+          (error condition))))))
 
 
 ;;;; -- Form-Aware Source Persistence --

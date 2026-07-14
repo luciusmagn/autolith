@@ -60,7 +60,7 @@ of Autolith's tracked source is writable only when the workspace itself is
 inside the source root, meaning the user deliberately runs Autolith as a
 development agent on its own repository. From any other workspace Autolith
 never reaches into its own source, and live self-modification persists
-through overlays instead."
+through private image commits instead."
   (let* ((configuration (tool-context-configuration context))
          (source-root (configuration-source-root configuration)))
     (cond

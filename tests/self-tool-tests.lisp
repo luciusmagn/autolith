@@ -7,6 +7,9 @@
   "Return the baseline value used by active-image mutation tests."
   0)
 
+(defvar *test-self-setting* :baseline
+  "The mutable binding used by private image-commit replay tests.")
+
 (-> test-self-tools () null)
 (defun test-self-tools ()
   "Test active definition installation, inspection, and form-aware persistence."
@@ -21,6 +24,22 @@
             "(defun test-self-target () \"Return the installed test value.\" 42)")
            (test-assert (= (test-self-target) 42)
                         "self definition installation mutates the active image")
+           (let ((records
+                   (remove-if-not
+                    (lambda (record)
+                      (and (eq (first record) :mutation)
+                           (eq (getf (rest record) :kind) :definition)
+                           (string= (getf (rest record) :target)
+                                    (definition-key
+                                     '(defun test-self-target () 0)))))
+                    (mutation-journal-read-records configuration))))
+             (test-assert (= (length records) 2)
+                          "definition installation journals two state records")
+             (test-assert
+              (and (non-empty-string-p (getf (rest (first records)) :id))
+                   (string= (getf (rest (first records)) :id)
+                            (getf (rest (second records)) :id)))
+              "definition journal states share one stable mutation identifier"))
            (test-assert
             (search "Return the installed test value."
                     (self-inspect-symbol 'test-self-target))
@@ -63,16 +82,6 @@
             "definition identity accepts SETF function names")
            (test-assert (definition-form-p '(defparameter *sample-value* 42))
                         "durable definitions include mutable global parameters")
-           (test-assert
-            (handler-case
-                (progn
-                  (self-validate-commit-paths configuration
-                                              (json-array
-                                               "script/build-recovery"))
-                  nil)
-              (tool-error ()
-                t))
-            "normal self commits cannot replace the pristine recovery builder")
            (let ((original
                    (make-condition 'simple-error
                                    :format-control "original failure"
@@ -193,7 +202,7 @@
 
 (-> test-durable-self-mutation () null)
 (defun test-durable-self-mutation ()
-  "Test checked live installation, overlay persistence, and startup replay."
+  "Test private live-mutation commits, replay, and legacy overlay migration."
   (let* ((source-root
            (uiop:ensure-directory-pathname
             (merge-pathnames
@@ -206,6 +215,10 @@
                              (uiop:temporary-directory))))
          (source-pathname (merge-pathnames "src/definitions.lisp" source-root))
          (previous-function (symbol-function 'test-self-target))
+         (previous-setting *test-self-setting*)
+         (previous-state-initialized-p *image-state-initialized-p*)
+         (previous-commit-identifier *active-image-commit-identifier*)
+         (previous-lineage-identifier *active-image-lineage-identifier*)
          (active-check-count 0)
          (source-check-count 0)
          (checker
@@ -232,9 +245,11 @@
              (format stream
                      "(in-package #:autolith)~%~%(defun test-self-target () \"Return the durable baseline.\" 0)~%"))
            (self-git-command configuration '("init" "--quiet"))
-           (self-git-command configuration '("config" "user.name" "Autolith Test"))
            (self-git-command configuration
-                             '("config" "user.email" "autolith-test@example.invalid"))
+                             '("config" "user.name" "Autolith Test"))
+           (self-git-command
+            configuration
+            '("config" "user.email" "autolith-test@example.invalid"))
            (self-git-command configuration '("add" "src/definitions.lisp"))
            (self-git-command configuration
                              '("commit" "--quiet" "-m" "Create baseline"))
@@ -290,10 +305,42 @@
                   (persist-tool (tool-registry-find registry
                                                     "self"
                                                     "persist-definition"))
+                  (set-tool (tool-registry-find registry "self" "set"))
+                  (diff-tool (tool-registry-find registry "self" "diff"))
                   (commit-tool (tool-registry-find registry "self" "commit"))
-                  (overlay (overlay-pathname
-                            configuration
-                            (definition-key '(defun test-self-target () 0)))))
+                  (broken (merge-pathnames
+                           "broken.lisp"
+                           (configuration-overlay-root configuration))))
+             (overlay-write
+              configuration
+              "(defun test-legacy-image-target)"
+              "(defun test-legacy-image-target () \"Return migrated state.\" 9)")
+             (eval '(define-constant +overlay-constant-trial+ 1 :test #'=))
+             (overlay-write
+              configuration
+              "(alexandria:define-constant +overlay-constant-trial+)"
+              (format nil
+                      "(define-constant +overlay-constant-trial+ 2 :test #'=)"))
+             (ensure-directories-exist broken)
+             (with-open-file (stream broken
+                                     :direction :output
+                                     :if-exists :supersede
+                                     :if-does-not-exist :create
+                                     :external-format :utf-8)
+               (write-string "(defun test-broken-overlay (" stream))
+             (setf *image-state-initialized-p* nil
+                   *active-image-commit-identifier* nil
+                   *active-image-lineage-identifier* nil)
+             (let ((failures (image-state-load configuration)))
+               (test-assert (= (length failures) 1)
+                            "legacy startup reports one broken overlay")
+               (test-assert (= (test-legacy-image-target) 9)
+                            "legacy startup loads valid definitions past failures")
+               (test-assert (= (symbol-value '+overlay-constant-trial+) 2)
+                            "legacy constant overlays continue deliberately"))
+             (delete-file broken)
+             (test-assert (null (image-commit-current configuration))
+                          "legacy overlays begin without a private image commit")
              (test-assert
               (handler-case
                   (progn
@@ -306,128 +353,227 @@
                     nil)
                 (error ()
                   t))
-              "a failing active check rejects durable persistence")
+              "a failing active check rejects private persistence")
              (test-assert (= (test-self-target) 0)
                           "a rejected definition restores the previous behavior")
-             (test-assert (not (uiop:file-exists-p overlay))
-                          "a rejected definition writes no overlay")
-             (let ((result
-                     (tool-execute
-                      persist-tool
-                      context
-                      (json-object
-                       "definition"
-                       "(defun test-self-target () \"Return the durable value.\" 84)"))))
+             (test-assert
+              (null (image-commit--pointer-identifier configuration))
+              "a rejected definition publishes no private commit")
+             (let* ((result
+                      (tool-execute
+                       persist-tool
+                       context
+                       (json-object
+                        "definition"
+                        "(defun test-self-target () \"Return the durable value.\" 84)")))
+                    (first-commit (image-commit-current configuration)))
                (test-assert (tool-result-success-p result)
-                            "durable persistence succeeds after active checks")
-               (test-assert (search "overlay" (tool-result-content result))
-                            "the persistence result names the overlay"))
-             (test-assert (= (test-self-target) 84)
-                          "durable persistence installs the live definition")
-             (test-assert (= active-check-count 1)
-                          "durable persistence runs active checks exactly once")
-             (test-assert (uiop:file-exists-p overlay)
-                          "durable persistence writes the overlay file")
-             (test-assert (search "Return the durable value."
-                                  (uiop:read-file-string overlay))
-                          "the overlay carries the complete definition")
-             (test-assert (search "Return the durable baseline."
-                                  (uiop:read-file-string source-pathname))
-                          "the tracked source is never modified")
+                            "durable definition persistence succeeds")
+               (test-assert (search "private image commit"
+                                    (tool-result-content result))
+                            "the persistence result identifies private storage")
+               (test-assert first-commit
+                            "durable persistence selects a private commit")
+               (test-assert
+                (uiop:subpathp (image-commit-script-pathname first-commit)
+                               (configuration-image-commit-root configuration))
+                "the reconstruction script stays under private Autolith data")
+               (test-assert
+                (search "Return the durable value."
+                        (uiop:read-file-string
+                         (image-commit-script-pathname first-commit)))
+                "the private script contains the complete definition")
+               (test-assert
+                (search "Return migrated state."
+                        (uiop:read-file-string
+                         (image-commit-script-pathname first-commit)))
+                "the first private commit migrates legacy overlays")
+               (test-assert (= active-check-count 1)
+                            "durable persistence checks the active image once")
+               (let ((first-identifier (image-commit-identifier first-commit)))
+                 (tool-execute
+                  persist-tool
+                  context
+                  (json-object
+                   "definition"
+                   "(defun test-self-target () \"Return the second value.\" 85)"))
+                 (let* ((second-commit (image-commit-current configuration))
+                        (script (uiop:read-file-string
+                                 (image-commit-script-pathname second-commit))))
+                   (test-assert
+                    (string= (or (image-commit-parent-identifier second-commit) "")
+                             first-identifier)
+                    "private definition commits form an immutable lineage")
+                   (test-assert
+                    (and (search "Return the second value." script)
+                         (not (search "Return the durable value." script)))
+                    "a full replay snapshot retains only the effective definition"))))
+             (test-assert (= (test-self-target) 85)
+                          "private persistence installs the latest definition")
+             (test-assert (= active-check-count 2)
+                          "each durable definition is checked exactly once")
+             (test-assert
+              (search "Return the durable baseline."
+                      (uiop:read-file-string source-pathname))
+              "private persistence never modifies tracked source")
              (let ((mutation
-                     (loop for value being the hash-values of *durable-mutations*
-                           when (and (string= (durable-mutation-target value)
-                                              (definition-key
-                                               '(defun test-self-target () 0)))
-                                     (eq (durable-mutation-phase value)
-                                         :durable))
+                     (loop for value being the hash-values
+                             of *durable-mutations*
+                           when (and
+                                 (string=
+                                  (durable-mutation-target value)
+                                  (definition-key
+                                   '(defun test-self-target () 0)))
+                                 (eq (durable-mutation-phase value) :durable))
                              return value)))
                (test-assert mutation
-                            "overlay persistence is durable immediately")
+                            "private definition persistence becomes durable")
                (let ((identifier (durable-mutation-identifier mutation)))
                  (clrhash *durable-mutations*)
                  (durable-mutations-load configuration)
-                 (let ((reloaded (gethash identifier *durable-mutations*)))
-                   (test-assert (and reloaded
-                                     (eq (durable-mutation-phase reloaded)
-                                         :durable))
-                                "durable overlay state replays from the journal"))))
+                 (test-assert
+                  (eq (durable-mutation-phase
+                       (gethash identifier *durable-mutations*))
+                      :durable)
+                  "durable private state replays from the journal")))
+             (let ((failed-result
+                     (handler-case
+                         (progn
+                           (tool-execute
+                            set-tool
+                            context
+                            (json-object
+                             "symbol" "*test-self-setting*"
+                             "value" "(error \"Rejected setting.\")"))
+                           nil)
+                       (error ()
+                         t))))
+               (test-assert failed-result
+                            "a failed self.set operation escapes as a failure"))
              (tool-execute
-              persist-tool
+              set-tool
               context
               (json-object
-               "definition"
-               "(defun test-self-target () \"Return the second value.\" 85)"))
-             (test-assert (= (test-self-target) 85)
-                          "overlay persistence replaces the live definition")
-             (let ((overlay-source (uiop:read-file-string overlay)))
-               (test-assert (and (search "Return the second value."
-                                         overlay-source)
-                                 (not (search "Return the durable value."
-                                              overlay-source)))
-                            "the overlay holds exactly the newest definition"))
-             (setf (symbol-function 'test-self-target) previous-function)
-             (test-assert (null (overlay-load-all configuration))
-                          "overlay loading reports no failures")
-             (test-assert (= (test-self-target) 85)
-                          "startup overlay loading restores definitions")
-             (let ((broken (merge-pathnames
-                            "broken.lisp"
-                            (configuration-overlay-root configuration))))
-               (with-open-file (stream broken
-                                       :direction :output
-                                       :if-exists :supersede
-                                       :if-does-not-exist :create
-                                       :external-format :utf-8)
-                 (write-string "(defun test-broken-overlay (" stream))
-               (let ((failures (overlay-load-all configuration)))
-                 (test-assert (= (length failures) 1)
-                              "a broken overlay is reported as one failure")
-                 (test-assert (= (test-self-target) 85)
-                              "later overlays still load past a broken one")
-                 (delete-file broken)))
-             (eval '(define-constant +overlay-constant-trial+ 1 :test #'=))
-             (overlay-write configuration
-                            "(alexandria:define-constant +overlay-constant-trial+)"
-                            (format nil "(define-constant ~
-                                         +overlay-constant-trial+ 2 ~
-                                         :test #'=)"))
-             (test-assert (null (overlay-load-all configuration))
-                          "constant overlays replay without re-asking")
-             (test-assert (= (symbol-value '+overlay-constant-trial+) 2)
-                          "constant overlays continue deliberately at startup")
+               "symbol" "*test-self-setting*"
+               "value" ":committed-setting"))
+             (self-install-definition
+              configuration
+              "(defun test-self-target () \"Return the staged value.\" 86)")
+             (let* ((set-records
+                      (remove-if-not
+                       (lambda (record)
+                         (and (eq (first record) :mutation)
+                              (eq (getf (rest record) :kind) :set)
+                              (string= (getf (rest record) :target)
+                                       "AUTOLITH::*TEST-SELF-SETTING*")))
+                       (mutation-journal-read-records configuration)))
+                    (failed-id (getf (rest (first set-records)) :id))
+                    (installed-id (getf (rest (third set-records)) :id)))
+               (test-assert (= (length set-records) 4)
+                            "failed and successful sets each journal two states")
+               (test-assert
+                (and (string= failed-id
+                              (getf (rest (second set-records)) :id))
+                     (string= installed-id
+                              (getf (rest (fourth set-records)) :id))
+                     (not (string= failed-id installed-id)))
+                "each set operation keeps one distinct stable identifier"))
+             (let ((diff
+                     (tool-execute diff-tool context (json-object))))
+               (test-assert
+                (and (tool-result-success-p diff)
+                     (search "Return the staged value."
+                             (tool-result-content diff))
+                     (search ":committed-setting"
+                             (tool-result-content diff)))
+                "self.diff shows pending reconstructible image mutations"))
+             (test-assert (= (length (image-commit-pending-records configuration))
+                             2)
+                          "only successful uncommitted mutations are staged")
              (with-open-file (stream source-pathname
                                      :direction :output
                                      :if-exists :append
                                      :external-format :utf-8)
                (format stream "~%;; A user-made repository change.~%"))
+             (let* ((head-before
+                      (string-trim
+                       '(#\Space #\Tab #\Newline #\Return)
+                       (self-git-command configuration '("rev-parse" "HEAD"))))
+                    (parent-before
+                      (image-commit-identifier
+                       (image-commit-current configuration)))
+                    (result
+                      (tool-execute
+                       commit-tool
+                       outside-context
+                       (json-object
+                        "title" "Persist staged live mutations")))
+                    (committed (image-commit-current configuration))
+                    (script
+                      (uiop:read-file-string
+                       (image-commit-script-pathname committed)))
+                    (head-after
+                      (string-trim
+                       '(#\Space #\Tab #\Newline #\Return)
+                       (self-git-command configuration '("rev-parse" "HEAD")))))
+               (test-assert (tool-result-success-p result)
+                            "self.commit persists staged live mutations")
+               (test-assert
+                (string= (or (image-commit-parent-identifier committed) "")
+                         parent-before)
+                "self.commit advances the active private lineage")
+               (test-assert
+                (and (search "Return the staged value." script)
+                     (search ":committed-setting" script))
+                "self.commit writes a complete executable replay script")
+               (test-assert
+                (uiop:subpathp (image-commit-manifest-pathname committed)
+                               (configuration-data-root configuration))
+                "self.commit writes only beneath private Autolith data")
+               (test-assert
+                (uiop:subpathp
+                 (configuration-current-image-commit-path configuration)
+                 (configuration-state-root configuration))
+                "self.commit selects its result beneath private Autolith state")
+               (test-assert (string= head-before head-after)
+                            "self.commit never creates a Git commit")
+               (test-assert
+                (search "A user-made repository change."
+                        (uiop:read-file-string source-pathname))
+                "self.commit leaves tracked workspace changes untouched"))
+             (test-assert (= source-check-count 0)
+                          "private image commits never run source Git checks")
+             (test-assert (= active-check-count 3)
+                          "self.commit checks the active image exactly once")
+             (test-assert
+              (null (image-commit-pending-records configuration))
+              "self.commit consumes every successful staged mutation")
+             (setf (symbol-function 'test-self-target) previous-function
+                   *test-self-setting* :baseline)
+             (test-assert (null (image-state-load configuration))
+                          "private startup replay loads without failures")
+             (test-assert (= (test-self-target) 86)
+                          "startup replay reconstructs committed definitions")
+             (test-assert (eq *test-self-setting* :committed-setting)
+                          "startup replay reconstructs committed global state")
              (test-assert
               (handler-case
                   (progn
                     (tool-execute
                      commit-tool
-                     outside-context
-                     (json-object
-                      "title" "Misroute an unrelated workspace commit"
-                      "paths" (json-array "src/definitions.lisp")))
+                     context
+                     (json-object "title" "Commit nothing"))
                     nil)
-                (tool-error (condition)
-                  (search "current workspace" (autolith-error-message condition))))
-              "self.commit refuses Autolith source commits from another workspace")
-             (test-assert (= source-check-count 0)
-                          "a refused cross-workspace commit runs no source checks")
-             (test-assert
-              (tool-result-success-p
-               (tool-execute
-                commit-tool
-                context
-                (json-object
-                 "title" "Record a user-directed change"
-                 "paths" (json-array "src/definitions.lisp"))))
-              "self.commit still serves explicit user-directed commits")
-             (test-assert (= source-check-count 1)
-                          "self.commit runs clean-source checks exactly once")))
-      (setf (symbol-function 'test-self-target) previous-function)
+                (image-commit-error ()
+                  t))
+              "self.commit refuses an empty private commit")))
+      (setf (symbol-function 'test-self-target) previous-function
+            *test-self-setting* previous-setting
+            *image-state-initialized-p* previous-state-initialized-p
+            *active-image-commit-identifier* previous-commit-identifier
+            *active-image-lineage-identifier* previous-lineage-identifier)
+      (when (fboundp 'test-legacy-image-target)
+        (fmakunbound 'test-legacy-image-target))
       (let ((test-identifiers nil))
         (maphash
          (lambda (identifier mutation)

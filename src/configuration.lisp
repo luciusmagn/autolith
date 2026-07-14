@@ -291,6 +291,17 @@ Selecting a different model recomputes the context window for that model."
   "Return the directory of self-modification overlays loaded at startup."
   (merge-pathnames "overlays/" (configuration-data-root configuration)))
 
+(-> configuration-image-commit-root (configuration) pathname)
+(defun configuration-image-commit-root (configuration)
+  "Return the directory containing immutable private image commits."
+  (merge-pathnames "image-commits/" (configuration-data-root configuration)))
+
+(-> configuration-current-image-commit-path (configuration) pathname)
+(defun configuration-current-image-commit-path (configuration)
+  "Return the atomic pointer to the image commit used by normal startup."
+  (merge-pathnames "current-image-commit.sexp"
+                   (configuration-state-root configuration)))
+
 (-> configuration-auth-path (configuration) pathname)
 (defun configuration-auth-path (configuration)
   "Return Autolith's private OAuth credential pathname."
