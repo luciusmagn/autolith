@@ -33,6 +33,9 @@
   (format t "~&Materializing locked Lisp dependencies.~%")
   (finish-output)
   (uiop:symbol-call '#:qlot '#:install)
+  (format t "~&Building the private fff search library.~%")
+  (finish-output)
+  (load (merge-pathnames "script/build-fff.lisp" source-root))
   (format t "~&Building the pristine recovery image.~%")
   (finish-output)
   (uiop:run-program (list sbcl-command
@@ -51,4 +54,4 @@
                     :input :interactive
                     :output :interactive
                     :error-output :interactive)
-  (format t "~&Autolith dependencies, recovery image, and fast startup image are installed.~%"))
+  (format t "~&Autolith dependencies, private search library, recovery image, and fast startup image are installed.~%"))

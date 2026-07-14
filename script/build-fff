@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
+source_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
+
+exec "$source_root/bin/autolith-runtime" --install \
+  --script "$source_root/script/build-fff.lisp" "$@"

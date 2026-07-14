@@ -45,8 +45,9 @@ user's privileges.
 
 * Quick start
 
-Autolith needs Git, OpenSSL, Quicklisp, =curl=, GNU =tar=, and =sha256sum=.
-The repository pins SBCL and every Lisp dependency.
+Autolith needs Git, OpenSSL, Quicklisp, =curl=, GNU =tar=, =sha256sum=, Rust
+with Cargo, a C compiler, CMake, and =pkg-config=. The repository pins SBCL,
+every Lisp dependency, and the fff search library source revision.
 
 #+BEGIN_SRC sh
 ./script/bootstrap
