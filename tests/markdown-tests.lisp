@@ -38,6 +38,28 @@
                                (<= (terminal--spans-width row) 16))
                              rows))
                  "inline-only rendering wraps within its exact width"))
+  (let* ((renderer (markdown-renderer-create :width 60))
+         (row (first (markdown-render-line
+                      renderer
+                      "3. **Bump to `0.10.1`**"))))
+    (test-assert
+     (string= (markdown-tests--row-text row) "  3. Bump to 0.10.1")
+     "inline code inside strong text consumes both outer delimiters")
+    (test-assert (find (terminal-span :strong "Bump to ") row :test #'equal)
+                 "strong styling resumes around nested inline code")
+    (test-assert (find (terminal-span :code "0.10.1") row :test #'equal)
+                 "nested inline code keeps its code style"))
+  (let* ((renderer (markdown-renderer-create :width 60))
+         (row (first (markdown-render-line
+                      renderer
+                      "*inspect `src/main.lisp` now*"))))
+    (test-assert
+     (string= (markdown-tests--row-text row) "  inspect src/main.lisp now")
+     "inline code inside emphasis consumes both outer delimiters")
+    (test-assert (find (terminal-span :emphasis "inspect ") row :test #'equal)
+                 "emphasis styling precedes nested inline code")
+    (test-assert (find (terminal-span :emphasis " now") row :test #'equal)
+                 "emphasis styling resumes after nested inline code"))
   (let ((literal-cases '(("2 * 3 * 4" "spaced asterisks stay literal")
                          ("unclosed **bold" "unclosed markers stay literal")
                          ("lonely ` backtick" "unpaired backticks stay literal"))))

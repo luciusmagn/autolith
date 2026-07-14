@@ -84,6 +84,7 @@ within TEXT. Unpaired delimiters stay literal."
                               :fill-pointer 0))
         (styles (make-array (length text) :adjustable t :fill-pointer 0))
         (mode ':plain)
+        (code-return-mode ':plain)
         (index 0))
     (labels ((emit ()
                "Copy the current source character with the active style."
@@ -106,12 +107,13 @@ within TEXT. Unpaired delimiters stay literal."
                  ((eq mode ':code)
                   (if (char= (char text index) #\`)
                       (progn
-                        (setf mode ':plain)
+                        (setf mode code-return-mode)
                         (incf index))
                       (emit)))
                  ((and (char= (char text index) #\`)
                        (position #\` text :start (1+ index)))
-                  (setf mode ':code)
+                  (setf code-return-mode mode
+                        mode ':code)
                   (incf index))
                  ((eq mode ':strong)
                   (if (and (marker-p "**") (closable-p))
