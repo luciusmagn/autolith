@@ -1246,6 +1246,15 @@
 (-> test-conversation-picker () null)
 (defun test-conversation-picker ()
   "Test saved-conversation picker items and interactive selection."
+  (multiple-value-bind (requested-p identifier)
+      (main--resume-selection '("resume"))
+    (test-assert (and requested-p (null identifier))
+                 "plain resume requests the interactive conversation picker"))
+  (multiple-value-bind (requested-p identifier)
+      (main--resume-selection '("--resume" "saved-conversation"))
+    (test-assert (and requested-p
+                      (string= identifier "saved-conversation"))
+                 "resume options still accept an explicit conversation identifier"))
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration)))
     (unwind-protect

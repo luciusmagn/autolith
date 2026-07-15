@@ -190,8 +190,10 @@
                                    (application--resume-command application)))))))
         nil)))
 
-(-> application-run (application) null)
-(defun application-run (application)
+(-> application-run
+    (application &key (:initial-command (option string)))
+    null)
+(defun application-run (application &key initial-command)
   "Run APPLICATION with responsive input, always restoring terminal and workers."
   (let ((ui (application-ui application))
         (worker (application-worker application))
@@ -218,6 +220,9 @@
            (application-render-records application)
            (setf input-controller
                  (application-input-controller-create application))
+           (when initial-command
+             (application-input-controller--enqueue
+              input-controller ':command initial-command))
            ;; Entering the interactive debugger would hang the raw terminal,
            ;; so any debugger entry becomes the fatal recovery path instead.
            (let ((*checkpoint-thread-quiescer*
@@ -271,7 +276,8 @@
 (-> main-usage () string)
 (defun main-usage ()
   "Return the command-line usage text."
-  "Usage: autolith [--resume ID]
+  "Usage: autolith [--resume [ID]]
+       autolith resume [ID]
        autolith --auth
        autolith --version
        autolith --recovery [--generation ID | --list]")
@@ -288,6 +294,22 @@
   (format t "~&ChatGPT authentication was saved by Autolith.~%")
   nil)
 
+(-> main--resume-selection (list) (values boolean (option string)))
+(defun main--resume-selection (arguments)
+  "Return whether ARGUMENTS request resume and their optional identifier."
+  (let ((position
+          (position-if (lambda (argument)
+                         (member argument '("resume" "--resume")
+                                 :test #'string=))
+                       arguments)))
+    (if position
+        (let ((candidate (nth (1+ position) arguments)))
+          (values t
+                  (and (non-empty-string-p candidate)
+                       (not (uiop:string-prefix-p "-" candidate))
+                       candidate)))
+        (values nil nil))))
+
 (-> main-dispatch (list) null)
 (defun main-dispatch (arguments)
   "Dispatch validated Autolith ARGUMENTS inside the active process."
@@ -301,11 +323,10 @@
      (format t "~A~%" (main-usage)))
     (t
      (let* ((configuration (configuration-create))
-            (resume-position (position "--resume" arguments :test #'string=))
-            (resume-id (and resume-position
-                            (nth (1+ resume-position) arguments))))
-       (when (and resume-position (not (non-empty-string-p resume-id)))
-         (error 'configuration-error :message "--resume requires an identifier."))
+            (resume-selection
+              (multiple-value-list (main--resume-selection arguments)))
+            (resume-requested-p (first resume-selection))
+            (resume-id (second resume-selection)))
        (cond
          ((member "--auth" arguments :test #'string=)
           (main-authenticate configuration))
@@ -326,7 +347,11 @@
               (format *error-output* "Intentional crash capsule: ~A~%" capsule)
               (uiop:quit +main-fatal-recovery-status+)))
           (handler-case
-              (application-run *active-application*)
+              (application-run
+               *active-application*
+               :initial-command (and resume-requested-p
+                                     (null resume-id)
+                                     "/resume"))
             (rollback-requested (condition)
               (format *error-output*
                       "Autolith is rolling back to retained generation ~A.~%"

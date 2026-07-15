@@ -181,6 +181,8 @@ prefix from before selection. The commands are:
 =/resume=, =/rollback=, =/model=, and =/effort= open a vertical interactive
 picker; each also accepts an explicit argument. Tab cycles the picker alongside
 Up and Down navigation. Conversations and generations are listed newest first.
+From the shell, =autolith resume= and =autolith --resume= open the same picker;
+either spelling may be followed by an explicit conversation identifier.
 Conversations remember the directory they were started in, and the picker
 shows it.
 
