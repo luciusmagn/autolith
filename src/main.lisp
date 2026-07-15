@@ -58,17 +58,23 @@
            (application--banner-metadata-field
             "workspace"
             (namestring (configuration-working-directory configuration))))
-         (detail-rows (list title model workspace))
+         (mode
+           (and (configuration-immutable-p configuration)
+                (application--banner-metadata-field "mode" "immutable")))
+         (detail-rows (append (list title model workspace)
+                              (when mode (list mode))))
          (divider-width
            (min maximum-width
                 (loop for row in detail-rows
                       maximize (terminal--spans-width row)))))
-    (list title
-          (list (terminal-span
-                 :dim
-                 (make-string divider-width :initial-element #\─)))
-          model
-          workspace)))
+    (append
+     (list title
+           (list (terminal-span
+                  :dim
+                  (make-string divider-width :initial-element #\─)))
+           model
+           workspace)
+     (when mode (list mode)))))
 
 (-> application--banner-terminate-row (list) list)
 (defun application--banner-terminate-row (spans)
@@ -276,7 +282,7 @@
 (-> main-usage () string)
 (defun main-usage ()
   "Return the command-line usage text."
-  "Usage: autolith [--resume [ID]]
+  "Usage: autolith [--immutable] [--resume [ID]]
        autolith resume [ID]
        autolith --auth
        autolith --version
@@ -322,7 +328,9 @@
          (member "-h" arguments :test #'string=))
      (format t "~A~%" (main-usage)))
     (t
-     (let* ((configuration (configuration-create))
+     (let* ((immutable-p (not (null (member "--immutable" arguments
+                                            :test #'string=))))
+            (configuration (configuration-create :immutable-p immutable-p))
             (resume-selection
               (multiple-value-list (main--resume-selection arguments)))
             (resume-requested-p (first resume-selection))
@@ -334,7 +342,8 @@
           (setf *active-application*
                 (if (typep *active-application* 'application)
                     (application-reconnect *active-application*
-                                           :conversation-id resume-id)
+                                           :conversation-id resume-id
+                                           :immutable-p immutable-p)
                     (application-create configuration :conversation-id resume-id)))
           (when (and (member "--simulate-crash" arguments :test #'string=)
                      (not (non-empty-string-p (uiop:getenv "AUTOLITH_RECOVERED"))))

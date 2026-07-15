@@ -104,6 +104,12 @@ Start a new conversation with:
 autolith
 #+END_SRC
 
+Use =autolith --immutable= when the active image should expose only
+=self.inspect=, =self.source=, =self.diff=, and =self.generations=. The flag
+removes evaluation, mutation, persistence, checkpoint, and rollback tools from
+the provider schema. It does not turn filesystem, shell, or worker operations
+into a security sandbox.
+
 The interface stays on the primary screen. Completed transcript rows are emitted
 once and remain in ordinary terminal scrollback. Only the bounded live region,
 holding unfinished trace previews, status, the full-width prompt, and command

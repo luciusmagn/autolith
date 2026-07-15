@@ -53,6 +53,14 @@
      "working-directory copies reject files with a structured condition")
     (test-assert (string= (configuration-reasoning-effort configuration) "ultra")
                  "the default reasoning effort is ultra")
+    (test-assert (not (configuration-immutable-p configuration))
+                 "ordinary configuration enables active-image mutation tools")
+    (test-assert
+     (configuration-immutable-p
+      (configuration-with-model
+       (configuration--clone configuration :immutable-p t)
+       "gpt-5.6-luna"))
+     "configuration clones preserve immutable mode")
     (test-assert (string= (configuration-wire-effort configuration) "max")
                  "ultra maps to the provider max effort")
     (test-assert (= (json-get (json-object "answer" 42) "answer") 42)

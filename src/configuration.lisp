@@ -98,6 +98,12 @@
     :reader configuration-reasoning-effort
     :type non-empty-string
     :documentation "The user-visible reasoning effort.")
+   (immutable-p
+    :initarg :immutable-p
+    :initform nil
+    :reader configuration-immutable-p
+    :type boolean
+    :documentation "Whether mutation-capable active-image tools are disabled.")
    (web-search-mode
     :initarg :web-search-mode
     :initform "cached"
@@ -167,9 +173,11 @@
                            (:source-root (option pathname))
                            (:working-directory (option pathname))
                            (:model (option string))
-                           (:reasoning-effort (option string)))
+                           (:reasoning-effort (option string))
+                           (:immutable-p boolean))
     configuration)
-(defun configuration-create (&key source-root working-directory model reasoning-effort)
+(defun configuration-create
+    (&key source-root working-directory model reasoning-effort immutable-p)
   "Create validated runtime configuration from explicit values and the environment."
   (let* ((home (user-homedir-pathname))
          (data-home (environment-directory
@@ -215,6 +223,7 @@
                    :codex-auth-path (merge-pathnames "auth.json" codex-home)
                    :model selected-model
                    :reasoning-effort selected-effort
+                   :immutable-p immutable-p
                    :web-search-mode selected-web-search
                    :context-window (configuration--context-window-for
                                     selected-model)
@@ -226,9 +235,13 @@
 (-> configuration--clone
     (configuration &key (:working-directory (option pathname))
                    (:model (option string))
-                   (:reasoning-effort (option string)))
+                   (:reasoning-effort (option string))
+                   (:immutable-p boolean))
     configuration)
-(defun configuration--clone (configuration &key working-directory model reasoning-effort)
+(defun configuration--clone
+    (configuration
+     &key working-directory model reasoning-effort
+       (immutable-p nil immutable-p-supplied-p))
   "Copy CONFIGURATION, replacing only supplied workspace or model choices.
 
 Selecting a different model recomputes the context window for that model."
@@ -245,6 +258,9 @@ Selecting a different model recomputes the context window for that model."
                  :reasoning-effort (or reasoning-effort
                                        (configuration-reasoning-effort
                                         configuration))
+                 :immutable-p (if immutable-p-supplied-p
+                                  immutable-p
+                                  (configuration-immutable-p configuration))
                  :web-search-mode (configuration-web-search-mode configuration)
                  :context-window (if model
                                      (configuration--context-window-for model)

@@ -238,6 +238,20 @@
                         "the startup banner uses the configured version")
            (test-assert (not (search "v6.6.6" text))
                         "the startup banner contains no stale display version")
+           (let* ((immutable-configuration
+                    (configuration--clone configuration :immutable-p t))
+                  (immutable-application
+                    (make-instance 'application
+                                   :configuration immutable-configuration
+                                   :conversation conversation
+                                   :ui (application-ui application)))
+                  (immutable-text
+                    (format nil "~{~A~}"
+                            (mapcar #'terminal-span-text
+                                    (application-banner
+                                     immutable-application)))))
+             (test-assert (search "mode          immutable" immutable-text)
+                          "the startup banner identifies immutable mode"))
            (let ((logo-end (search "YUMMM" text))
                  (notice-start (search "Autolith executes" text)))
              (test-assert (and logo-end
@@ -1293,6 +1307,8 @@
     (test-assert (and requested-p
                       (string= identifier "saved-conversation"))
                  "resume options still accept an explicit conversation identifier"))
+  (test-assert (search "--immutable" (main-usage))
+               "command-line help documents immutable mode")
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration)))
     (unwind-protect

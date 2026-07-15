@@ -208,6 +208,13 @@ Initial operations should include:
 The exact tool set may remain small. General operations should be
 composed from ordinary Lisp wherever practical.
 
+Starting with =--immutable= omits =self.eval=, =self.redefine=, =self.set=,
+=self.persist-definition=, =self.commit=, =self.checkpoint=, and =self.rollback=
+from both dispatch and the provider schema. Inspection through =self.inspect=,
+=self.source=, =self.diff=, and =self.generations= remains available. The system
+prompt must describe the reduced capability accurately. Recovery preserves the
+flag, while a later launch without it restores the normal tool registry.
+
 ** 5.3 =memory.*=
 
 =memory.*= tools operate on durable user-specific memories stored outside

@@ -56,6 +56,23 @@
                         "the self namespace exposes eleven active-image operations")
            (test-assert (tool-registry-find registry "self" "source")
                         "tracked source inspection has a dedicated self tool")
+           (let* ((immutable-registry
+                    (make-default-tool-registry :immutable-p t))
+                  (immutable-schemas
+                    (tool-registry-provider-schemas immutable-registry))
+                  (self-schema (aref immutable-schemas 6)))
+             (test-assert (= (length (tool-registry-tools immutable-registry)) 35)
+                          "immutable mode omits seven active-image state tools")
+             (test-assert (= (length (json-get self-schema "tools")) 4)
+                          "immutable mode advertises only four self inspection tools")
+             (dolist (name '("inspect" "source" "diff" "generations"))
+               (test-assert (tool-registry-find immutable-registry "self" name)
+                            (format nil "immutable mode retains self.~A" name)))
+             (dolist (name '("eval" "redefine" "set" "persist-definition"
+                             "commit" "checkpoint" "rollback"))
+               (test-assert
+                (null (tool-registry-find immutable-registry "self" name))
+                (format nil "immutable mode omits self.~A" name))))
            (test-assert (not (tool-result-success-p result))
                         "unknown provider calls produce a correlated tool failure"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))

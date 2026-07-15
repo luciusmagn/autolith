@@ -219,7 +219,9 @@
            (provider (provider-create
                       configuration
                       :reasoning-summaries-p reasoning-traces-p))
-           (registry (make-default-tool-registry))
+           (registry
+             (make-default-tool-registry
+              :immutable-p (configuration-immutable-p configuration)))
            (worker (lisp-worker-pool-create configuration))
            (agent (agent-create :configuration configuration
                                 :provider provider
@@ -242,18 +244,26 @@
       application)))
 
 (-> application-reconnect
-    (application &key (:conversation-id (option string)))
+    (application &key (:conversation-id (option string))
+                      (:immutable-p boolean))
     application)
-(defun application-reconnect (application &key conversation-id)
+(defun application-reconnect
+    (application &key conversation-id
+                   (immutable-p nil immutable-p-supplied-p))
   "Reconnect retained APPLICATION resources, optionally selecting CONVERSATION-ID."
   (image-state-reconnect)
   (let* ((previous (application-configuration application))
+         (effective-immutable-p
+           (if immutable-p-supplied-p
+               immutable-p
+               (configuration-immutable-p previous)))
          (retained-conversation (application-conversation application))
          (retained-configuration
            (configuration-create
             :working-directory (uiop:getcwd)
             :model (configuration-model previous)
-            :reasoning-effort (configuration-reasoning-effort previous)))
+            :reasoning-effort (configuration-reasoning-effort previous)
+            :immutable-p effective-immutable-p))
          (reasoning-traces-p
            (preferences-reasoning-traces-p retained-configuration))
          (permission-state (permissions-load retained-configuration))
@@ -282,7 +292,9 @@
                     configuration
                     :reasoning-summaries-p reasoning-traces-p))
          (worker (lisp-worker-pool-create configuration))
-         (registry (application-tool-registry application))
+         (previous-registry (application-tool-registry application))
+         (registry (make-default-tool-registry
+                    :immutable-p effective-immutable-p))
          (agent (agent-create :configuration configuration
                               :provider provider
                               :conversation conversation
@@ -296,6 +308,7 @@
                       (parse-integer value :junk-allowed nil)))
              (error ()
                nil))))
+    (ignore-errors (tool-registry-close-search-state previous-registry))
     (setf (application-configuration application) configuration
           (application-conversation application) conversation
           (application-provider application) provider

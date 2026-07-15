@@ -42,6 +42,7 @@ and the user can grant commands full access for a session.
 - Immutable modified worker images with notes and pristine side-by-side comparison.
 - Hash-verified matching SBCL source and Lisp-level implementation instrumentation.
 - Live =self.*= mutation with private commits and complete replay scripts.
+- Optional =--immutable= startup with inspection-only =self.*= tools.
 - Forked checkpoints with per-generation reconstruction artifacts.
 - A validated preloaded active image for fast startup and source fallback.
 

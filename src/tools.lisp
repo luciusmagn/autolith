@@ -33,6 +33,10 @@
   ()
   (:documentation "A tool whose operation targets the active Autolith image."))
 
+(defclass mutable-self-tool (self-tool)
+  ()
+  (:documentation "A self tool omitted when Autolith runs in immutable mode."))
+
 (defclass lisp-eval-tool (lisp-tool)
   ()
   (:documentation "Evaluate one Common Lisp form in the worker."))
@@ -89,19 +93,19 @@
   ()
   (:documentation "Read tracked top-level definitions for one active symbol."))
 
-(defclass self-eval-tool (self-tool)
+(defclass self-eval-tool (mutable-self-tool)
   ()
   (:documentation "Evaluate one exploratory form in the active image."))
 
-(defclass self-redefine-tool (self-tool)
+(defclass self-redefine-tool (mutable-self-tool)
   ()
   (:documentation "Compile and install one exploratory top-level definition."))
 
-(defclass self-set-tool (self-tool)
+(defclass self-set-tool (mutable-self-tool)
   ()
   (:documentation "Set one active global binding to an evaluated value."))
 
-(defclass self-persist-definition-tool (self-tool)
+(defclass self-persist-definition-tool (mutable-self-tool)
   ()
   (:documentation "Install and privately commit one complete definition."))
 
@@ -109,11 +113,11 @@
   ()
   (:documentation "Show uncommitted reconstructible active-image mutations."))
 
-(defclass self-commit-tool (self-tool)
+(defclass self-commit-tool (mutable-self-tool)
   ()
   (:documentation "Persist pending live mutations as a private image commit."))
 
-(defclass self-checkpoint-tool (self-tool)
+(defclass self-checkpoint-tool (mutable-self-tool)
   ()
   (:documentation "Save the active image as a retained working generation."))
 
@@ -121,7 +125,7 @@
   ()
   (:documentation "List retained working generations and compatibility."))
 
-(defclass self-rollback-tool (self-tool)
+(defclass self-rollback-tool (mutable-self-tool)
   ()
   (:documentation "Select a retained generation and request immediate rollback."))
 
@@ -427,9 +431,9 @@
              "The pristine or saved worker image; defaults to pristine.")))
     (tool-object-schema properties nil)))
 
-(-> make-default-tool-registry () tool-registry)
-(defun make-default-tool-registry ()
-  "Create the documented default Autolith tool registry."
+(-> make-default-tool-registry (&key (:immutable-p boolean)) tool-registry)
+(defun make-default-tool-registry (&key immutable-p)
+  "Create Autolith's tool registry, omitting mutable self tools when requested."
   (let ((registry (make-instance 'tool-registry))
         (search-worker (make-instance 'search-worker))
         (empty-schema (tool-object-schema (json-object) nil)))
@@ -841,4 +845,12 @@
                   "generation" (tool-string-property
                                  "The retained generation identifier."))
                  '("generation"))))
+    (when immutable-p
+      (dolist (tool (copy-list (tool-registry-tools registry)))
+        (when (typep tool 'mutable-self-tool)
+          (remhash (tool-canonical-name tool) (tool-registry-index registry))))
+      (setf (tool-registry-tools registry)
+            (remove-if (lambda (tool)
+                         (typep tool 'mutable-self-tool))
+                       (tool-registry-tools registry))))
     registry))
