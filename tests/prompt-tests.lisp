@@ -54,6 +54,8 @@
     (test-assert
      (search "Persistent memory catalog: no relevant memories" prompt)
      "the system prompt carries the current relevant-memory catalog")
+    (test-assert (search "Current workspace agenda: empty" prompt)
+                 "the system prompt carries the current workspace agenda")
     (test-assert (search "Repository Guidelines" prompt)
                  "the system prompt carries the workspace AGENTS.md")
     (test-assert (search "Workspace instructions from" prompt)

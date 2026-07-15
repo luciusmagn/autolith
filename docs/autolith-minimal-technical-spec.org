@@ -70,6 +70,7 @@ The active SBCL image contains:
 - The model client and agent loop.
 - Conversation and working state.
 - Persistent memory selection and storage.
+- Workspace agenda selection and storage.
 - Tool definitions and dispatch.
 - The terminal interface.
 - Self-inspection and self-modification facilities.
@@ -225,7 +226,25 @@ and read tools for exact recall. Catalog values are untrusted quoted data, not
 instructions. Memory writes must exclude credentials, secrets, transient
 progress, and unsupported guesses.
 
-** 5.4 Workspace Commands
+** 5.4 =agenda.*=
+
+=agenda.*= tools operate on short durable agendas keyed by canonical workspace
+directory. Initial operations include:
+
+- =agenda.list=
+- =agenda.add=
+- =agenda.update=
+- =agenda.remove=
+- =agenda.transport=
+
+Each item has a stable identifier, bounded complete text, lifecycle or note
+status, and creation and update times. Every model request receives the current
+workspace agenda in full as quoted untrusted data. Transport enumerates and
+inspects other workspace agendas, copies them into existing target directories,
+and moves them to new directory keys even when the old source directory no
+longer exists. Copy and move merge without discarding existing target items.
+
+** 5.5 Workspace Commands
 
 =shell.run= requests user authorization before every unrecognized command. An
 approval is defined by exact command text and canonical working directory. The
@@ -496,6 +515,27 @@ global and current-workspace memories. The catalog includes enough metadata and
 a short excerpt for selection; exact content remains available through
 =memory.search= and =memory.read=. Memory corruption degrades this catalog to a
 bounded unavailable notice instead of preventing unrelated model work.
+
+** 8.4 Workspace Agendas
+
+Workspace agendas are stored in one readable =agendas.sexp= file beneath the
+data root. The complete versioned state is published atomically with private
+permissions. Reading binds =*read-eval*= to =nil= and rejects malformed forms,
+duplicate workspace keys, duplicate item identifiers, unsupported statuses,
+oversized item text, and overfull agendas.
+
+One workspace agenda contains at most 32 ordered items. Each record carries the
+canonical directory key and each item carries a stable identifier, complete
+text of at most 500 characters, status, creation time, and update time. Removing
+the final item removes the empty workspace record. A malformed file degrades to
+an empty agenda with a structured warning instead of preventing unrelated model
+work.
+
+Transport accepts an absolute missing source key so an already-moved repository
+can be recovered. Its target must be an existing directory. Copy retains the
+source key; move removes it. Both merge with existing target items, skip exact
+text-and-status duplicates, resolve identifier collisions without replacing
+target items, and reject a result beyond the item limit.
 
 * 9. Generations and Checkpoints
 

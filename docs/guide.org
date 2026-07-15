@@ -10,6 +10,7 @@ Autolith is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
 - defaults to =gpt-5.6-sol= with user-visible reasoning effort =ultra=;
 - owns its system prompt, conversation state, tool loop, and authentication;
 - recalls workspace and global persistent memories through dedicated tools;
+- maintains short workspace agendas and recalls them in full;
 - never invokes or depends on the Codex executable;
 - keeps finalized output in normal terminal scrollback;
 - runs =lisp.*= operations in named, heap-isolated SBCL REPLs;
@@ -194,8 +195,9 @@ paths resolve from the current workspace, =~/= expands to the home directory,
 and spaces need no quoting because the complete command remainder is the path.
 =/cwd= alone prints the current workspace. A successful change updates subsequent
 system prompts and inherited =AGENTS.md= instructions, filesystem and shell tools,
-search, workspace memories, and existing or future Lisp REPLs without discarding
-their heaps. It does not rewrite the active conversation's recorded origin.
+search, workspace memories, workspace agendas, and existing or future Lisp REPLs
+without discarding their heaps. It does not rewrite the active conversation's
+recorded origin.
 
 =/goal OBJECTIVE= sets a session goal in the spirit of Codex goals. The goal
 rides along every provider request as transient context, and after each of
@@ -289,7 +291,26 @@ it never to store credentials, secrets, transient progress, or guesses. This
 keeps memory creation visible in conversation tool history and avoids extra
 background model traffic.
 
-* Workspace, search, memory, Lisp, and self tools
+* Workspace agendas
+
+Autolith stores short task and note lists in the readable atomic file
+=${XDG_DATA_HOME:-~/.local/share}/autolith/agendas.sexp=. Each agenda is keyed by
+the canonical workspace directory and contains at most 32 stable-ID items with
+=todo=, =doing=, =blocked=, =done=, or =note= status. The reader disables
+=*read-eval*=, and each successful update publishes the complete versioned state
+atomically with mode 0600.
+
+The current workspace agenda is included in full as quoted untrusted data on
+every provider request. =agenda.list= reads it, =agenda.add= creates an item,
+=agenda.update= changes text or status by ID, and =agenda.remove= deletes an
+item. =agenda.transport= lists all known workspace keys, views another agenda,
+copies one agenda into an existing target workspace, or moves it by merging into
+the target and removing the old key. The source path may already be absent, so
+a repository that moved before transport remains recoverable. Copy and move
+preserve target items, skip exact text-and-status duplicates, and give copied
+items fresh IDs only when an ID collides.
+
+* Workspace, search, memory, agenda, Lisp, and self tools
 
 The =fs.*= and =shell.*= tools cover everyday workspace work: =fs.read=
 returns numbered file lines from an optional window, =fs.list= lists one

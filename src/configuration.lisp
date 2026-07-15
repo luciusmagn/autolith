@@ -353,6 +353,11 @@ Selecting a different model recomputes the context window for that model."
   "Return the append-only persistent memory pathname."
   (merge-pathnames "memories.sexp" (configuration-data-root configuration)))
 
+(-> configuration-agenda-path (configuration) pathname)
+(defun configuration-agenda-path (configuration)
+  "Return the atomic workspace-agenda pathname."
+  (merge-pathnames "agendas.sexp" (configuration-data-root configuration)))
+
 (-> configuration-overlay-root (configuration) pathname)
 (defun configuration-overlay-root (configuration)
   "Return the legacy self-modification overlay directory used for migration."
