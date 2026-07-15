@@ -1872,6 +1872,67 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-later-scheduler () null)
+(defun test-later-scheduler ()
+  "Test /later scheduling, listing, cancellation, and due-work promotion."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (provider (provider-create configuration))
+         (terminal (make-instance 'waiting-recording-terminal :columns 80))
+         (ui (terminal-ui-create :terminal terminal))
+         (application (make-instance 'application
+                                     :configuration configuration
+                                     :provider provider
+                                     :ui ui))
+         (controller nil))
+    (unwind-protect
+         (with-terminal-ui (active-ui ui)
+           (declare (ignore active-ui))
+           (setf controller (application-input-controller-create application)
+                 (provider-rate-limits provider)
+                 (list :primary
+                       (list :used-percent 100
+                             :window-minutes 300
+                             :resets-at (+ (get-universal-time) 100))))
+           (application-later-command application "prepare the release")
+           (let* ((entry
+                    (first
+                     (later-state-entries
+                      (application-input-controller-later-state controller))))
+                  (identifier (later-entry-identifier entry)))
+             (test-assert (and entry
+                               (string= (later-entry-input entry)
+                                        "prepare the release"))
+                          "/later schedules its complete input durably")
+             (test-assert (search "prepare the release"
+                                  (application--later-list application))
+                          "/later without input lists scheduled previews")
+             (application-later-command application
+                                        (format nil "cancel ~A" identifier))
+             (test-assert
+              (null (later-state-entries
+                     (application-input-controller-later-state controller)))
+              "/later cancel removes the exact scheduled input"))
+           (let ((entry
+                   (application-input-controller-schedule-later
+                    controller
+                    "due now"
+                    :due-at (1- (get-universal-time))
+                    :window "test")))
+             (let ((work (application-input-controller--next-work controller)))
+               (test-assert (and (eq (first work) ':later)
+                                 (eq (second work) entry))
+                            "due deferred inputs enter the ordinary work queue"))
+             (application-input-controller--complete-later controller entry)
+             (application-input-controller--finish-work controller)
+             (test-assert
+              (null (later-state-entries (later-load configuration)))
+              "successful deferred dispatch removes durable state")))
+      (when controller
+        (application-input-controller-stop controller))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> run-application-tests () boolean)
 (defun run-application-tests ()
   "Run focused application presentation tests and return true on success."
@@ -1892,4 +1953,5 @@
   (test-effort-switch)
   (test-status-entry)
   (test-session-goal)
+  (test-later-scheduler)
   t)

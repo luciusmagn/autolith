@@ -171,6 +171,7 @@ prefix from before selection. The commands are:
 /effort         pick the reasoning effort
 /trace on|off   show visible reasoning summaries
 /permissions    choose command access for this session
+/later INPUT    run input after rate limits reset
 /goal OBJECTIVE set or view the session goal
 /checkpoint     save a retained live generation
 /generations    list retained generations
@@ -234,6 +235,14 @@ parsed from provider responses. Requests never ask for the provider's priority
 service tier, so Autolith always uses the standard path that drains rate limits
 slowest. Hosted web search is requested in cached mode by default; set
 =AUTOLITH_WEB_SEARCH= to =live= or =disabled= to change it.
+
+=/later INPUT= durably schedules ordinary input for the next usable rate-limit
+reset. An exhausted weekly window takes precedence over the five-hour window.
+When the provider temporarily omits its primary window, Autolith estimates five
+hours without scheduling past a reported secondary reset. The queue survives
+restart in =${XDG_STATE_HOME:-~/.local/state}/autolith/later.sexp=, retains the
+workspace in which each input was scheduled, and retries after handled provider
+failures. =/later= lists the queue and =/later cancel ID= removes one entry.
 
 Use a double slash to send a user message that begins with a literal slash.
 

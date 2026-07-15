@@ -654,6 +654,80 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
               :message "Usage: /permissions [ask|sandbox|full|list|clear]."))))
   nil)
 
+(-> application--later-list (application) string)
+(defun application--later-list (application)
+  "Return APPLICATION's durable deferred inputs in execution order."
+  (let* ((controller (application-input-controller application))
+         (entries
+           (and controller
+                (later-state-entries
+                 (application-input-controller-later-state controller)))))
+    (if entries
+        (format nil "Deferred inputs:~%~{~A~^~%~}"
+                (loop for entry in entries
+                      collect
+                      (format nil "  ~A  ~A  ~A~%    ~A"
+                              (later-entry-identifier entry)
+                              (application--calendar-description
+                               (later-entry-due-at entry))
+                              (later-entry-window entry)
+                              (text-cell-prefix
+                               (sanitize-text (later-entry-input entry)
+                                              :single-line-p t)
+                               72))))
+        "No deferred inputs are scheduled.")))
+
+(-> application-later-command (application string) null)
+(defun application-later-command (application remainder)
+  "List, cancel, or schedule a deferred input from /later REMAINDER."
+  (let* ((controller (application-input-controller application))
+         (trimmed (string-trim '(#\Space #\Tab) remainder)))
+    (unless controller
+      (error 'configuration-error
+             :message "Deferred scheduling needs the interactive application."))
+    (cond
+      ((zerop (length trimmed))
+       (application-present application (application--later-list application)))
+      ((or (string= (string-downcase trimmed) "cancel")
+           (uiop:string-prefix-p "cancel " (string-downcase trimmed)))
+       (let ((identifier
+               (if (> (length trimmed) (length "cancel"))
+                   (string-trim '(#\Space #\Tab)
+                                (subseq trimmed (length "cancel")))
+                   "")))
+         (unless (non-empty-string-p identifier)
+           (error 'configuration-error
+                  :message "Usage: /later cancel ID"))
+         (if (application-input-controller-cancel-later controller identifier)
+             (application-present application
+                                  (format nil "Cancelled deferred input ~A."
+                                          identifier))
+             (error 'configuration-error
+                    :message (format nil "Deferred input ~A does not exist."
+                                     identifier)))))
+      (t
+       (let ((provider (application-provider application)))
+         (multiple-value-bind (due-at window)
+             (later-reset-deadline
+              (and provider (provider-rate-limits provider)))
+           (unless (and due-at window)
+             (error 'configuration-error
+                    :message
+                    "No usable rate-limit reset is known. Send a message, then inspect /status."))
+           (let ((entry
+                   (application-input-controller-schedule-later
+                    controller
+                    trimmed
+                    :due-at due-at
+                    :window window)))
+             (application-present
+              application
+              (format nil "Scheduled deferred input ~A for ~A after the ~A reset."
+                      (later-entry-identifier entry)
+                      (application--calendar-description due-at)
+                      window))))))))
+  nil)
+
 (-> application-command (application string) keyword)
 (defun application-command (application input)
   "Execute slash command INPUT for APPLICATION and return its loop action."
@@ -733,6 +807,10 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        :continue)
       ((string= command "/permissions")
        (application-permissions-command application argument)
+       :continue)
+      ((string= command "/later")
+       (application-later-command application
+                                  (application--command-remainder input))
        :continue)
       ((string= command "/goal")
        (application-goal-command application

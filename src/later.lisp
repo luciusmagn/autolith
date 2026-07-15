@@ -285,3 +285,91 @@
                         (make-instance 'later-state :entries entries))
           (setf (later-state-entries state) entries)
           t))))
+
+(-> later--window-exhausted-p ((option list)) boolean)
+(defun later--window-exhausted-p (window)
+  "Return true when WINDOW reports all of its allowance used."
+  (let ((used (and window (getf window :used-percent))))
+    (and (realp used) (>= used 100))))
+
+(-> later--window-label ((option list) string) string)
+(defun later--window-label (window fallback)
+  "Return a compact label for rate-limit WINDOW or FALLBACK."
+  (let ((minutes (and window (getf window :window-minutes))))
+    (cond
+      ((and (integerp minutes) (<= 285 minutes 315))
+       "5h")
+      ((and (integerp minutes) (<= 9576 minutes 10584))
+       "weekly")
+      ((integerp minutes)
+       (format nil "~D minute~:P" minutes))
+      (t
+       fallback))))
+
+(-> later-reset-deadline
+    ((option list) &key (:now timestamp))
+    (values (option timestamp) (option string)))
+(defun later-reset-deadline (snapshot &key (now (get-universal-time)))
+  "Return the reset deadline and window label selected from SNAPSHOT.
+
+An exhausted secondary window governs because a primary reset cannot unblock
+it. Otherwise the reported primary reset is used. When the primary window is
+temporarily absent, estimate five hours without crossing a reported secondary
+reset. Five seconds of margin avoids dispatching on the reset boundary."
+  (let* ((primary (and snapshot (getf snapshot :primary)))
+         (secondary (and snapshot (getf snapshot :secondary)))
+         (primary-reset (and primary (getf primary :resets-at)))
+         (secondary-reset (and secondary (getf secondary :resets-at))))
+    (cond
+      ((later--window-exhausted-p secondary)
+       (if (typep secondary-reset 'timestamp)
+           (values (max now (+ secondary-reset 5))
+                   (later--window-label secondary "secondary"))
+           (values nil nil)))
+      ((typep primary-reset 'timestamp)
+       (values (max now (+ primary-reset 5))
+               (later--window-label primary "primary")))
+      (secondary
+       (let ((estimate (+ now (* 5 60 60))))
+         (values (if (typep secondary-reset 'timestamp)
+                     (min estimate (+ secondary-reset 5))
+                     estimate)
+                 "estimated 5h")))
+      (t
+       (values nil nil)))))
+
+(-> later-reschedule
+    (&key (:configuration configuration) (:state later-state)
+          (:entry later-entry) (:due-at timestamp) (:window string))
+    later-entry)
+(defun later-reschedule (&key configuration state entry due-at window)
+  "Persist ENTRY with a replacement DUE-AT and WINDOW, preserving its identity."
+  (let* ((replacement-entry
+           (make-instance 'later-entry
+                          :identifier (copy-seq
+                                       (later-entry-identifier entry))
+                          :input (copy-seq (later-entry-input entry))
+                          :directory (copy-seq (later-entry-directory entry))
+                          :due-at due-at
+                          :created-at (later-entry-created-at entry)
+                          :window (copy-seq window)))
+         (entries
+           (later--sort-entries
+            (substitute replacement-entry
+                        (later-entry-identifier entry)
+                        (later-state-entries state)
+                        :key #'later-entry-identifier
+                        :test #'string=))))
+    (unless (find (later-entry-identifier entry)
+                  (later-state-entries state)
+                  :key #'later-entry-identifier
+                  :test #'string=)
+      (error 'later-error
+             :message (format nil "Deferred input ~A no longer exists."
+                              (later-entry-identifier entry))
+             :pathname (configuration-later-path configuration)
+             :operation ':reschedule
+             :cause nil))
+    (later--write configuration (make-instance 'later-state :entries entries))
+    (setf (later-state-entries state) entries)
+    replacement-entry))

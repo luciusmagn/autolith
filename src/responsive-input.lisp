@@ -28,6 +28,16 @@
     :accessor application-input-controller-steering-items
     :type list
     :documentation "FIFO user messages waiting for the active turn's next tool boundary.")
+   (later-state
+    :initarg :later-state
+    :reader application-input-controller-later-state
+    :type later-state
+    :documentation "The durable deferred inputs owned by this controller.")
+   (pending-later-entries
+    :initarg :pending-later-entries
+    :accessor application-input-controller-pending-later-entries
+    :type list
+    :documentation "Deferred entries not currently dispatched by this process.")
    (active-p
     :initform nil
     :accessor application-input-controller-active-p
@@ -575,15 +585,148 @@
          ':sandboxed
          (application--ask-command-permission application command directory)))))
 
+(-> application-input-controller-schedule-later
+    (application-input-controller string &key (:due-at timestamp) (:window string))
+    later-entry)
+(defun application-input-controller-schedule-later
+    (controller input &key due-at window)
+  "Persist INPUT for DUE-AT and wake CONTROLLER's deferred scheduler."
+  (let* ((application (application-input-controller-application controller))
+         (configuration (application-configuration application))
+         (entry
+           (later-schedule
+            :configuration configuration
+            :state (application-input-controller-later-state controller)
+            :input input
+            :directory (configuration-working-directory configuration)
+            :due-at due-at
+            :window window)))
+    (with-lock-held ((application-input-controller-lock controller))
+      (setf (application-input-controller-pending-later-entries controller)
+            (later--sort-entries
+             (append
+              (application-input-controller-pending-later-entries controller)
+              (list entry))))
+      (condition-notify
+       (application-input-controller-condition-variable controller)))
+    entry))
+
+(-> application-input-controller-cancel-later
+    (application-input-controller string)
+    boolean)
+(defun application-input-controller-cancel-later (controller identifier)
+  "Cancel deferred IDENTIFIER durably and remove it from CONTROLLER."
+  (let* ((application (application-input-controller-application controller))
+         (cancelled-p
+           (later-cancel
+            (application-configuration application)
+            (application-input-controller-later-state controller)
+            identifier)))
+    (when cancelled-p
+      (with-lock-held ((application-input-controller-lock controller))
+        (setf (application-input-controller-pending-later-entries controller)
+              (remove identifier
+                      (application-input-controller-pending-later-entries
+                       controller)
+                      :key #'later-entry-identifier
+                      :test #'string=))
+        (condition-notify
+         (application-input-controller-condition-variable controller))))
+    cancelled-p))
+
+(-> application-input-controller--promote-due-later
+    (application-input-controller timestamp)
+    null)
+(defun application-input-controller--promote-due-later (controller now)
+  "Move CONTROLLER's entries due at NOW onto its ordinary work queue."
+  (loop for entry = (first
+                     (application-input-controller-pending-later-entries
+                      controller))
+        while (and entry (<= (later-entry-due-at entry) now))
+        do (pop (application-input-controller-pending-later-entries controller))
+           (setf (application-input-controller-work-items controller)
+                 (nconc (application-input-controller-work-items controller)
+                        (list (list ':later entry)))))
+  nil)
+
+(-> application-input-controller--later-wait-seconds
+    (application-input-controller timestamp)
+    (option real))
+(defun application-input-controller--later-wait-seconds (controller now)
+  "Return seconds until CONTROLLER's next deferred entry, if one exists."
+  (let ((entry (first
+                (application-input-controller-pending-later-entries controller))))
+    (and entry (max 0.01 (- (later-entry-due-at entry) now)))))
+
+(-> application-input-controller--complete-later
+    (application-input-controller later-entry)
+    null)
+(defun application-input-controller--complete-later (controller entry)
+  "Remove successfully dispatched ENTRY from durable deferred state."
+  (later-cancel
+   (application-configuration
+    (application-input-controller-application controller))
+   (application-input-controller-later-state controller)
+   (later-entry-identifier entry))
+  nil)
+
+(-> application-input-controller--retry-later
+    (application-input-controller later-entry)
+    null)
+(defun application-input-controller--retry-later (controller entry)
+  "Reschedule failed ENTRY from current rate data or a five-minute fallback."
+  (let* ((application (application-input-controller-application controller))
+         (configuration (application-configuration application))
+         (provider (application-provider application))
+         (now (get-universal-time)))
+    (multiple-value-bind (reset-at window)
+        (later-reset-deadline (and provider (provider-rate-limits provider))
+                              :now now)
+      (let ((replacement
+              (later-reschedule
+               :configuration configuration
+               :state (application-input-controller-later-state controller)
+               :entry entry
+               :due-at (if (and reset-at (> reset-at now))
+                           reset-at
+                           (+ now 300))
+               :window (if (and window reset-at (> reset-at now))
+                           window
+                           "5 minute retry"))))
+        (with-lock-held ((application-input-controller-lock controller))
+          (setf (application-input-controller-pending-later-entries controller)
+                (later--sort-entries
+                 (append
+                  (application-input-controller-pending-later-entries controller)
+                  (list replacement))))
+          (condition-notify
+           (application-input-controller-condition-variable controller)))
+        (application-present
+         application
+         (format nil "Deferred input ~A was rescheduled after ~A."
+                 (later-entry-identifier replacement)
+                 (later-entry-window replacement))))))
+  nil)
+
 (-> application-input-controller-create
     (application)
     application-input-controller)
 (defun application-input-controller-create (application)
   "Create CONTROLLER for APPLICATION and start its terminal reader."
-  (let ((controller
-          (make-instance 'application-input-controller
-                         :application application
-                         :main-thread (current-thread))))
+  (let* ((configuration
+           (and (slot-boundp application 'configuration)
+                (application-configuration application)))
+         (later-state
+           (if (typep configuration 'configuration)
+               (later-load configuration)
+               (make-instance 'later-state)))
+         (controller
+           (make-instance 'application-input-controller
+                          :application application
+                          :later-state later-state
+                          :pending-later-entries
+                          (copy-list (later-state-entries later-state))
+                          :main-thread (current-thread))))
     (setf (application-input-controller application) controller)
     (application-input-controller--start-reader controller)
     controller))
@@ -595,12 +738,24 @@
   "Wait for and return CONTROLLER's next work item, or NIL after exit."
   (let ((work nil))
     (with-lock-held ((application-input-controller-lock controller))
-      (loop while (and (null (application-input-controller-work-items controller))
-                       (null (application-input-controller-failure controller))
-                       (not (application-input-controller-stopping-p controller)))
-            do (condition-wait
-                (application-input-controller-condition-variable controller)
-                (application-input-controller-lock controller)))
+      (loop
+        do (application-input-controller--promote-due-later
+            controller (get-universal-time))
+        while (and
+               (null (application-input-controller-work-items controller))
+               (null (application-input-controller-failure controller))
+               (not (application-input-controller-stopping-p controller)))
+        do (let ((wait-seconds
+                   (application-input-controller--later-wait-seconds
+                    controller (get-universal-time))))
+             (if wait-seconds
+                 (condition-wait
+                  (application-input-controller-condition-variable controller)
+                  (application-input-controller-lock controller)
+                  :timeout wait-seconds)
+                 (condition-wait
+                  (application-input-controller-condition-variable controller)
+                  (application-input-controller-lock controller)))))
       (when (application-input-controller-failure controller)
         (error
          'application-input-failed
@@ -643,6 +798,7 @@
             (application-input-controller-reader-paused-p controller) t
             (application-input-controller-work-items controller) nil
             (application-input-controller-steering-items controller) nil
+            (application-input-controller-pending-later-entries controller) nil
             (application-input-controller-active-p controller) nil
             thread (application-input-controller-reader-thread controller))
       (condition-notify
@@ -693,7 +849,7 @@
           (application-raise-fatal application condition signal-backtrace))
         (autolith-error (condition)
           (application-handle-expected-error application condition)
-          ':continue)
+          ':failed)
         (serious-condition (condition)
           (application-raise-fatal application condition signal-backtrace))))))
 
@@ -718,9 +874,51 @@
           (application-raise-fatal application condition signal-backtrace))
         (autolith-error (condition)
           (application-handle-expected-error application condition)
-          ':continue)
+          ':failed)
         (serious-condition (condition)
           (application-raise-fatal application condition signal-backtrace))))))
+
+(-> application-input-controller--run-later
+    (application-input-controller later-entry)
+    null)
+(defun application-input-controller--run-later (controller entry)
+  "Dispatch due deferred ENTRY and durably complete or retry it."
+  (block nil
+    (let* ((application (application-input-controller-application controller))
+           (input (later-entry-input entry)))
+      (application-present
+       application
+       (format nil "Running deferred input ~A after its ~A reset.~%  ~A"
+               (later-entry-identifier entry)
+               (later-entry-window entry)
+               (text-cell-prefix
+                (sanitize-text input :single-line-p t)
+                72)))
+      (handler-case
+          (application-set-working-directory
+           application (later-entry-directory entry))
+        (autolith-error (condition)
+          (application-handle-expected-error application condition)
+          (handler-case
+              (application-input-controller--complete-later controller entry)
+            (later-error (persistence-condition)
+              (application-handle-expected-error application
+                                                 persistence-condition)))
+          (return nil)))
+      (let* ((message (application--message-input input))
+             (result
+              (if message
+                  (application--run-message-input application message)
+                  (application--run-command-input application input))))
+        (handler-case
+            (if (eq result ':failed)
+                (application-input-controller--retry-later controller entry)
+                (application-input-controller--complete-later controller entry))
+          (later-error (condition)
+            (application-handle-expected-error application condition)))
+        (when (eq result ':quit)
+          (application-input-controller--request-exit controller ':quit)))))
+  nil)
 
 (-> application-input-controller--run-work
     (application-input-controller list)
@@ -746,5 +944,7 @@
                        (application--run-command-input application input)))
                     (application--run-command-input application input))))
          (when (eq result ':quit)
-           (application-input-controller--request-exit controller ':quit))))))
+           (application-input-controller--request-exit controller ':quit))))
+      (:later
+       (application-input-controller--run-later controller (second work)))))
   nil)

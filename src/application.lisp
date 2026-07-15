@@ -103,6 +103,7 @@
     (:name "/effort"        :argument nil :description "pick the reasoning effort")
     (:name "/trace"         :argument "on|off" :description "show visible reasoning summaries")
     (:name "/permissions"   :argument nil :description "choose command access for this session")
+    (:name "/later"         :argument "INPUT" :description "run input after rate limits reset")
     (:name "/goal"          :argument "OBJECTIVE" :description "set or view the session goal")
     (:name "/checkpoint"    :argument nil :description "save a retained live generation")
     (:name "/generations"   :argument nil :description "list retained generations")

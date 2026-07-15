@@ -652,6 +652,12 @@ While a turn is active, Enter steers its next tool boundary and Tab queues a
 later follow-up. Pending inputs are previewed in the live region, and an empty
 Tab recalls the newest follow-up for editing. While idle, Tab submits like Enter.
 
+=/later INPUT= persists INPUT with its current workspace and dispatches it after
+the provider's relevant rate-limit reset. An exhausted longer window governs;
+when the primary window is absent, a bounded five-hour estimate may be used.
+Deferred state is private readable data, survives restart, and supports listing
+and exact cancellation.
+
 Ctrl-C with an empty input exits the interface. When the active conversation
 has durable records, shutdown displays the exact command that resumes its
 identifier. An empty conversation has no resume command.

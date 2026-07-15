@@ -77,3 +77,34 @@
                         "deferred state disables reader evaluation"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
+
+(-> test-later-reset-selection () null)
+(defun test-later-reset-selection ()
+  "Test primary, secondary, and estimated reset selection."
+  (multiple-value-bind (due-at window)
+      (later-reset-deadline
+       '(:primary (:used-percent 100 :window-minutes 300 :resets-at 2000)
+         :secondary (:used-percent 50 :window-minutes 10080 :resets-at 9000))
+       :now 1000)
+    (test-assert (and (= due-at 2005) (string= window "5h"))
+                 "a usable primary reset schedules the five-hour window"))
+  (multiple-value-bind (due-at window)
+      (later-reset-deadline
+       '(:primary (:used-percent 100 :window-minutes 300 :resets-at 2000)
+         :secondary (:used-percent 100 :window-minutes 10080 :resets-at 9000))
+       :now 1000)
+    (test-assert (and (= due-at 9005) (string= window "weekly"))
+                 "an exhausted secondary window overrides the primary reset"))
+  (multiple-value-bind (due-at window)
+      (later-reset-deadline
+       '(:secondary (:used-percent 50 :window-minutes 10080 :resets-at 50000))
+       :now 1000)
+    (test-assert (and (= due-at 19000) (string= window "estimated 5h"))
+                 "a missing primary window uses a bounded five-hour estimate"))
+  (multiple-value-bind (due-at window)
+      (later-reset-deadline
+       '(:secondary (:used-percent 100 :window-minutes 10080))
+       :now 1000)
+    (test-assert (and (null due-at) (null window))
+                 "an exhausted window without a reset refuses to guess"))
+  nil)

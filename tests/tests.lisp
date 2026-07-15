@@ -66,6 +66,7 @@
     (test-command-permission-corruption)
     (test-later-persistence)
     (test-later-malformed-state)
+    (test-later-reset-selection)
     (test-system-prompt-context)
     (test-conversation-persistence)
     (test-conversation-origin-directory)
