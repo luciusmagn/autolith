@@ -191,6 +191,41 @@
                      (preferences-load-warning-pathname condition)
                      (preferences-load-warning-cause condition)))))
 
+(define-condition permissions-error (autolith-error)
+  ((pathname
+    :initarg :pathname
+    :reader permissions-error-pathname
+    :type pathname
+    :documentation "The command permission file being read or written.")
+   (operation
+    :initarg :operation
+    :reader permissions-error-operation
+    :type keyword
+    :documentation "The command permission operation that failed.")
+   (cause
+    :initarg :cause
+    :reader permissions-error-cause
+    :type t
+    :documentation "The underlying persistence failure, when available."))
+  (:documentation "Persistent command permissions could not be read or written."))
+
+(define-condition permissions-load-warning (warning)
+  ((pathname
+    :initarg :pathname
+    :reader permissions-load-warning-pathname
+    :type pathname
+    :documentation "The malformed command permission pathname.")
+   (cause
+    :initarg :cause
+    :reader permissions-load-warning-cause
+    :type permissions-error
+    :documentation "The structured permission read failure."))
+  (:report (lambda (condition stream)
+             (format stream "Ignoring command permissions at ~A: ~A"
+                     (permissions-load-warning-pathname condition)
+                     (permissions-load-warning-cause condition))))
+  (:documentation "Malformed command permissions were ignored to fail closed."))
+
 (define-condition conversation-error (autolith-error)
   ((pathname
     :initarg :pathname

@@ -112,7 +112,8 @@
              (not
               (null
                (member command
-                       '("/resume" "/model" "/effort" "/rollback")
+                       '("/resume" "/model" "/effort" "/rollback"
+                         "/permissions")
                        :test #'string=)))))))
 
 (-> application-input-controller--pending-input-count
@@ -460,6 +461,90 @@
         (when restart-p
           (application-input-controller--start-reader controller))))))
 
+(-> application--command-authorization-items (string pathname) list)
+(defun application--command-authorization-items (command directory)
+  "Return the modal choices for COMMAND in DIRECTORY."
+  (declare (ignore command))
+  (list
+   (list :name "once"
+         :argument nil
+         :description "allow once inside the workspace sandbox")
+   (list :name "always"
+         :argument nil
+         :description
+         (format nil "always allow this exact command in ~A"
+                 (application--abbreviated-directory (namestring directory))))
+   (list :name "sandbox"
+         :argument nil
+         :description "allow sandboxed commands for this session")
+   (list :name "full"
+         :argument nil
+         :description "let it ride with full user privileges for this session")
+   (list :name "deny"
+         :argument nil
+         :description "do not run the command")))
+
+(-> application--ask-command-permission
+    (application string pathname)
+    keyword)
+(defun application--ask-command-permission (application command directory)
+  "Ask interactively how COMMAND may run in DIRECTORY, failing closed otherwise."
+  (block nil
+    (let* ((controller (application-input-controller application))
+           (ui         (application-ui application)))
+      (unless (and controller
+                   ui
+                   (terminal-interactive-p (terminal-ui-terminal ui)))
+        (return ':deny))
+      (let ((choice
+              (application-input-controller-call-with-reader-paused
+               controller
+               (lambda ()
+                 (terminal-ui-select
+                  ui
+                  :title
+                  (format nil "run ~A"
+                          (text-cell-prefix
+                           (sanitize-text command :single-line-p t)
+                           56))
+                  :items (application--command-authorization-items
+                          command directory)
+                  :resize-callback #'application-pending-terminal-size)))))
+        (cond
+          ((string= (or choice "") "once")
+           ':sandboxed)
+          ((string= (or choice "") "always")
+           (permissions-allow
+            :configuration (application-configuration application)
+            :state         (application-permission-state application)
+            :command       command
+            :directory     directory)
+           ':sandboxed)
+          ((string= (or choice "") "sandbox")
+           (setf (application-permission-mode application) ':sandboxed)
+           ':sandboxed)
+          ((string= (or choice "") "full")
+           (setf (application-permission-mode application) ':full-access)
+           ':full-access)
+          (t
+           ':deny))))))
+
+(-> application-authorize-command (application string pathname) keyword)
+(defun application-authorize-command (application command directory)
+  "Return the session, saved, or interactively selected permission for COMMAND."
+  (case (application-permission-mode application)
+    (:full-access
+     ':full-access)
+    (:sandboxed
+     ':sandboxed)
+    (:ask
+     (if (permissions-allowed-p
+          (application-permission-state application)
+          command
+          directory)
+         ':sandboxed
+         (application--ask-command-permission application command directory)))))
+
 (-> application-input-controller-create
     (application)
     application-input-controller)
@@ -469,6 +554,7 @@
           (make-instance 'application-input-controller
                          :application application
                          :main-thread (current-thread))))
+    (setf (application-input-controller application) controller)
     (application-input-controller--start-reader controller)
     controller))
 
@@ -540,7 +626,10 @@
       (with-lock-held ((application-input-controller-lock controller))
         (when (eq thread
                   (application-input-controller-reader-thread controller))
-          (setf (application-input-controller-reader-thread controller) nil)))))
+          (setf (application-input-controller-reader-thread controller) nil))))
+    (let ((application (application-input-controller-application controller)))
+      (when (eq controller (application-input-controller application))
+        (setf (application-input-controller application) nil))))
   nil)
 
 (-> application--run-message-input

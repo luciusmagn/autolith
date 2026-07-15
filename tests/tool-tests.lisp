@@ -78,7 +78,11 @@
                        (make-instance 'tool-context
                                       :configuration configuration
                                       :worker nil
-                                      :conversation conversation))))
+                                      :conversation conversation
+                                      :command-authorization-function
+                                      (lambda (command directory)
+                                        (declare (ignore command directory))
+                                        ':full-access)))))
              (let ((sample (merge-pathnames "sample.txt" root)))
                (with-open-file (stream sample
                                        :direction :output
@@ -124,6 +128,72 @@
                (test-assert (search "autolith-shell-works"
                                     (tool-result-content result))
                             "shell.run captures combined output"))
+             (let* ((target (merge-pathnames "denied-command.txt" root))
+                    (result
+                      (tool-registry-execute-call
+                       registry
+                       (json-object
+                        "namespace" "shell"
+                        "name" "run"
+                        "arguments"
+                        (json-encode
+                         (json-object
+                          "command"
+                          (format nil "printf denied > ~A"
+                                  (uiop:escape-shell-token
+                                   (namestring target))))))
+                       (make-instance 'tool-context
+                                      :configuration configuration
+                                      :worker nil
+                                      :conversation conversation))))
+               (test-assert (not (tool-result-success-p result))
+                            "shell.run denies execution without authorization")
+               (test-assert (not (probe-file target))
+                            "a denied shell command has no side effects"))
+             (let* ((inside (merge-pathnames "sandboxed-command.txt" root))
+                    (outside
+                      (merge-pathnames
+                       (format nil "autolith-blocked-~A.txt" (make-identifier))
+                       (user-homedir-pathname)))
+                    (sandbox-configuration
+                      (configuration--clone configuration
+                                            :working-directory root)))
+               (unwind-protect
+                    (let ((result
+                            (tool-registry-execute-call
+                             registry
+                             (json-object
+                              "namespace" "shell"
+                              "name" "run"
+                              "arguments"
+                              (json-encode
+                               (json-object
+                                "command"
+                                (format nil
+                                        "printf ok > ~A; printf blocked > ~A"
+                                        (uiop:escape-shell-token
+                                         (namestring inside))
+                                        (uiop:escape-shell-token
+                                         (namestring outside))))))
+                             (make-instance
+                              'tool-context
+                              :configuration sandbox-configuration
+                              :worker nil
+                              :conversation conversation
+                              :command-authorization-function
+                              (lambda (command directory)
+                                (declare (ignore command directory))
+                                ':sandboxed)))))
+                      (test-assert
+                       (tool-result-success-p result)
+                       "an authorized shell command runs inside the sandbox")
+                      (test-assert (probe-file inside)
+                                   "the command sandbox permits workspace writes")
+                      (test-assert
+                       (not (probe-file outside))
+                       "the command sandbox rejects writes outside the workspace"))
+                 (when (probe-file outside)
+                   (delete-file outside))))
              (let ((result (run "shell" "run"
                                 "command" "sleep 5"
                                 "timeout-seconds" 1)))

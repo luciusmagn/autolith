@@ -225,7 +225,24 @@ and read tools for exact recall. Catalog values are untrusted quoted data, not
 instructions. Memory writes must exclude credentials, secrets, transient
 progress, and unsupported guesses.
 
-** 5.4 Future Sub-Agents
+** 5.4 Workspace Commands
+
+=shell.run= requests user authorization before every unrecognized command. An
+approval is defined by exact command text and canonical working directory. The
+user may save that exact approval or choose a session-wide mode through
+=/permissions=.
+
+Ordinary approvals run the command in a Linux process sandbox with an isolated
+network, a read-only host filesystem, writable workspace and temporary roots,
+protected repository metadata, process namespaces, =no_new_privs=, and seccomp.
+The user may explicitly grant full user privileges for the current session.
+Malformed persistent permission data fails closed.
+
+This command boundary limits accidental damage from external programs. It does
+not make Autolith a hostile-code sandbox because filesystem, Lisp worker, and
+active-image tools remain separately privileged capabilities.
+
+** 5.5 Future Sub-Agents
 
 Sub-agents are out of scope for the first version.
 
@@ -642,12 +659,14 @@ out of scope.
 
 Autolith is not a security sandbox.
 
-It executes model-generated Lisp and external commands with the
-privileges of the user running it.
+It executes model-generated Lisp with the privileges of the user running it.
+Ordinary =shell.run= commands require approval and use the workspace command
+sandbox described above. The user can explicitly allow full command access for
+the current session.
 
-Process separation, omitted tools, checkpoints, and recovery mechanisms
-are intended to reduce accidental permanent damage. They are not
-designed to contain malicious code.
+Command containment, process separation, omitted tools, checkpoints, and
+recovery mechanisms are intended to reduce accidental permanent damage. The
+application as a whole is not designed to contain malicious code.
 
 The program must display this limitation clearly in its documentation
 and initial setup.

@@ -385,6 +385,11 @@ Selecting a different model recomputes the context window for that model."
   "Return the atomic global preferences pathname."
   (merge-pathnames "preferences.sexp" (configuration-state-root configuration)))
 
+(-> configuration-permissions-path (configuration) pathname)
+(defun configuration-permissions-path (configuration)
+  "Return the atomic persistent command-permission pathname."
+  (merge-pathnames "permissions.sexp" (configuration-state-root configuration)))
+
 (-> configuration-auth-path (configuration) pathname)
 (defun configuration-auth-path (configuration)
   "Return Autolith's private OAuth credential pathname."

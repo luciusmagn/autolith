@@ -337,6 +337,61 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-command-permission-modes () null)
+(defun test-command-permission-modes ()
+  "Test session permission commands and fail-closed command authorization."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (terminal (make-instance 'recording-terminal :columns 72))
+         (ui (terminal-ui-create :terminal terminal))
+         (state (permissions-load configuration))
+         (application
+           (make-instance 'application
+                          :configuration configuration
+                          :ui ui
+                          :permission-state state)))
+    (unwind-protect
+         (progn
+           (terminal-ui-start ui)
+           (test-assert
+            (eq (application-authorize-command
+                 application "printf unknown" root)
+                ':deny)
+            "ask mode denies an unknown command without an interactive owner")
+           (permissions-allow :configuration configuration
+                              :state         state
+                              :command       "printf saved"
+                              :directory     root)
+           (test-assert
+            (eq (application-authorize-command
+                 application "printf saved" root)
+                ':sandboxed)
+            "ask mode accepts an exact saved command inside the sandbox")
+           (application-command application "/permissions sandbox")
+           (test-assert
+            (eq (application-authorize-command
+                 application "printf any" root)
+                ':sandboxed)
+            "/permissions sandbox allows sandboxed commands for the session")
+           (application-command application "/permissions full")
+           (test-assert
+            (eq (application-authorize-command
+                 application "printf any" root)
+                ':full-access)
+            "/permissions full grants full command access for the session")
+           (application-command application "/permissions ask")
+           (test-assert (eq (application-permission-mode application) ':ask)
+                        "/permissions ask restores prompt mode")
+           (application-command application "/permissions clear")
+           (test-assert (null (permission-state-rules state))
+                        "/permissions clear removes saved exact approvals")
+           (test-assert (search "/permissions" (application-help))
+                        "the command reference includes /permissions")
+           (terminal-ui-stop ui))
+      (ignore-errors (terminal-ui-stop ui))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-interrupt-resume-instruction () null)
 (defun test-interrupt-resume-instruction ()
   "Test that Ctrl-C exits with an exact command only for durable conversations."
@@ -1095,6 +1150,8 @@
   "Test modal and checkpoint work can temporarily restore a single Lisp thread."
   (test-assert (application--command-needs-terminal-owner-p "/model")
                "argument-free picker commands take terminal ownership")
+  (test-assert (application--command-needs-terminal-owner-p "/permissions")
+               "the permission picker takes terminal ownership")
   (test-assert (not (application--command-needs-terminal-owner-p
                      "/model gpt-5.6-luna"))
                "explicit picker arguments need no terminal ownership")
@@ -1756,6 +1813,7 @@
   (test-application-banner-version)
   (test-thinking-label-selection)
   (test-reasoning-trace-command)
+  (test-command-permission-modes)
   (test-interrupt-resume-instruction)
   (test-transcript-entries)
   (test-streaming-presentation)

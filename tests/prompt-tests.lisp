@@ -45,6 +45,13 @@
     (test-assert (search "memory namespace persists useful facts" prompt)
                  "the system prompt explains persistent memory policy")
     (test-assert
+     (search "shell.run executes an external command only after user authorization"
+             prompt)
+     "the system prompt explains command authorization")
+    (test-assert
+     (search "writes limited to the workspace and temporary directories" prompt)
+     "the system prompt explains the ordinary command sandbox boundary")
+    (test-assert
      (search "Persistent memory catalog: no relevant memories" prompt)
      "the system prompt carries the current relevant-memory catalog")
     (test-assert (search "Repository Guidelines" prompt)

@@ -49,6 +49,23 @@
     :accessor application-reasoning-traces-p
     :type boolean
     :documentation "Whether provider-visible reasoning summaries appear in the transcript.")
+   (permission-state
+    :initarg :permission-state
+    :initform (make-instance 'permission-state)
+    :accessor application-permission-state
+    :type permission-state
+    :documentation "The exact command approvals loaded from private state.")
+   (permission-mode
+    :initarg :permission-mode
+    :initform :ask
+    :accessor application-permission-mode
+    :type (member :ask :sandboxed :full-access)
+    :documentation "The command approval behavior for this process session.")
+   (input-controller
+    :initform nil
+    :accessor application-input-controller
+    :type t
+    :documentation "The active responsive input controller, when one is running.")
    (overlay-failures
     :initform nil
     :accessor application-overlay-failures
@@ -85,6 +102,7 @@
     (:name "/model"         :argument nil :description "pick the 5.6 model")
     (:name "/effort"        :argument nil :description "pick the reasoning effort")
     (:name "/trace"         :argument "on|off" :description "show visible reasoning summaries")
+    (:name "/permissions"   :argument nil :description "choose command access for this session")
     (:name "/goal"          :argument "OBJECTIVE" :description "set or view the session goal")
     (:name "/checkpoint"    :argument nil :description "save a retained live generation")
     (:name "/generations"   :argument nil :description "list retained generations")
@@ -188,6 +206,7 @@
     (let* ((overlay-failures (image-state-load preferred-configuration))
            (reasoning-traces-p
              (preferences-reasoning-traces-p preferred-configuration))
+           (permission-state (permissions-load preferred-configuration))
            (conversation (if conversation-id
                              (conversation-load-by-id preferred-configuration
                                                       conversation-id)
@@ -215,6 +234,7 @@
                                        :worker worker
                                        :agent agent
                                        :ui ui
+                                       :permission-state permission-state
                                        :reasoning-traces-p reasoning-traces-p)))
       (setf (application-overlay-failures application) overlay-failures)
       (application--load-goal application)
@@ -235,6 +255,7 @@
             :reasoning-effort (configuration-reasoning-effort previous)))
          (reasoning-traces-p
            (preferences-reasoning-traces-p retained-configuration))
+         (permission-state (permissions-load retained-configuration))
          (recovery-conversation-id
            (let ((value (uiop:getenv "AUTOLITH_RECOVERY_CONVERSATION_ID")))
              (and (non-empty-string-p value) value)))
@@ -280,6 +301,9 @@
           (application-worker application) worker
           (application-agent application) agent
           (application-ui application) ui
+          (application-permission-state application) permission-state
+          (application-permission-mode application) :ask
+          (application-input-controller application) nil
           (application-reasoning-traces-p application) reasoning-traces-p
           (application-rendered-sequence application)
           (if (and recovery-rendered-sequence
@@ -298,7 +322,8 @@
   (setf (application-provider application) nil
         (application-worker application) nil
         (application-agent application) nil
-        (application-ui application) nil)
+        (application-ui application) nil
+        (application-input-controller application) nil)
   application)
 
 (-> application--install-configuration
@@ -985,7 +1010,10 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
            (:turn-completed
             (terminal-ui-set-preview-rows ui nil)
             (terminal-ui-set-status ui nil))))
-       :steering-callback steering-function))))
+       :steering-callback steering-function
+       :command-authorization-callback
+       (lambda (command directory)
+         (application-authorize-command application command directory))))))
 
 (-> application--turn-final-text (provider-result) (option string))
 (defun application--turn-final-text (result)

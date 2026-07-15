@@ -233,8 +233,30 @@
     :initform nil
     :reader tool-context-registry
     :type t
-    :documentation "The registry dispatching this execution, when available."))
+    :documentation "The registry dispatching this execution, when available.")
+   (command-authorization-function
+    :initarg :command-authorization-function
+    :initform nil
+    :reader tool-context-command-authorization-function
+    :type (option function)
+    :documentation "The callback deciding whether and how shell commands may run."))
   (:documentation "The explicit capabilities supplied to one tool execution."))
+
+(-> tool-context-authorize-command
+    (tool-context string pathname)
+    keyword)
+(defun tool-context-authorize-command (context command directory)
+  "Return :DENY, :SANDBOXED, or :FULL-ACCESS for COMMAND in DIRECTORY."
+  (let* ((function (tool-context-command-authorization-function context))
+         (decision (if function
+                       (funcall function command directory)
+                       ':deny)))
+    (unless (member decision '(:deny :sandboxed :full-access))
+      (error 'tool-error
+             :message (format nil "Command authorization returned invalid decision ~S."
+                              decision)
+             :tool-name "shell.run"))
+    decision))
 
 (defclass tool-result ()
   ((content

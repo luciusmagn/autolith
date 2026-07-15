@@ -297,7 +297,7 @@ through private image commits instead."
 (defmethod tool-execute ((tool shell-run-tool)
                          (context tool-context)
                          (arguments hash-table))
-  "Run one bounded external command and return its exit code and output."
+  "Authorize and run one bounded external command under the selected policy."
   (let* ((command (tool-argument arguments "command" :required t))
          (directory (workspace-tool-path
                      context
@@ -310,29 +310,33 @@ through private image commits instead."
       (error 'tool-error
              :message "shell.run requires a non-empty command."
              :tool-name "shell.run"))
-    (uiop:with-temporary-file (:pathname output-path :prefix "autolith-shell")
-      (let* ((process (uiop:launch-program
-                       command
-                       :output output-path
-                       :error-output output-path
-                       :if-output-exists :supersede
-                       :directory directory))
-             (deadline (+ (get-universal-time) timeout))
-             (timed-out-p nil))
-        (loop while (uiop:process-alive-p process)
-              do (when (> (get-universal-time) deadline)
-                   (setf timed-out-p t)
-                   (uiop:terminate-process process :urgent t))
-                 (sleep 0.05))
-        (let ((code (uiop:wait-process process))
-              (output (handler-case
-                          (uiop:read-file-string output-path)
-                        (error ()
-                          ""))))
-          (if timed-out-p
-              (tool-failure
-               (format nil "The command was stopped after ~D seconds.~%~A"
-                       timeout
-                       output))
-              (tool-success
-               (format nil "exit ~D~%~A" code output))))))))
+    (let ((authorization
+            (tool-context-authorize-command context command directory)))
+      (if (eq authorization ':deny)
+          (tool-failure "The user denied this command.")
+          (let* ((configuration (tool-context-configuration context))
+                 (policy
+                   (ecase authorization
+                     (:sandboxed
+                      (workspace-write-sandbox-policy
+                       :workspace-roots
+                       (list (configuration-working-directory configuration))))
+                     (:full-access
+                      (external-sandbox-policy))))
+                 (result
+                   (run-sandboxed
+                    "/bin/sh"
+                    (list "-c" command)
+                    :policy policy
+                    :working-directory directory
+                    :timeout timeout
+                    :merge-output-p t))
+                 (output (sandbox-result-output result)))
+            (if (sandbox-result-timed-out-p result)
+                (tool-failure
+                 (format nil "The command was stopped after ~D seconds.~%~A"
+                         timeout output))
+                (tool-success
+                 (format nil "exit ~D~%~A"
+                         (sandbox-result-exit-code result)
+                         output))))))))

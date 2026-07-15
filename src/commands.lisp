@@ -565,6 +565,95 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
     (terminal-ui-set-status (application-ui application) nil))
   nil)
 
+
+;;;; -- Command Permissions --
+
+(-> application--permission-mode-name (keyword) string)
+(defun application--permission-mode-name (mode)
+  "Return a user-facing description of command permission MODE."
+  (ecase mode
+    (:ask "ask before unrecognized commands")
+    (:sandboxed "allow commands inside the workspace sandbox")
+    (:full-access "let commands run with full user privileges")))
+
+(-> application--permission-mode-items (application) list)
+(defun application--permission-mode-items (application)
+  "Return session command permission choices for APPLICATION."
+  (let ((current (application-permission-mode application)))
+    (list
+     (list :name "ask"
+           :argument nil
+           :description (if (eq current ':ask)
+                            "current; prompt unless this exact command was saved"
+                            "prompt unless this exact command was saved"))
+     (list :name "sandbox"
+           :argument nil
+           :description (if (eq current ':sandboxed)
+                            "current; allow commands inside the workspace sandbox"
+                            "allow commands inside the workspace sandbox"))
+     (list :name "full"
+           :argument nil
+           :description (if (eq current ':full-access)
+                            "current; let it ride with full user privileges"
+                            "let it ride with full user privileges")))))
+
+(-> application--saved-permissions-text (application) string)
+(defun application--saved-permissions-text (application)
+  "Return a readable list of APPLICATION's saved exact command approvals."
+  (let ((rules (permission-state-rules
+                (application-permission-state application))))
+    (if rules
+        (format nil "Saved exact command approvals:~%~{~A~^~%~}"
+                (loop for rule in rules
+                      collect
+                      (format nil "  ~A~%    in ~A"
+                              (command-permission-command rule)
+                              (application--abbreviated-directory
+                               (command-permission-directory rule)))))
+        "No exact command approvals are saved.")))
+
+(-> application-permissions-command (application (option string)) null)
+(defun application-permissions-command (application argument)
+  "Show or change APPLICATION's session command permissions."
+  (let ((choice
+          (or (and argument (string-downcase argument))
+              (application--pick-identifier
+               application
+               :title "command permissions"
+               :items (application--permission-mode-items application)
+               :usage "Usage: /permissions [ask|sandbox|full|list|clear]"
+               :empty-notice "No command permission modes exist."))))
+    (cond
+      ((null choice)
+       nil)
+      ((string= choice "ask")
+       (setf (application-permission-mode application) ':ask)
+       (application-present
+        application
+        "Commands will ask before running unless the exact command was saved."))
+      ((string= choice "sandbox")
+       (setf (application-permission-mode application) ':sandboxed)
+       (application-present
+        application
+        "Commands may run for this session inside the workspace sandbox."))
+      ((string= choice "full")
+       (setf (application-permission-mode application) ':full-access)
+       (application-present
+        application
+        "Commands may run for this session with your full user privileges."))
+      ((string= choice "list")
+       (application-present application
+                            (application--saved-permissions-text application)))
+      ((string= choice "clear")
+       (permissions-clear
+        (application-configuration application)
+        (application-permission-state application))
+       (application-present application "Saved command approvals were cleared."))
+      (t
+       (error 'configuration-error
+              :message "Usage: /permissions [ask|sandbox|full|list|clear]."))))
+  nil)
+
 (-> application-command (application string) keyword)
 (defun application-command (application input)
   "Execute slash command INPUT for APPLICATION and return its loop action."
@@ -641,6 +730,9 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        :continue)
       ((string= command "/trace")
        (application-trace-command application argument)
+       :continue)
+      ((string= command "/permissions")
+       (application-permissions-command application argument)
        :continue)
       ((string= command "/goal")
        (application-goal-command application

@@ -25,8 +25,8 @@ mutation, checkpoints, and recovery. It talks directly to the ChatGPT Codex
 subscription service and does not launch or bundle the Codex CLI.
 
 The supported target is Linux x86-64 on SBCL. Autolith is dogfoodable, but it
-is not a security sandbox: model-generated Lisp and commands run with the
-user's privileges.
+is not a security sandbox: model-generated Lisp runs with the user's privileges,
+and the user can grant commands full access for a session.
 
 * Highlights
 
@@ -91,7 +91,7 @@ drafted and queued while AL is responding. Type =/help= for commands.
 
 * Persistent state
 
-Autolith keeps credentials, preferences, and atomic selections under
+Autolith keeps credentials, preferences, exact command approvals, and atomic selections under
 =${XDG_STATE_HOME:-~/.local/state}/autolith/=, including a private Git history
 of durable mutation snapshots. Conversations, canonical image commits,
 memories, generations, runtimes, matching implementation source, and worker

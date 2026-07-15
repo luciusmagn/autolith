@@ -164,6 +164,7 @@ prefix from before selection. The commands are:
 /model          pick the 5.6 model
 /effort         pick the reasoning effort
 /trace on|off   show visible reasoning summaries
+/permissions    choose command access for this session
 /goal OBJECTIVE set or view the session goal
 /checkpoint     save a retained live generation
 /generations    list retained generations
@@ -278,9 +279,21 @@ returns numbered file lines from an optional window, =fs.list= lists one
 directory with entry kinds and sizes, =fs.write= creates or replaces a file,
 =fs.edit= replaces exact text with a uniqueness check, and =shell.run=
 executes one external command with a bounded timeout and combined output.
-They run in the active process but touch only files and subprocesses, never
-the Lisp heap, so the model does not need =self.eval= to look around. The
-stable launcher and recovery artifacts stay read-only through these tools.
+Unknown commands ask before execution. Allowing once or permanently runs the
+command with an isolated network and a read-only host filesystem except for the
+workspace and temporary directories. A permanent approval matches the exact
+command text and canonical working directory and is stored privately in
+=${XDG_STATE_HOME:-~/.local/state}/autolith/permissions.sexp=. Use
+=/permissions= to return to ask mode, allow sandboxed commands for the session,
+let commands run with full user privileges for the session, list exact saved
+approvals, or clear them. Corrupt permission state is ignored with a warning and
+all unknown commands continue to ask.
+
+These tools run in the active process but never modify the Lisp heap, so the
+model does not need =self.eval= to look around. The stable launcher and recovery
+artifacts stay read-only through the filesystem tools and ordinary command
+sandbox. This boundary reduces accidental damage from external programs. It
+does not make Autolith as a whole a security sandbox.
 
 The =search.*= namespace is the normal way to discover workspace code. It uses
 one warm [[https://github.com/dmtrKovalenko/fff][fff]] index shared by all search tools. =search.files= fuzzy-matches file

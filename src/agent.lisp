@@ -39,7 +39,13 @@
     :initform nil
     :reader callback-agent-observer-steering-callback
     :type (option function)
-    :documentation "The optional function that drains user messages waiting for a tool boundary."))
+    :documentation "The optional function that drains user messages waiting for a tool boundary.")
+   (command-authorization-callback
+    :initarg :command-authorization-callback
+    :initform nil
+    :reader callback-agent-observer-command-authorization-callback
+    :type (option function)
+    :documentation "The optional function authorizing one external command."))
   (:documentation "An agent observer implemented by ordinary terminal-facing callbacks."))
 
 (defclass agent ()
@@ -148,6 +154,12 @@
   (:documentation
    "Return and consume user messages waiting at OBSERVER's next tool boundary."))
 
+(-> agent-observer-authorize-command
+    (agent-observer string pathname)
+    keyword)
+(defgeneric agent-observer-authorize-command (observer command directory)
+  (:documentation "Return the execution permission for COMMAND in DIRECTORY."))
+
 (defmethod agent-observer-text ((observer agent-observer) (text string))
   "Ignore assistant TEXT for the default silent OBSERVER."
   (declare (ignore observer text))
@@ -170,6 +182,12 @@
   "Return no steering messages for the default silent OBSERVER."
   (declare (ignore observer))
   nil)
+
+(defmethod agent-observer-authorize-command
+    ((observer agent-observer) (command string) (directory pathname))
+  "Deny COMMAND when OBSERVER has no authorization interface."
+  (declare (ignore observer command directory))
+  ':deny)
 
 (defmethod agent-observer-text ((observer callback-agent-observer) (text string))
   "Send assistant TEXT to OBSERVER's configured callback."
@@ -203,6 +221,15 @@
         (funcall callback)
         nil)))
 
+(defmethod agent-observer-authorize-command
+    ((observer callback-agent-observer) (command string) (directory pathname))
+  "Authorize COMMAND through OBSERVER's callback, denying when absent."
+  (let ((callback
+          (callback-agent-observer-command-authorization-callback observer)))
+    (if callback
+        (funcall callback command directory)
+        ':deny)))
+
 
 ;;;; -- Construction and Turn Entry --
 
@@ -211,16 +238,20 @@
      (:text-callback (option function))
      (:reasoning-callback (option function))
      (:status-callback (option function))
-     (:steering-callback (option function)))
+     (:steering-callback (option function))
+     (:command-authorization-callback (option function)))
     callback-agent-observer)
 (defun callback-agent-observer-create
-    (&key text-callback reasoning-callback status-callback steering-callback)
+    (&key text-callback reasoning-callback status-callback steering-callback
+      command-authorization-callback)
   "Create an observer backed by optional presentation callbacks."
   (make-instance 'callback-agent-observer
                  :text-callback text-callback
                  :reasoning-callback reasoning-callback
                  :status-callback status-callback
-                 :steering-callback steering-callback))
+                 :steering-callback steering-callback
+                 :command-authorization-callback
+                 command-authorization-callback))
 
 (-> agent-create
     (&key
@@ -402,7 +433,11 @@
                          :configuration (agent-configuration agent)
                          :worker (agent-worker agent)
                          :conversation (agent-conversation agent)
-                         :registry (agent-tool-registry agent))))
+                         :registry (agent-tool-registry agent)
+                         :command-authorization-function
+                         (lambda (command directory)
+                           (agent-observer-authorize-command
+                            observer command directory)))))
     (dolist (call calls)
       (let* ((call-id (json-get call "call_id"))
              (tool-name (function-call-canonical-name call)))
