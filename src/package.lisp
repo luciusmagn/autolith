@@ -4,6 +4,13 @@
                 #:define-constant)
   (:import-from #:cl-base64
                 #:base64-string-to-string)
+  (:import-from #:cl-exec-sandbox
+                #:external-sandbox-policy
+                #:run-sandboxed
+                #:sandbox-result-exit-code
+                #:sandbox-result-output
+                #:sandbox-result-timed-out-p
+                #:workspace-write-sandbox-policy)
   (:import-from #:cffi
                 #:defcstruct
                 #:defcfun

@@ -32,6 +32,7 @@
   (format t "~&Loading Autolith for its preloaded active image.~%")
   (finish-output)
   (load project-setup)
+  (load (merge-pathnames "script/build-sandbox.lisp" source-root))
   (uiop:symbol-call '#:ql '#:quickload :cffi :silent t)
   (let ((profile-library-directory
           (merge-pathnames ".guix-profile/lib/" home))

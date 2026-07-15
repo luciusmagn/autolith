@@ -590,6 +590,7 @@ Autolith should include or locate:
 - The exact source corresponding to the pinned SBCL runtime.
 - A local, pinned Quicklisp distribution or equivalent dependency set.
 - Required Lisp source dependencies.
+- Bubblewrap and a private =cl-exec-sandbox= helper on Linux.
 - A documented set of useful external binaries.
 
 Available Lisp systems and external commands are exposed to the agent

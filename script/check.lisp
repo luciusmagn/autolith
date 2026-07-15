@@ -20,6 +20,7 @@
   (unless (probe-file quicklisp-setup)
     (error "Autolith needs Quicklisp at ~A" quicklisp-setup))
   (load quicklisp-setup)
+  (load (merge-pathnames "script/build-sandbox.lisp" source-root))
   (uiop:symbol-call '#:ql '#:quickload :cffi :silent t)
   (let ((profile-library-directory
           (merge-pathnames ".guix-profile/lib/" (user-homedir-pathname)))

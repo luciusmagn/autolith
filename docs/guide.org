@@ -27,8 +27,8 @@ file boundaries are summarized in [[file:architecture.org][the architecture note
 
 * Requirements and setup
 
-The supported target is Linux x86-64 with Git, OpenSSL, Quicklisp, =curl=, GNU
-=tar=, and =sha256sum=. The tracked =sbcl.version= pins SBCL 2.6.4. The setup
+The supported target is Linux x86-64 with Git, OpenSSL, Quicklisp, Bubblewrap,
+=curl=, GNU =tar=, and =sha256sum=. The tracked =sbcl.version= pins SBCL 2.6.4. The setup
 command uses a matching =AUTOLITH_SBCL= when explicitly configured, locates a
 matching system runtime, or downloads the official Linux x86-64 binary and
 checks its pinned SHA-256 identity before installing it under the Autolith data
@@ -47,7 +47,8 @@ installed at =~/quicklisp=, run:
 
 =script/bootstrap= installs the pinned runtime when needed, installs Qlot through
 Quicklisp, materializes the locked project dependencies under the ignored
-=.qlot/= directory, builds a small pristine recovery core under
+=.qlot/= directory, builds the private command sandbox helper and fff library,
+builds a small pristine recovery core under
 =${XDG_DATA_HOME:-~/.local/share}/autolith/recovery/=, and builds a preloaded
 active image under the adjacent =active/= directory. Both cores and their
 manifests are installed read-only. Matching implementation source lives under

@@ -16,6 +16,38 @@ let
     };
   };
 
+  clExecSandboxSource = pkgs.fetchFromGitHub {
+    owner = "luciusmagn";
+    repo = "cl-exec-sandbox";
+    rev = "8c47a1dadb64eba1629742ef6b43789ed7d73b36";
+    hash = "sha256-zcqvLvsjRDf7LKJj3YAHRMvKkXB0Tb37GSCFyyuG5TU=";
+  };
+
+  clExecSandbox = pkgs.sbcl.buildASDFSystem {
+    pname = "cl-exec-sandbox";
+    version = "0.1.0";
+    src = clExecSandboxSource;
+  };
+
+  sandboxHelper = pkgs.stdenv.mkDerivation {
+    pname = "cl-exec-sandbox-helper";
+    version = "0.1.0";
+    src = clExecSandboxSource;
+    nativeBuildInputs = [ pkgs.bash ];
+    dontConfigure = true;
+    buildPhase = ''
+      runHook preBuild
+      bash scripts/build-helper
+      runHook postBuild
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 build/cl-exec-sandbox-helper \
+        "$out/libexec/cl-exec-sandbox-helper"
+      runHook postInstall
+    '';
+  };
+
   fffLibrary = pkgs.rustPlatform.buildRustPackage {
     pname = "fff-c";
     version = "0.9.6";
@@ -55,6 +87,7 @@ let
       serapeum
       yason
       clinedi
+      clExecSandbox
     ];
     nativeBuildInputs = [ pkgs.git ];
 
@@ -119,6 +152,7 @@ pkgs.writeShellApplication {
   name = "autolith";
   runtimeInputs = [
     pkgs.bash
+    pkgs.bubblewrap
     pkgs.coreutils
     pkgs.git
     pkgs.gnugrep
@@ -130,6 +164,8 @@ pkgs.writeShellApplication {
     export AUTOLITH_SBCL="${runtime}/bin/sbcl"
     export AUTOLITH_SBCL_SOURCE_ROOT="${sbclSource}"
     export AUTOLITH_FFF_LIBRARY="${fffLibrary}/lib/libfff_c.so"
+    export CL_EXEC_SANDBOX_BWRAP="${pkgs.bubblewrap}/bin/bwrap"
+    export CL_EXEC_SANDBOX_HELPER="${sandboxHelper}/libexec/cl-exec-sandbox-helper"
 
     # The packaged source repository is root-owned in /nix/store. Permit Git
     # provenance reads without weakening safe.directory globally.
@@ -182,6 +218,6 @@ pkgs.writeShellApplication {
   };
 
   passthru = {
-    inherit autolithSystem fffLibrary runtime sbclSource;
+    inherit autolithSystem clExecSandbox fffLibrary runtime sandboxHelper sbclSource;
   };
 }

@@ -6,6 +6,7 @@
   :depends-on (#:alexandria
                #:cffi
                #:cl-base64
+               #:cl-exec-sandbox
                #:clinedi
                #:closer-mop
                #:dexador

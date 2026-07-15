@@ -9,3 +9,4 @@ ql serapeum 2026-01-01
 ql yason 2026-01-01
 
 git clinedi https://github.com/luciusmagn/clinedi.git :ref 04a383c12b975c759746cae1abe7a08b57e0b066
+git cl-exec-sandbox https://github.com/luciusmagn/cl-exec-sandbox.git :ref 8c47a1dadb64eba1629742ef6b43789ed7d73b36
