@@ -128,8 +128,10 @@ column across explicit and wrapped input rows, falling back to history only at
 the first or last visual row.
 
 The prompt remains editable while Autolith streams a response or runs tools.
-Enter queues another message behind the active turn, and the live region shows
-how many messages are waiting. Active status includes elapsed time; after 30
+Enter steers the active turn at its next tool boundary. Tab queues the draft as
+a later follow-up; the live region shows bounded previews of steering and queued
+messages. With an empty draft, Tab recalls the newest follow-up for editing.
+When Autolith is idle, Tab submits like Enter. Active status includes elapsed time; after 30
 seconds without provider progress it also shows the no-update duration. A draft
 that has not been submitted survives streaming updates unchanged. Slash commands that need modal terminal input are
 held in the editor until the current response finishes; nonmodal commands such

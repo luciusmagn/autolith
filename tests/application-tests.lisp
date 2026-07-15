@@ -1156,10 +1156,10 @@
                           "the steered response reaches scrollback")
              (test-assert (search "queued answer" output)
                           "the Tab-queued response reaches scrollback")
-             (test-assert (search "1 message waiting for next tool call" output)
-                          "the live region reports pending steering")
-             (test-assert (search "1 follow-up queued" output)
-                          "the live region reports post-turn follow-up input")
+             (test-assert (search "steering 1/1  steer this turn" output)
+                          "the live region previews pending steering")
+             (test-assert (search "follow-up 1/1  queued follow-up" output)
+                          "the live region previews post-turn follow-up input")
              (test-assert
               (live-region-cursor-visible-p (terminal-ui-live-region ui))
               "responsive model turns leave the input cursor visible")
@@ -1239,6 +1239,39 @@
               (equal (application-input-controller--next-work controller)
                      '(:message "tab follow-up"))
               "Tab input remains queued after promoted steering"))
+        (when controller
+          (application-input-controller-stop controller)))))
+  (let* ((terminal (make-instance 'waiting-recording-terminal :columns 60))
+         (ui (terminal-ui-create :terminal terminal))
+         (application (make-instance 'application :ui ui))
+         (controller nil))
+    (with-terminal-ui (active-ui ui)
+      (declare (ignore active-ui))
+      (setf controller (application-input-controller-create application))
+      (unwind-protect
+           (progn
+             (application-input-controller--enqueue
+              controller ':message "active turn")
+             (application-input-controller--next-work controller)
+             (application-input-controller--enqueue
+              controller ':message "first queued thought")
+             (application-input-controller--enqueue
+              controller ':message "newest queued thought")
+             (test-assert
+              (application-input-controller--recall-follow-up controller)
+              "empty Tab can recall the newest queued follow-up")
+             (test-assert
+              (string= (line-editor-text (terminal-ui-editor ui))
+                       "newest queued thought")
+              "a recalled follow-up becomes ordinary editable input")
+             (test-assert
+              (equal (application-input-controller-work-items controller)
+                     '((:message "first queued thought")))
+              "recalling a follow-up preserves earlier queue order")
+             (test-assert
+              (search "follow-up 1/2  first queued thought"
+                      (recording-terminal-output terminal))
+              "the live queue shows message previews before editing"))
         (when controller
           (application-input-controller-stop controller)))))
   nil)

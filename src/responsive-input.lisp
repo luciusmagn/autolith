@@ -116,23 +116,19 @@
                          "/permissions")
                        :test #'string=)))))))
 
-(-> application-input-controller--pending-input-count
-    (application-input-controller)
-    (integer 0))
-(defun application-input-controller--pending-input-count (controller)
-  "Return CONTROLLER's queued follow-up count while its lock is held."
-  (length (application-input-controller-work-items controller)))
-
 (-> application-input-controller--publish-counts
     (application-input-controller)
     null)
 (defun application-input-controller--publish-counts (controller)
-  "Publish CONTROLLER's steering and follow-up counts through its serialized UI."
+  "Publish CONTROLLER's pending input previews through its serialized UI."
   (with-lock-held ((application-input-controller-lock controller))
-    (terminal-ui-set-input-counts
+    (terminal-ui-set-pending-inputs
      (application-ui (application-input-controller-application controller))
-     (length (application-input-controller-steering-items controller))
-     (application-input-controller--pending-input-count controller)))
+     (copy-list (application-input-controller-steering-items controller))
+     (loop for work in (application-input-controller-work-items controller)
+           for input = (second work)
+           when (stringp input)
+             collect (copy-seq input))))
   nil)
 
 (-> application-input-controller-turn-active-p
@@ -323,6 +319,38 @@
        (application-input-controller--enqueue controller ':command input))))
   nil)
 
+(-> application-input-controller--recall-follow-up
+    (application-input-controller)
+    boolean)
+(defun application-input-controller--recall-follow-up (controller)
+  "Recall CONTROLLER's newest follow-up into the editor for revision."
+  (let ((work nil)
+        (steering-inputs nil)
+        (queued-inputs nil))
+    (with-lock-held ((application-input-controller-lock controller))
+      (when (and (application-input-controller-active-p controller)
+                 (application-input-controller-work-items controller))
+        (setf work (first (last
+                           (application-input-controller-work-items controller)))
+              (application-input-controller-work-items controller)
+              (butlast (application-input-controller-work-items controller))
+              steering-inputs
+              (copy-list
+               (application-input-controller-steering-items controller))
+              queued-inputs
+              (loop for queued-work
+                      in (application-input-controller-work-items controller)
+                    for input = (second queued-work)
+                    when (stringp input)
+                      collect (copy-seq input)))))
+    (when work
+      (terminal-ui-recall-follow-up
+       (application-ui (application-input-controller-application controller))
+       (second work)
+       :steering-inputs steering-inputs
+       :queued-inputs queued-inputs))
+    (not (null work))))
+
 (-> application-input-controller--process-event
     (application-input-controller t)
     null)
@@ -342,6 +370,8 @@
         (:queue
          (application-input-controller--handle-queue-submission
           controller payload))
+        (:edit-queue
+         (application-input-controller--recall-follow-up controller))
         (:end-of-input
          (application-input-controller--request-exit controller ':end-of-input))
         (:interrupt
@@ -617,10 +647,10 @@
             thread (application-input-controller-reader-thread controller))
       (condition-notify
        (application-input-controller-condition-variable controller)))
-    (terminal-ui-set-input-counts
+    (terminal-ui-set-pending-inputs
      (application-ui (application-input-controller-application controller))
-     0
-     0)
+     nil
+     nil)
     (when thread
       (join-thread thread)
       (with-lock-held ((application-input-controller-lock controller))

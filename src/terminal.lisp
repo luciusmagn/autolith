@@ -182,16 +182,16 @@
     :accessor terminal-ui-preview-rows
     :type list
     :documentation "Transient styled rows shown in the live region, never scrollback.")
-   (queued-input-count
-    :initform 0
-    :accessor terminal-ui-queued-input-count
-    :type (integer 0)
-    :documentation "Submitted follow-up inputs waiting behind the active model turn.")
-   (steering-input-count
-    :initform 0
-    :accessor terminal-ui-steering-input-count
-    :type (integer 0)
-    :documentation "Submitted messages waiting for the active turn's next tool boundary.")
+   (queued-input-previews
+    :initform nil
+    :accessor terminal-ui-queued-input-previews
+    :type list
+    :documentation "Sanitized queued follow-up text shown in the live region.")
+   (steering-input-previews
+    :initform nil
+    :accessor terminal-ui-steering-input-previews
+    :type list
+    :documentation "Sanitized steering text shown in the live region.")
    (stream-tail
     :initform nil
     :accessor terminal-ui-stream-tail
