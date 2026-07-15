@@ -469,6 +469,10 @@ All complete preceding forms remain valid.
 Large or binary artifacts are stored separately and referenced from the
 conversation file.
 
+Every executed tool result records nonnegative CPU and real durations. Terminal
+presentation shows both durations. Calls rejected before execution and repaired
+unknown-outcome records omit timing rather than inventing a duration.
+
 ** 8.2 Mutation Journal
 
 The mutation journal is append-only and records enough information to

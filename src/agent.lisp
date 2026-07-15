@@ -447,17 +447,27 @@
          (list :tool-round tool-round
                :call-id call-id
                :tool tool-name))
-        (let ((result
-                (tool-registry-execute-call
-                 (agent-tool-registry agent)
-                 call
-                 context)))
+        (let* ((real-start (get-internal-real-time))
+               (cpu-start (get-internal-run-time))
+               (result
+                 (tool-registry-execute-call
+                  (agent-tool-registry agent)
+                  call
+                  context))
+               (cpu-microseconds
+                 (round (* (- (get-internal-run-time) cpu-start) 1000000)
+                        internal-time-units-per-second))
+               (real-microseconds
+                 (round (* (- (get-internal-real-time) real-start) 1000000)
+                        internal-time-units-per-second)))
           (conversation-append-tool-result
            (agent-conversation agent)
            call-id
            tool-name
            (tool-result-content result)
-           (tool-result-success-p result))
+           (tool-result-success-p result)
+           :cpu-microseconds cpu-microseconds
+           :real-microseconds real-microseconds)
           (agent-observer-status
            observer
            :tool-call-completed
@@ -465,6 +475,8 @@
                  :call-id call-id
                  :tool tool-name
                  :success-p (tool-result-success-p result)
+                 :cpu-microseconds cpu-microseconds
+                 :real-microseconds real-microseconds
                  :output (tool-result-content result)))))))
   nil)
 

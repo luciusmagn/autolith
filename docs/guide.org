@@ -344,6 +344,12 @@ Responses use workspace-relative locations, compact metadata, and explicit
 pagination cursors so the model can read a likely file instead of repeating
 slightly different shell searches.
 
+Every executed tool result records and displays CPU and real elapsed time. Real
+time includes authorization, external process duration, and other waits around
+the complete tool operation; CPU time measures work consumed by the Autolith
+process. Calls rejected before execution and results synthesized during crash
+repair have no invented timing.
+
 Bootstrap builds fff revision
 =44a5b259570730a4236ecbf06673d43ef7b2263e= from its locked Rust source and
 publishes =libfff_c.so= under

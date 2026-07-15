@@ -208,6 +208,17 @@
                           "the observer receives deltas from every provider request")
              (test-assert (member :tool-call-completed statuses)
                           "the observer receives correlated tool lifecycle status")
+             (let* ((records
+                      (conversation--read-records
+                       (conversation-pathname conversation)))
+                    (tool-result
+                      (find :tool-result records :key #'first)))
+               (test-assert
+                (and (typep (getf (rest tool-result) :cpu-microseconds)
+                            '(integer 0))
+                     (typep (getf (rest tool-result) :real-microseconds)
+                            '(integer 0)))
+                "executed tool results persist CPU and real timing"))
              (test-assert (= (count :provider-progress statuses) 2)
                           "every streamed delta refreshes visible provider progress")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))

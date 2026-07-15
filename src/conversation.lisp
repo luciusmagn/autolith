@@ -243,18 +243,35 @@
   :documentation
   "The provider-visible result synthesized for a tool call interrupted by exit.")
 
-(-> conversation-append-tool-result (conversation string string string boolean) json-object)
-(defun conversation-append-tool-result (conversation call-id tool-name output success-p)
-  "Persist and append one tool OUTPUT associated with CALL-ID and TOOL-NAME."
+(-> conversation-append-tool-result
+    (conversation string string string boolean
+     &key (:cpu-microseconds (option (integer 0)))
+          (:real-microseconds (option (integer 0))))
+    json-object)
+(defun conversation-append-tool-result
+    (conversation call-id tool-name output success-p
+     &key cpu-microseconds real-microseconds)
+  "Persist and append one tool OUTPUT with optional CPU and real timing."
+  (unless (or (and (null cpu-microseconds) (null real-microseconds))
+              (and (typep cpu-microseconds '(integer 0))
+                   (typep real-microseconds '(integer 0))))
+    (error 'conversation-invariant-error
+           :message "Tool timing must contain both nonnegative microsecond values."
+           :pathname (conversation-pathname conversation)
+           :sequence (conversation-next-sequence conversation)))
   (let ((item (function-call-output-item call-id output)))
     (conversation-append-record
      conversation
-     (list :tool-result
-           :call-id call-id
-           :tool tool-name
-           :status (if success-p :ok :error)
-           :output output
-           :wire-json (json-encode item)))
+     (append
+      (list :tool-result
+            :call-id call-id
+            :tool tool-name
+            :status (if success-p :ok :error)
+            :output output)
+      (when cpu-microseconds
+        (list :cpu-microseconds cpu-microseconds
+              :real-microseconds real-microseconds))
+      (list :wire-json (json-encode item))))
     (conversation--append-input-item conversation item)))
 
 (-> conversation--wire-item-type-p (json-object string) boolean)

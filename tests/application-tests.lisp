@@ -703,6 +703,8 @@
                    application
                    (list :tool-result :seq 2 :time 0 :call-id 1
                          :tool "fs.read" :status :ok
+                         :cpu-microseconds 1234
+                         :real-microseconds 567890
                          :output (format nil
                                          "src/application.lisp lines 5-7 of 100~%~
                                           5  hidden source~%~
@@ -711,6 +713,9 @@
            (text (markdown-tests--row-text entry)))
       (test-assert (search "src/application.lisp lines 5-7 of 100" text)
                    "fs.read results show the actual path, window, and total")
+      (test-assert (and (search "cpu 0.001s" text)
+                        (search "real 0.568s" text))
+                   "tool results show CPU and real elapsed time")
       (test-assert (not (search "hidden source" text))
                    "fs.read results omit returned file contents"))
     (let* ((entry (conversation-record-entry

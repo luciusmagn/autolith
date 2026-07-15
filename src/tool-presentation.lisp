@@ -722,18 +722,36 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
   "Return true when tool result RECORD has successful status."
   (eq (getf (rest record) :status) ':ok))
 
+(-> application--tool-result-timing (list) (option string))
+(defun application--tool-result-timing (record)
+  "Return RECORD's CPU and real duration as a concise detail string."
+  (let ((cpu (getf (rest record) :cpu-microseconds))
+        (real (getf (rest record) :real-microseconds)))
+    (when (and (typep cpu '(integer 0))
+               (typep real '(integer 0)))
+      (format nil "cpu ~,3Fs · real ~,3Fs"
+              (/ cpu 1000000.0d0)
+              (/ real 1000000.0d0)))))
+
 (-> application--tool-result-entry
     (application list &key (:detail (option string)) (:rows list))
     list)
 (defun application--tool-result-entry (application record &key detail rows)
   "Return RECORD's status header with optional DETAIL and styled ROWS."
-  (let ((success-p (application--tool-result-success-p record))
-        (tool-name (getf (rest record) :tool)))
+  (let* ((success-p (application--tool-result-success-p record))
+         (tool-name (getf (rest record) :tool))
+         (timing (application--tool-result-timing record))
+         (complete-detail
+           (cond
+             ((and detail timing)
+              (format nil "~A · ~A" detail timing))
+             (detail detail)
+             (timing timing))))
     (application--tool-entry
      application
      :style (if success-p ':success ':failure)
      :header (format nil "~:[✗ ~A failed~;✓ ~A~]" success-p tool-name)
-     :detail detail
+     :detail complete-detail
      :rows rows)))
 
 (-> application--section-preview-rows
