@@ -60,6 +60,11 @@
      (search "writes limited to the workspace and temporary directories" prompt)
      "the system prompt explains the ordinary command sandbox boundary")
     (test-assert
+     (and (search "prefer Common Lisp in a named lisp.* REPL" prompt)
+          (search "Do not generate Python scripts or assume python3 is installed"
+                  prompt))
+     "the system prompt prefers available Lisp tooling over Python scripts")
+    (test-assert
      (search "Persistent memory catalog: no relevant memories" prompt)
      "the system prompt carries the current relevant-memory catalog")
     (test-assert (search "Current workspace agenda: empty" prompt)
