@@ -72,13 +72,54 @@
          when row
            append (application--tool-row-spans application row))))
 
-(-> application--tool-field-row
-    (string string &key (:style terminal-style))
-    list)
-(defun application--tool-field-row (label value &key (style ':plain))
-  "Return one labeled tool transcript row."
-  (list (terminal-span ':dim (format nil "~12A " label))
-        (terminal-span style value)))
+(-> application--tool-field-rows (application list) list)
+(defun application--tool-field-rows (application fields)
+  "Return aligned, wrapped rows for tool detail FIELDS.
+
+Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
+  (let* ((safe-fields
+           (loop for field in fields
+                 collect (list :label
+                               (sanitize-text (or (getf field :label) "")
+                                              :single-line-p t)
+                               :value
+                               (sanitize-text (or (getf field :value) "")
+                                              :single-line-p t)
+                               :style (or (getf field :style) ':plain))))
+         (available-width
+           (max 0
+                (- (terminal-columns
+                    (terminal-ui-terminal (application-ui application)))
+                   3)))
+         (column-widths
+           (layout-column-widths
+            (loop for field in safe-fields
+                  collect (list (getf field :label) (getf field :value)))
+            available-width
+            :gap-width 2
+            :minimum-widths '(1 4)))
+         (label-width (or (first column-widths) 0))
+         (value-width (or (second column-widths) 0)))
+    (loop for field in safe-fields
+          append
+          (let ((value-rows
+                  (if (plusp value-width)
+                      (or (wrap-text (getf field :value) value-width)
+                          (list ""))
+                      (list ""))))
+            (loop for value-row in value-rows
+                  for first-p = t then nil
+                  collect
+                  (append
+                   (list (terminal-span
+                          ':dim
+                          (layout-fit-text
+                           (if first-p (getf field :label) "")
+                           label-width)))
+                   (when (plusp value-width)
+                     (list (terminal-span ':plain "  ")
+                           (terminal-span (getf field :style)
+                                          value-row)))))))))
 
 (-> application--tool-section-row (string) list)
 (defun application--tool-section-row (label)
@@ -112,22 +153,33 @@
     (t
      (bounded-string value :limit 500))))
 
-(-> application--generic-argument-rows ((option json-object)) list)
-(defun application--generic-argument-rows (arguments)
+(-> application--generic-argument-rows
+    (application (option json-object))
+    list)
+(defun application--generic-argument-rows (application arguments)
   "Return readable field rows for generic tool ARGUMENTS."
   (when arguments
-    (loop for name in (sort (loop for key being the hash-keys of arguments
-                                  collect key)
-                            #'string<)
-          for value = (json-get arguments name)
-          for text = (application--presentation-value value)
-          append (if (find #\Newline text)
-                     (append (list (application--tool-section-row name))
-                             (application--preview-rows
-                              text ':code +application-tool-call-lines+
-                              :gutter "│ "))
-                     (list (application--tool-field-row name text
-                                                        :style ':code))))))
+    (let ((fields nil)
+          (sections nil))
+      (loop for name in (sort (loop for key being the hash-keys of arguments
+                                    collect key)
+                              #'string<)
+            for value = (json-get arguments name)
+            for text = (application--presentation-value value)
+            do (if (find #\Newline text)
+                   (setf sections
+                         (append sections
+                                 (list (application--tool-section-row name))
+                                 (application--preview-rows
+                                  text ':code +application-tool-call-lines+
+                                  :gutter "│ ")))
+                   (setf fields
+                         (append fields
+                                 (list (list :label name
+                                             :value text
+                                             :style ':code))))))
+      (append (application--tool-field-rows application fields)
+              sections))))
 
 (-> application--restart-call-rows ((option json-object)) list)
 (defun application--restart-call-rows (arguments)
@@ -153,6 +205,7 @@
    :style ':tool
    :header (format nil "▸ ~A" (function-call-canonical-name call))
    :rows (application--generic-argument-rows
+          application
           (application--function-call-arguments call))))
 
 (defmethod application-tool-call-entry
@@ -241,12 +294,15 @@
      application
      :style ':tool
      :header "▸ fs.write"
-     :rows (list (list (terminal-span ':code path))
-                 (application--tool-field-row
-                  "content"
-                  (if (stringp content)
-                      (format nil "~:D character~:P" (length content))
-                      "unknown size"))))))
+     :rows (append
+            (list (list (terminal-span ':code path)))
+            (application--tool-field-rows
+             application
+             (list (list :label "content"
+                         :value (if (stringp content)
+                                    (format nil "~:D character~:P"
+                                            (length content))
+                                    "unknown size"))))))))
 
 (-> application--edit-common-prefix-length (vector vector) integer)
 (defun application--edit-common-prefix-length (old-lines new-lines)
@@ -497,7 +553,9 @@
      :rows (append
             (list (list (terminal-span ':code path)))
             (when replace-all
-              (list (application--tool-field-row "scope" "all occurrences")))
+              (application--tool-field-rows
+               application
+               (list (list :label "scope" :value "all occurrences"))))
             (list nil)
             (application--edit-hunk-rows
              application
@@ -536,13 +594,17 @@
          (directory (and arguments (json-get arguments "directory")))
          (timeout (and arguments (json-get arguments "timeout-seconds")))
          (metadata
-           (append (when (or directory timeout) (list nil))
-                   (when (non-empty-string-p directory)
-                     (list (application--tool-field-row
-                            "directory" directory :style ':code)))
-                   (when (integerp timeout)
-                     (list (application--tool-field-row
-                            "timeout" (format nil "~D seconds" timeout)))))))
+           (let ((fields
+                   (append
+                    (when (non-empty-string-p directory)
+                      (list (list :label "directory"
+                                  :value directory
+                                  :style ':code)))
+                    (when (integerp timeout)
+                      (list (list :label "timeout"
+                                  :value (format nil "~D seconds" timeout)))))))
+             (append (when fields (list nil))
+                     (application--tool-field-rows application fields)))))
     (application--tool-entry
      application
      :style ':tool
@@ -594,8 +656,10 @@
      :style ':tool
      :header "▸ self.set"
      :rows (append
-            (list (application--tool-field-row "symbol" symbol :style ':code)
-                  (application--tool-section-row "value"))
+            (application--tool-field-rows
+             application
+             (list (list :label "symbol" :value symbol :style ':code)))
+            (list (application--tool-section-row "value"))
             (application--preview-rows
              value ':code +application-tool-call-lines+ :gutter "│ ")
             (application--restart-call-rows arguments)))))
@@ -646,7 +710,9 @@
      application
      :style ':tool
      :header "▸ self.commit"
-     :rows (list (application--tool-field-row "title" title)))))
+     :rows (application--tool-field-rows
+            application
+            (list (list :label "title" :value title))))))
 
 
 ;;; Tool result layout

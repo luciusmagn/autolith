@@ -117,6 +117,10 @@ beside the mark above the model and workspace; internal conversation identifiers
 stay out of the header. Other styles use the basic terminal palette and
 emphasis. Set =NO_COLOR= to disable styling entirely.
 
+Tool details, Markdown tables, and interactive picker descriptions use the same
+terminal-cell-aware column allocator. Long labels and values shrink or wrap
+within the current width instead of relying on tabs or fixed character columns.
+
 Enter submits the complete input. Alt-Enter inserts a newline. Shift-Enter also
 inserts a newline when the terminal reports modified keys with CSI-u or
 modifyOtherKeys sequences. Up and Down preserve the preferred terminal cell

@@ -23,6 +23,11 @@
     :accessor markdown-renderer-table-column-count
     :type (or null (integer 2))
     :documentation "The column count of the pipe table currently being rendered.")
+   (table-column-widths
+    :initform nil
+    :accessor markdown-renderer-table-column-widths
+    :type list
+    :documentation "The fixed cell widths selected from the current table header.")
    (table-header-p
     :initform nil
     :accessor markdown-renderer-table-header-p
@@ -47,6 +52,8 @@
           (markdown-renderer-code-line-number renderer)
           (markdown-renderer-table-column-count copy)
           (markdown-renderer-table-column-count renderer)
+          (markdown-renderer-table-column-widths copy)
+          (copy-list (markdown-renderer-table-column-widths renderer))
           (markdown-renderer-table-header-p copy)
           (markdown-renderer-table-header-p renderer))
     copy))
@@ -279,17 +286,18 @@ that compact form even though stricter Markdown dialects require three."
   "Return true when every entry in CELLS is a table delimiter."
   (and cells (every #'markdown--table-separator-cell-p cells)))
 
-(-> markdown--table-column-widths (markdown-renderer integer) list)
-(defun markdown--table-column-widths (renderer column-count)
-  "Return balanced cell widths fitting COLUMN-COUNT columns in RENDERER."
-  (let* ((available (max column-count
-                         (- (markdown-renderer-width renderer)
-                            2
-                            (* 3 (1- column-count)))))
-         (base (floor available column-count))
-         (remainder (mod available column-count)))
-    (loop for index below column-count
-          collect (+ base (if (< index remainder) 1 0)))))
+(-> markdown--table-column-widths (markdown-renderer list) list)
+(defun markdown--table-column-widths (renderer cells)
+  "Return fixed content-aware widths for the table containing CELLS."
+  (or (markdown-renderer-table-column-widths renderer)
+      (setf (markdown-renderer-table-column-widths renderer)
+            (layout-column-widths
+             (list cells)
+             (- (markdown-renderer-width renderer) 2)
+             :gap-width 3
+             :minimum-widths
+             (make-list (length cells) :initial-element 3)
+             :fill-p t))))
 
 (-> markdown--table-cell-rows (string integer boolean) list)
 (defun markdown--table-cell-rows (cell width header-p)
@@ -319,7 +327,7 @@ inline Markdown styling."
 (-> markdown--table-rows (markdown-renderer list boolean) list)
 (defun markdown--table-rows (renderer cells header-p)
   "Render CELLS as a bounded table row, styling it as a header when HEADER-P."
-  (let* ((widths (markdown--table-column-widths renderer (length cells)))
+  (let* ((widths (markdown--table-column-widths renderer cells))
          (columns (loop for cell in cells
                         for width in widths
                         collect (markdown--table-cell-rows cell width header-p)))
@@ -345,10 +353,10 @@ inline Markdown styling."
                                    (list (terminal-span ':dim " │ ")))))
                 finally (return row)))))
 
-(-> markdown--table-divider-row (markdown-renderer integer) list)
-(defun markdown--table-divider-row (renderer column-count)
-  "Return one dim divider row for COLUMN-COUNT table columns."
-  (let ((widths (markdown--table-column-widths renderer column-count)))
+(-> markdown--table-divider-row (markdown-renderer list) list)
+(defun markdown--table-divider-row (renderer cells)
+  "Return one dim divider row for the table containing CELLS."
+  (let ((widths (markdown--table-column-widths renderer cells)))
     (list
      (list
       (terminal-span
@@ -362,6 +370,7 @@ inline Markdown styling."
 (defun markdown--reset-table (renderer)
   "Leave any pipe table currently tracked by RENDERER."
   (setf (markdown-renderer-table-column-count renderer) nil
+        (markdown-renderer-table-column-widths renderer) nil
         (markdown-renderer-table-header-p renderer) nil)
   nil)
 
@@ -382,7 +391,7 @@ inline Markdown styling."
                     (eql tracked-count column-count))
                (progn
                  (setf (markdown-renderer-table-header-p renderer) nil)
-                 (values (markdown--table-divider-row renderer column-count)
+                 (values (markdown--table-divider-row renderer cells)
                          t))
                (values nil nil)))
           ((eql tracked-count column-count)

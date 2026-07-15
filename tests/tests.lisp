@@ -91,6 +91,7 @@
     (run-device-authentication-tests)
     (run-agent-tests)
     (run-terminal-tests)
+    (run-layout-tests)
     (run-markdown-tests)
     (run-application-tests))
   (format t "~&~:D Autolith tests passed.~%" *test-count*)

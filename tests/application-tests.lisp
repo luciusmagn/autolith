@@ -524,6 +524,29 @@
                        (<= (text-cell-width line) 19))
                      (uiop:split-string text :separator '(#\Newline))))
          "reasoning summaries wrap with room for the rail on narrow terminals")))
+    (let* ((narrow-application
+             (application-tests--ui-application :columns 32))
+           (rows
+             (application--tool-field-rows
+              narrow-application
+              (list (list :label "path"
+                          :value "/tmp/a-short-path"
+                          :style ':code)
+                    (list :label "maximum-results-per-file"
+                          :value "a deliberately long value that must wrap"
+                          :style ':code))))
+           (label-widths
+             (loop for row in rows
+                   collect (text-cell-width
+                            (terminal-span-text (first row))))))
+      (test-assert (and (> (length rows) 2)
+                        (apply #'= label-widths))
+                   "long tool details wrap beneath one aligned value column")
+      (test-assert
+       (every (lambda (row)
+                (<= (terminal--spans-width row) 29))
+              rows)
+       "tool detail columns stay inside their transcript cell budget"))
     (let* ((source (format nil "~{form-line-~D~^~%~}"
                            (loop for index from 1 to 10 collect index)))
            (entry (response-item-entry

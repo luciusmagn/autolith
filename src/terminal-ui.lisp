@@ -200,14 +200,25 @@
 (-> terminal-ui--choice-rows (selector integer) list)
 (defun terminal-ui--choice-rows (selector row-width)
   "Return styled candidate rows from SELECTOR within ROW-WIDTH."
-  (multiple-value-bind (index-rows column-widths)
+  (multiple-value-bind (index-rows arrangement-widths)
       (selector-arrange selector
                         row-width
                         :width-function
                         (lambda (entry)
                           (text-cell-width
                            (terminal-completion-label entry))))
-    (let ((label-width (or (first column-widths) 0)))
+    (declare (ignore arrangement-widths))
+    (let* ((cell-rows
+             (loop for entry in (selector-items selector)
+                   collect (list (terminal-completion-label entry)
+                                 (or (getf entry :description) ""))))
+           (column-widths
+             (layout-column-widths cell-rows
+                                   (max 0 (- row-width 2))
+                                   :gap-width 2
+                                   :minimum-widths '(1 0)))
+           (label-width (or (first column-widths) 0))
+           (description-width (or (second column-widths) 0)))
       (loop for index-row in index-rows
             for index = (first index-row)
             for entry = (nth index (selector-items selector))
@@ -220,14 +231,18 @@
                                               "▸ "
                                               "  "))
                            (terminal-span :user
-                                          (format nil "~vA  "
-                                                  label-width
-                                                  (terminal-completion-label
-                                                   entry)))
-                           (terminal-span (if selected-p
-                                              :plain
-                                              :dim)
-                                          (getf entry :description)))
+                                          (layout-fit-text
+                                           (terminal-completion-label entry)
+                                           label-width))
+                           (terminal-span ':plain
+                                          (if (plusp description-width)
+                                              "  "
+                                              ""))
+                           (terminal-span
+                            (if selected-p ':plain ':dim)
+                            (text-cell-prefix
+                             (or (getf entry :description) "")
+                             description-width)))
                      row-width)))))
 
 (-> terminal-ui--completion-rows (terminal-ui integer) list)

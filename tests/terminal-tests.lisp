@@ -738,6 +738,16 @@
 (-> test-terminal-modal-selection () null)
 (defun test-terminal-modal-selection ()
   "Test modal picker navigation, acceptance, cancellation, and cleanup."
+  (let ((selector (make-selector :visible-count 4 :arrangement ':vertical)))
+    (selector-set-items
+     selector
+     '((:name "a" :argument nil :description "first")
+       (:name "considerably-longer" :argument nil :description "second")))
+    (let* ((rows (terminal-ui--choice-rows selector 50))
+           (texts (mapcar #'markdown-tests--row-text rows)))
+      (test-assert (= (search "first" (first texts))
+                      (search "second" (second texts)))
+                   "picker descriptions share one content-aware value column")))
   (let* ((items '((:name "alpha" :argument nil :description "first entry")
                   (:name "beta" :argument nil :description "second entry")
                   (:name "gamma" :argument nil :description "third entry")))
