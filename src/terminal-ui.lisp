@@ -948,7 +948,6 @@ when no resize needs to be applied."
     (let* ((new-columns (max 1 columns))
            (new-rows (and rows (max 1 rows)))
            (region (terminal-ui-live-region ui)))
-      (live-region-suspend region)
       (setf (terminal-columns (terminal-ui-terminal ui)) new-columns)
       (when new-rows
         (setf (terminal-rows (terminal-ui-terminal ui)) new-rows))
@@ -956,7 +955,8 @@ when no resize needs to be applied."
        region
        new-columns
        :maximum-rows
-       (terminal-ui--maximum-live-rows (terminal-ui-terminal ui)))
+       (terminal-ui--maximum-live-rows (terminal-ui-terminal ui))
+       :repaint-p nil)
       (terminal-ui--paint-live ui)))
   ui)
 

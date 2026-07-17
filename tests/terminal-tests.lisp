@@ -248,6 +248,21 @@
     (terminal-ui-stop ui))
   nil)
 
+(-> test-terminal-resize-frame () null)
+(defun test-terminal-resize-frame ()
+  "Test that a wider terminal resize replaces the reflowed live region once."
+  (let* ((terminal (make-instance 'recording-terminal :columns 8))
+         (ui (terminal-ui-create :terminal terminal)))
+    (with-terminal-ui (active-ui ui)
+      (terminal-ui-process-event
+       active-ui
+       '(:insert "a long wrapped input line"))
+      (recording-terminal-reset terminal)
+      (terminal-ui-resize active-ui 24)
+      (test-assert (= (length (recording-terminal-chunks terminal)) 1)
+                   "resize reflows and replaces the live region in one frame")))
+  nil)
+
 (-> test-terminal-line-editor () null)
 (defun test-terminal-line-editor ()
   "Test Clinedi editing, multiline input, history, and Autolith control policy."
@@ -1037,6 +1052,7 @@
   (test-terminal-primary-screen-controls)
   (test-terminal-untrusted-text)
   (test-terminal-finalized-scrollback)
+  (test-terminal-resize-frame)
   (test-terminal-line-editor)
   (test-terminal-input-decoding)
   (test-terminal-live-region-layout)
