@@ -133,9 +133,9 @@ Each extraction must satisfy all of the following:
 2. Implement =sexp-store= and consolidate snapshot and append-log mechanics.
 3. Implement =sbcl-workers= and replace the in-tree worker runtime and image
    machinery.
+4. Extend =self.source= to inspect pinned dependency source where required.
 
 * Remaining Sequence
 
-4. Extend =self.source= to inspect pinned dependency source where required.
-5. Move the remaining general terminal presentation into Clinedi in separate
+1. Move the remaining general terminal presentation into Clinedi in separate
    vertical changes.
