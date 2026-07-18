@@ -42,18 +42,19 @@ release_latest_tag()
 
 release_installed_p()
 {
-  target=$1
-  expected_tag=$2
+  release_installed_target=$1
+  release_installed_expected_tag=$2
 
-  [ -x "$target/bin/autolith" ] || return 1
-  [ -r "$target/RELEASE" ] || return 1
-  grep -Fx "tag=$expected_tag" "$target/RELEASE" >/dev/null 2>&1
+  [ -x "$release_installed_target/bin/autolith" ] || return 1
+  [ -r "$release_installed_target/RELEASE" ] || return 1
+  grep -Fx "tag=$release_installed_expected_tag" \
+    "$release_installed_target/RELEASE" >/dev/null 2>&1
 }
 
 publish_links()
 {
-  target=$1
-  tag=$2
+  publish_target=$1
+  publish_tag=$2
   current_temporary=$install_root/.current.$$
   command_temporary=$bin_directory/.autolith.$$
 
@@ -61,7 +62,7 @@ publish_links()
     fail "$install_root/current is a directory, not an installation link."
   fi
   mkdir -p -- "$bin_directory"
-  ln -s "releases/$tag" "$current_temporary"
+  ln -s "releases/$publish_tag" "$current_temporary"
   mv -f -- "$current_temporary" "$install_root/current"
   ln -s "$install_root/current/bin/autolith" "$command_temporary"
   mv -f -- "$command_temporary" "$bin_directory/autolith"

@@ -61,15 +61,52 @@ printf '%s\n' \
   'tag=v0.11.0' \
   'commit=0123456789abcdef0123456789abcdef01234567' > "$release_root/RELEASE"
 
+fixture_root=$temporary_root/fixture
+fixture_source=$temporary_root/fixture-source
+fixture_bin=$temporary_root/fixture-bin
+fixture_release=$fixture_source/autolith-v0.11.0-x86_64-linux
 install_root=$temporary_root/installation
 bin_directory=$temporary_root/bin
-mkdir -p "$install_root/releases"
-cp -a "$release_root" "$install_root/releases/v0.11.0"
+mkdir -p "$fixture_root" "$fixture_release" "$fixture_bin"
+cp -a "$release_root/." "$fixture_release"
+tar -czf "$fixture_root/autolith-v0.11.0-x86_64-linux.tar.gz" \
+  -C "$fixture_source" autolith-v0.11.0-x86_64-linux
+(
+  cd "$fixture_root"
+  sha256sum autolith-v0.11.0-x86_64-linux.tar.gz \
+    > autolith-v0.11.0-x86_64-linux.tar.gz.sha256
+)
+printf '%s\n' \
+  '#!/bin/sh' \
+  'set -eu' \
+  'output=' \
+  'url=' \
+  'while [ "$#" -gt 0 ]; do' \
+  '  case $1 in' \
+  '    --output) output=$2; shift 2 ;;' \
+  '    --retry|--proto|--max-time|--write-out) shift 2 ;;' \
+  '    --*) shift ;;' \
+  '    *) url=$1; shift ;;' \
+  '  esac' \
+  'done' \
+  'cp "$AUTOLITH_TEST_RELEASE_FIXTURE/${url##*/}" "$output"' \
+  > "$fixture_bin/curl"
+chmod +x "$fixture_bin/curl"
+PATH="$fixture_bin:$PATH" \
+AUTOLITH_TEST_RELEASE_FIXTURE=$fixture_root \
+AUTOLITH_RELEASE_BASE_URL=https://example.invalid \
 AUTOLITH_INSTALL_ROOT=$install_root \
 AUTOLITH_BIN_DIR=$bin_directory \
   "$source_root/script/install" --version v0.11.0 >/dev/null
+[[ -x $install_root/releases/v0.11.0/bin/autolith ]]
 [[ $(readlink "$install_root/current") == releases/v0.11.0 ]]
 [[ $(readlink "$bin_directory/autolith") == \
    "$install_root/current/bin/autolith" ]]
+PATH="$fixture_bin:$PATH" \
+AUTOLITH_TEST_RELEASE_FIXTURE=$fixture_root \
+AUTOLITH_RELEASE_BASE_URL=https://example.invalid \
+AUTOLITH_INSTALL_ROOT=$install_root \
+AUTOLITH_BIN_DIR=$bin_directory \
+  "$source_root/script/install" --version v0.11.0 >/dev/null
 
 printf 'Autolith release launcher checks passed.\n'
