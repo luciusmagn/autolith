@@ -323,11 +323,19 @@
        t))
 
 (-> image-commit--manifest-form
-    (string (option string) string (option string) pathname list list integer integer)
+    (&key (:identifier string)
+          (:parent-identifier (option string))
+          (:title string)
+          (:source-commit (option string))
+          (:script-pathname pathname)
+          (:entries list)
+          (:consumed-mutation-identifiers list)
+          (:journal-position integer)
+          (:created-at integer))
     list)
 (defun image-commit--manifest-form
-    (identifier parent-identifier title source-commit script-pathname entries
-     consumed-mutation-identifiers journal-position created-at)
+    (&key identifier parent-identifier title source-commit script-pathname entries
+          consumed-mutation-identifiers journal-position created-at)
   "Return a complete private image-commit manifest form."
   (list :image-commit
         :version 1
@@ -784,10 +792,14 @@
                   (getf (rest record) :source-commit))))))
 
 (-> image-commit-publish
-    (configuration string list list &key (:identifier (option string)))
+    (configuration
+     &key (:title string)
+          (:mutation-records list)
+          (:additional-entries list)
+          (:identifier (option string)))
     image-commit)
 (defun image-commit-publish
-    (configuration title mutation-records additional-entries &key identifier)
+    (configuration &key title mutation-records additional-entries identifier)
   "Publish one immutable private commit from mutations and explicit entries."
   (let* ((identifier (or identifier (make-identifier)))
          (parent (image-commit-current configuration))
@@ -827,15 +839,17 @@
           (image-commit--write-form-atomically
            manifest-pathname
            (image-commit--manifest-form
-            identifier
+            :identifier identifier
+            :parent-identifier
             (and parent (image-commit-identifier parent))
-            title
-            source-commit
-            script-pathname
-            entries
+            :title title
+            :source-commit source-commit
+            :script-pathname script-pathname
+            :entries entries
+            :consumed-mutation-identifiers
             (remove-duplicates mutation-identifiers :test #'string=)
-            journal-position
-            created-at))
+            :journal-position journal-position
+            :created-at created-at))
           (funcall *image-commit-replay-probe-function*
                    configuration
                    script-pathname
@@ -959,7 +973,10 @@
                  (image-commit-render-pending configuration))
                 (let ((commit
                         (image-commit-publish
-                         configuration title records nil
+                         configuration
+                         :title title
+                         :mutation-records records
+                         :additional-entries nil
                          :identifier identifier)))
                   (mutation-journal-append
                    configuration
@@ -991,10 +1008,11 @@
               (error condition)))))))
 
 (-> image-commit-write-generation-script
-    (configuration pathname string (option image-commit))
+    (configuration pathname
+     &key (:generation-identifier string) (:commit (option image-commit)))
     pathname)
 (defun image-commit-write-generation-script
-    (configuration pathname generation-identifier commit)
+    (configuration pathname &key generation-identifier commit)
   "Write GENERATION-IDENTIFIER's complete base-image reconstruction script."
   (image-commit-write-script
    pathname
@@ -1081,7 +1099,10 @@
              configuration
              (image-commit-render-pending configuration))
             (let ((commit (image-commit-publish
-                           configuration title records nil
+                           configuration
+                           :title title
+                           :mutation-records records
+                           :additional-entries nil
                            :identifier identifier)))
               (mutation-journal-append
                configuration

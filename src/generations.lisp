@@ -163,7 +163,10 @@
             :checker (or mutation-checker
                          (make-instance 'standard-mutation-checker)))))
     (image-commit-write-generation-script
-     configuration reconstruction-pathname identifier image-commit)
+     configuration
+     reconstruction-pathname
+     :generation-identifier identifier
+     :commit image-commit)
     (make-instance 'generation
                    :identifier identifier
                    :directory directory

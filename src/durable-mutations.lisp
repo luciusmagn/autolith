@@ -427,13 +427,13 @@ journals may instead name a startup overlay or tracked src/ file."
               (let ((commit
                       (image-commit-publish
                        configuration
-                       (format nil "Persist definition ~A" target)
-                       nil
-                       (list
-                        (list :kind ':definition
-                              :id (durable-mutation-identifier mutation)
-                              :target target
-                              :source definition-source))
+                       :title (format nil "Persist definition ~A" target)
+                       :mutation-records nil
+                       :additional-entries
+                       (list (list :kind ':definition
+                                   :id (durable-mutation-identifier mutation)
+                                   :target target
+                                   :source definition-source))
                        :identifier commit-identifier)))
                 (durable-mutation-transition configuration mutation
                                              :source-written)
