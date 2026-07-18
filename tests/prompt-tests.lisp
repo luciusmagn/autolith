@@ -50,6 +50,12 @@
      (search "Perform any additional steps you identify instead of handing them back as suggestions."
              prompt)
      "the system prompt requires Autolith to finish discovered work itself")
+    (test-assert
+     (and (search "Treat live self-modification as a routine way" prompt)
+          (search "a repeated workaround" prompt)
+          (search "never turn the user's task into open-ended self-improvement"
+                  prompt))
+     "the system prompt gives bounded positive triggers for self-improvement")
     (test-assert (search "memory namespace persists useful facts" prompt)
                  "the system prompt explains persistent memory policy")
     (test-assert
