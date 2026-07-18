@@ -143,6 +143,32 @@
                 t))
             "malformed HTTP request lines signal a structured condition"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  (let* ((root
+           (uiop:ensure-directory-pathname
+            (merge-pathnames
+             (format nil "autolith-release-archive-tests-~A/" (make-identifier))
+             (uiop:temporary-directory))))
+         (dependency-root (merge-pathnames "dependencies/" root))
+         (target-root (merge-pathnames "target/" root))
+         (valid-link (merge-pathnames "valid" dependency-root))
+         (broken-link (merge-pathnames "broken" dependency-root)))
+    (unwind-protect
+         (progn
+           (release-server-tests--write-file
+            (merge-pathnames "system.asd" target-root)
+            "(asdf:defsystem #:fixture)")
+           (ensure-directories-exist (merge-pathnames ".keep" dependency-root))
+           (sb-posix:symlink (namestring target-root) (namestring valid-link))
+           (sb-posix:symlink (namestring (merge-pathnames "missing/" root))
+                             (namestring broken-link))
+           (release-archive--materialize-dependency-links dependency-root)
+           (test-assert
+            (probe-file (merge-pathnames "valid/system.asd" dependency-root))
+            "release archives replace dependency links with private copies")
+           (test-assert
+            (not (probe-file broken-link))
+            "release archives remove broken dependency links"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   (let* ((commit-a "0123456789abcdef0123456789abcdef01234567")
          (commit-b "89abcdef0123456789abcdef0123456789abcdef")
          (parsed

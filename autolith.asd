@@ -73,6 +73,7 @@
                 :serial t
                 :components ((:file "release-server")
                              (:file "release-builder")
+                             (:file "release-archive")
                              (:file "release-main")))))
 
 (asdf:defsystem #:autolith/tests
