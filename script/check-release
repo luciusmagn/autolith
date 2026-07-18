@@ -73,6 +73,7 @@ install_root=$temporary_root/installation
 bin_directory=$temporary_root/bin
 mkdir -p "$fixture_root" "$fixture_release" "$fixture_bin"
 cp -a "$release_root/." "$fixture_release"
+chmod a-w "$fixture_release"
 tar -czf "$fixture_root/autolith-v0.11.0-x86_64-linux.tar.gz" \
   -C "$fixture_source" autolith-v0.11.0-x86_64-linux
 (

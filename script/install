@@ -137,6 +137,8 @@ else
   tar -xzf "$archive" -C "$temporary_root"
   release_installed_p "$extracted" "$requested_tag" ||
     fail "the release archive has an unexpected layout."
+  chmod u+w -- "$extracted" ||
+    fail "the verified release directory could not be prepared for publication."
 
   stale_target=
   if [ -e "$target" ]; then
@@ -149,6 +151,8 @@ else
     fi
     fail "the verified release could not be published."
   fi
+  chmod u-w -- "$target" ||
+    fail "the published release permissions could not be restored."
   publish_links "$target" "$requested_tag"
   if [ -n "$stale_target" ] && [ -e "$stale_target" ]; then
     chmod -R u+w "$stale_target" 2>/dev/null || true
