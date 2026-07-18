@@ -117,6 +117,10 @@
   ()
   (:documentation "Restore and discard one effective exploratory mutation."))
 
+(defclass self-exercise-tool (mutable-self-tool)
+  ()
+  (:documentation "Run and journal one focused live-mutation exercise."))
+
 (defclass self-diff-tool (self-tool)
   ()
   (:documentation "Show uncommitted reconstructible active-image mutations."))
@@ -834,9 +838,19 @@
                 "Restore and discard the newest effective exploratory mutation, or the effective mutation with a specified identifier."
                 (tool-object-schema
                  (json-object
-                  "mutation" (tool-string-property
+                 "mutation" (tool-string-property
                                 "An effective mutation identifier from self.diff; defaults to the newest effective mutation."))
                  nil))
+      (register 'self-exercise-tool
+                "self" "exercise"
+                "Evaluate and journal one focused assertion-style Common Lisp form against an effective pending mutation. A signaled condition fails the exercise; this does not replace self.commit's full checks."
+                (tool-object-schema
+                 (json-object
+                  "form" (tool-string-property
+                           "One Common Lisp exercise form; use ASSERT or ERROR to signal failure.")
+                  "mutation" (tool-string-property
+                                "An effective mutation identifier from self.diff; defaults to the newest effective mutation."))
+                 '("form")))
       (register 'self-diff-tool
                 "self" "diff"
                 "Show the effective self.redefine and self.set changes not yet persisted by self.commit, collapsing repeated edits to each target."

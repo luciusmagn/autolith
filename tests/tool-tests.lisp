@@ -22,7 +22,7 @@
                                "arguments" "{}"))
                 (result (tool-registry-execute-call
                          registry unknown-call context)))
-           (test-assert (= (length (tool-registry-tools registry)) 44)
+           (test-assert (= (length (tool-registry-tools registry)) 45)
                         "the default registry exposes the complete initial tool set")
            (test-assert (= (length schemas) 7)
                         "the provider schemas contain seven namespaces")
@@ -52,8 +52,8 @@
                         "matching implementation source has a dedicated Lisp tool")
            (test-assert (string= (json-get (aref schemas 6) "name") "self")
                         "the active-image namespace is last")
-           (test-assert (= (length (json-get (aref schemas 6) "tools")) 13)
-                        "the self namespace exposes thirteen active-image operations")
+           (test-assert (= (length (json-get (aref schemas 6) "tools")) 14)
+                        "the self namespace exposes fourteen active-image operations")
            (test-assert (tool-registry-find registry "self" "source")
                         "tracked source inspection has a dedicated self tool")
            (let* ((immutable-registry
@@ -62,14 +62,15 @@
                     (tool-registry-provider-schemas immutable-registry))
                   (self-schema (aref immutable-schemas 6)))
              (test-assert (= (length (tool-registry-tools immutable-registry)) 36)
-                          "immutable mode omits eight active-image state tools")
+                          "immutable mode omits nine active-image state tools")
              (test-assert (= (length (json-get self-schema "tools")) 5)
                           "immutable mode advertises five self inspection tools")
              (dolist (name '("inspect" "source" "status" "diff" "generations"))
                (test-assert (tool-registry-find immutable-registry "self" name)
                             (format nil "immutable mode retains self.~A" name)))
              (dolist (name '("eval" "redefine" "set" "persist-definition"
-                             "discard" "commit" "checkpoint" "rollback"))
+                             "discard" "exercise" "commit" "checkpoint"
+                             "rollback"))
                (test-assert
                 (null (tool-registry-find immutable-registry "self" name))
                 (format nil "immutable mode omits self.~A" name))))

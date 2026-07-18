@@ -318,6 +318,7 @@
                 (registry (make-default-tool-registry))
                 (set-tool (tool-registry-find registry "self" "set"))
                 (diff-tool (tool-registry-find registry "self" "diff"))
+                (exercise-tool (tool-registry-find registry "self" "exercise"))
                 (discard-tool (tool-registry-find registry "self" "discard")))
            (setf *image-state-initialized-p* nil
                  *active-image-commit-identifier* nil
@@ -327,6 +328,39 @@
            (tool-execute set-tool context
                          (json-object "symbol" "*test-discard-setting*"
                                       "value" ":first"))
+           (let ((result
+                   (tool-execute
+                    exercise-tool
+                    context
+                    (json-object
+                     "form"
+                     "(assert (eq *test-discard-setting* :first))"))))
+             (test-assert
+              (and (tool-result-success-p result)
+                   (search "passed for mutation" (tool-result-content result)))
+              "self.exercise reports a focused passing assertion"))
+           (test-assert
+            (handler-case
+                (progn
+                  (tool-execute exercise-tool
+                                context
+                                (json-object "form" "(assert nil)"))
+                  nil)
+              (error ()
+                t))
+            "self.exercise propagates a focused assertion failure")
+           (let ((exercise-records
+                   (remove-if-not
+                    (lambda (record)
+                      (and (eq (first record) :mutation)
+                           (eq (getf (rest record) :kind) :exercise)))
+                    (mutation-journal-read-records configuration))))
+             (test-assert
+              (equal (mapcar (lambda (record)
+                               (getf (rest record) :result))
+                             exercise-records)
+                     '(:pending :passed :pending :failed))
+              "focused exercise evidence is append-only and records outcomes"))
            (tool-execute set-tool context
                          (json-object "symbol" "*test-discard-setting*"
                                       "value" ":second"))
@@ -397,6 +431,16 @@
                         "discarding a new definition restores an unbound function")
            (test-assert (null (image-commit-pending-records configuration))
                         "completed discards leave no commit candidates")
+           (test-assert
+            (handler-case
+                (progn
+                  (tool-execute exercise-tool
+                                context
+                                (json-object "form" "t"))
+                  nil)
+              (source-mutation-error ()
+                t))
+            "self.exercise requires an effective pending mutation")
            (test-assert
             (handler-case
                 (progn

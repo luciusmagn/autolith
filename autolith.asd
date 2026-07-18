@@ -47,6 +47,7 @@
                              (:file "generations")
                              (:file "self-status")
                              (:file "self-discard")
+                             (:file "self-exercise")
                              (:file "agent")
                              (:file "terminal")
                              (:file "terminal-style")

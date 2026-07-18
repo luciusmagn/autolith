@@ -631,6 +631,12 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
   (application--lisp-call-entry application call "form"))
 
 (defmethod application-tool-call-entry
+    ((tool self-exercise-tool) (application application) (call hash-table))
+  "Present a self.exercise form as bounded Lisp source."
+  (declare (ignore tool))
+  (application--lisp-call-entry application call "form"))
+
+(defmethod application-tool-call-entry
     ((tool self-redefine-tool) (application application) (call hash-table))
   "Present a self.redefine definition and any selected restart separately."
   (declare (ignore tool))
