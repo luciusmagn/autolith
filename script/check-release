@@ -17,6 +17,7 @@ trap cleanup EXIT HUP INT TERM
 
 bash -n "$source_root/bin/autolith-release"
 bash -n "$source_root/script/build-release"
+sh -n "$source_root/script/install"
 mkdir -p "$release_root/bin" \
   "$release_root/libexec/autolith/.qlot" \
   "$release_root/libexec/autolith" \
@@ -54,5 +55,20 @@ if AUTOLITH_NO_UPDATE_CHECK=1 \
   printf 'The release launcher accepted an inconsistent release record.\n' >&2
   exit 1
 fi
+printf '%s\n' \
+  'version=0.11.0' \
+  'tag=v0.11.0' \
+  'commit=0123456789abcdef0123456789abcdef01234567' > "$release_root/RELEASE"
+
+install_root=$temporary_root/installation
+bin_directory=$temporary_root/bin
+mkdir -p "$install_root/releases"
+cp -a "$release_root" "$install_root/releases/v0.11.0"
+AUTOLITH_INSTALL_ROOT=$install_root \
+AUTOLITH_BIN_DIR=$bin_directory \
+  "$source_root/script/install" --version v0.11.0 >/dev/null
+[[ $(readlink "$install_root/current") == releases/v0.11.0 ]]
+[[ $(readlink "$bin_directory/autolith") == \
+   "$install_root/current/bin/autolith" ]]
 
 printf 'Autolith release launcher checks passed.\n'
