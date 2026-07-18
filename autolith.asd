@@ -104,6 +104,7 @@
                              (:file "terminal-tests")
                              (:file "layout-tests")
                              (:file "markdown-tests")
+                             (:file "release-script-tests")
                              (:file "release-server-tests")
                              (:file "application-tests")
                              (:file "tests"))))
