@@ -155,6 +155,40 @@
                    (search "src/code/list.lisp"
                            (tool-result-content result)))
               "self.source falls back to matching active SBCL source"))
+           (let* ((conversation
+                    (conversation-create configuration
+                                         :identifier "self-dependency-source"))
+                  (context
+                    (make-instance 'tool-context
+                                   :configuration configuration
+                                   :worker nil
+                                   :conversation conversation))
+                  (result
+                    (tool-execute
+                     (tool-registry-find (make-default-tool-registry)
+                                         "self"
+                                         "source")
+                     context
+                     (json-object
+                      "symbol" "SBCL-WORKERS:SBCL-WORKER-CREATE"))))
+             (test-assert
+              (and (tool-result-success-p result)
+                   (search "sbcl-workers:source/workers.lisp"
+                           (tool-result-content result))
+                   (search "(defun sbcl-worker-create"
+                           (tool-result-content result)))
+              "self.source reads exact pinned ASDF dependency source"))
+           (test-assert
+            (handler-case
+                (progn
+                  (self-dependency-definitions
+                   'sbcl-workers:sbcl-worker-create
+                   (find-package '#:sbcl-workers)
+                   :system-name "not-an-autolith-dependency")
+                  nil)
+              (source-mutation-error ()
+                t))
+            "dependency source inspection rejects systems outside Autolith")
            (test-assert
             (equal (definition-signature
                     '(defmethod sample-operation ((left string) right) left))

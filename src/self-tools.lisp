@@ -844,14 +844,15 @@ protocol."
         (t
          (return position))))))
 
-(-> source-read-forms (string) list)
-(defun source-read-forms (source)
-  "Read complete top-level forms and exact spans from SOURCE."
+(-> source-read-forms (string &key (:package package)) list)
+(defun source-read-forms
+    (source &key (package (find-package '#:autolith)))
+  "Read complete top-level forms and exact spans from SOURCE in PACKAGE."
   (let ((stream (make-string-input-stream source))
         (position 0)
         (forms nil)
         (*read-eval* nil)
-        (*package* (find-package '#:autolith)))
+        (*package* package))
     (loop
       (setf position (source--next-form-start source position))
       (when (>= position (length source))
@@ -864,28 +865,95 @@ protocol."
               forms)
         (setf position end)))))
 
+(-> self-source--definitions
+    (list &key (:root pathname)
+               (:package package)
+               (:symbol symbol)
+               (:path-prefix string))
+    list)
+(defun self-source--definitions
+    (pathnames &key root package symbol (path-prefix ""))
+  "Return SYMBOL definitions read from PATHNAMES relative to ROOT in PACKAGE."
+  (loop for pathname in (sort (copy-list pathnames) #'string< :key #'namestring)
+        for source = (uiop:read-file-string pathname)
+        append
+        (loop for source-form in (source-read-forms source :package package)
+              for form = (source-form-form source-form)
+              when (and (definition-form-p form)
+                        (equal (second form) symbol))
+                collect
+                (make-instance
+                 'tracked-definition
+                 :relative-pathname
+                 (format nil "~A~A"
+                         path-prefix
+                         (enough-namestring pathname root))
+                 :source-form source-form
+                 :source (subseq source
+                                 (source-form-start source-form)
+                                 (source-form-end source-form))))))
+
+(-> self-source--component-pathnames (t) list)
+(defun self-source--component-pathnames (component)
+  "Return every existing Common Lisp source file beneath ASDF COMPONENT."
+  (if (typep component 'asdf:cl-source-file)
+      (let ((pathname (asdf:component-pathname component)))
+        (if (probe-file pathname)
+            (list pathname)
+            nil))
+      (mapcan #'self-source--component-pathnames
+              (asdf:component-children component))))
+
+(-> self-source--dependency-system (package (option string)) (option t))
+(defun self-source--dependency-system (package requested-name)
+  "Return the direct Autolith dependency selected by PACKAGE or REQUESTED-NAME."
+  (block nil
+    (let* ((name
+             (if (non-empty-string-p requested-name)
+                 requested-name
+                 (string-downcase (package-name package))))
+           (dependencies
+             (asdf:system-depends-on (asdf:find-system '#:autolith))))
+      (unless (member name dependencies :test #'string-equal)
+        (when (non-empty-string-p requested-name)
+          (error 'source-mutation-error
+                 :message
+                 (format nil "~S is not a direct Autolith ASDF dependency."
+                         requested-name)
+                 :tool-name "self.source"
+                 :pathname nil))
+        (return nil))
+      (or (asdf:find-system name nil)
+          (error 'source-mutation-error
+                 :message (format nil "ASDF cannot locate dependency ~S." name)
+                 :tool-name "self.source"
+                 :pathname nil)))))
+
+(-> self-dependency-definitions
+    (symbol package &key (:system-name (option string)))
+    list)
+(defun self-dependency-definitions (symbol package &key system-name)
+  "Return SYMBOL definitions from one direct, loaded Autolith dependency."
+  (let ((system (self-source--dependency-system package system-name)))
+    (when system
+      (let ((root (asdf:system-source-directory system)))
+        (self-source--definitions
+         (self-source--component-pathnames system)
+         :root root
+         :package package
+         :symbol symbol
+         :path-prefix (format nil "~A:" (asdf:component-name system)))))))
+
 (-> self-tracked-definitions (configuration symbol) list)
 (defun self-tracked-definitions (configuration symbol)
   "Return complete tracked top-level definitions whose name is SYMBOL."
   (let* ((source-root (configuration-source-root configuration))
          (editable-root (merge-pathnames "src/" source-root)))
-    (loop for pathname in (sort (uiop:directory-files editable-root "*.lisp")
-                                #'string<
-                                :key #'namestring)
-          for source = (uiop:read-file-string pathname)
-          append
-          (loop for source-form in (source-read-forms source)
-                for form = (source-form-form source-form)
-                when (and (definition-form-p form)
-                          (equal (second form) symbol))
-                  collect
-                  (make-instance
-                   'tracked-definition
-                   :relative-pathname (enough-namestring pathname source-root)
-                   :source-form source-form
-                   :source (subseq source
-                                   (source-form-start source-form)
-                                   (source-form-end source-form)))))))
+    (self-source--definitions
+     (uiop:directory-files editable-root "*.lisp")
+     :root source-root
+     :package (find-package '#:autolith)
+     :symbol symbol)))
 
 (-> self-render-tracked-definitions (list symbol) string)
 (defun self-render-tracked-definitions (definitions symbol)
@@ -915,17 +983,32 @@ protocol."
          (symbol (self-resolve-symbol
                   (tool-argument arguments "symbol" :required t)
                   :package package))
-         (definitions
+         (tracked-definitions
            (self-tracked-definitions
             (tool-context-configuration context)
-            symbol)))
-    (if definitions
-        (tool-success (self-render-tracked-definitions definitions symbol))
-        (multiple-value-bind (values output)
-            (worker-source (write-to-string symbol :readably t)
-                           (tool-argument arguments "kind"))
-          (declare (ignore values))
-          (tool-success output)))))
+            symbol))
+         (dependency-definitions
+           (unless tracked-definitions
+             (self-dependency-definitions
+              symbol
+              (or (symbol-package symbol) package)
+              :system-name (tool-argument arguments "system")))))
+    (cond
+      (tracked-definitions
+       (tool-success
+        (self-render-tracked-definitions tracked-definitions symbol)))
+      (dependency-definitions
+       (tool-success
+        (self-render-tracked-definitions dependency-definitions symbol)))
+      ((non-empty-string-p (tool-argument arguments "system"))
+       (tool-success
+        (self-render-tracked-definitions dependency-definitions symbol)))
+      (t
+       (multiple-value-bind (values output)
+           (worker-source (write-to-string symbol :readably t)
+                          (tool-argument arguments "kind"))
+         (declare (ignore values))
+         (tool-success output))))))
 
 (-> source-definition-match-p (source-form list) boolean)
 (defun source-definition-match-p (source-form definition)

@@ -455,15 +455,17 @@
           (list
            'self-source-tool
            "self" "source"
-           "Read complete tracked Autolith source or hash-verified matching SBCL source for an active symbol without general evaluation."
+           "Read complete tracked Autolith or direct dependency source, or hash-verified matching SBCL source, for an active symbol without general evaluation."
            (tool-object-schema
             (json-object
              "symbol" (tool-string-property
                        "A symbol name, optionally package-qualified.")
              "package" (tool-string-property
                         "The reader package for an unqualified symbol; defaults to AUTOLITH.")
+             "system" (tool-string-property
+                        "An optional direct Autolith ASDF dependency containing the symbol.")
              "kind" (tool-string-property
-                     "An optional SBCL definition kind when inspecting implementation source."))
+                      "An optional SBCL definition kind when inspecting implementation source."))
             '("symbol")))
           (list
            'self-eval-tool
