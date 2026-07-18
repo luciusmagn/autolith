@@ -11,8 +11,8 @@ The release service has two independent long-running processes:
   records. Caddy supplies public TLS.
 - =server/run build= polls immutable semantic Git tags. It checks out each new
   tag, runs the complete repository check in the pinned Ubuntu 22 builder
-  container, verifies the archive checksum, and publishes the two artifacts by
-  one atomic directory rename.
+  container with Rust 1.97.1, verifies the archive checksum, and publishes the
+  two artifacts by one atomic directory rename.
 
 The HTTP process runs as the unprivileged =autolith-release= user. It can read
 the tracked checkout and published artifacts but cannot write them. The builder
@@ -63,6 +63,9 @@ export HOME=/var/lib/autolith-release-server/home
 export XDG_DATA_HOME=$HOME/.local/share
 export XDG_STATE_HOME=$HOME/.local/state
 export XDG_CACHE_HOME=$HOME/.cache
+curl --fail --location --show-error --retry 3 \
+  --proto '=https' --tlsv1.2 --output /tmp/quicklisp.lisp \
+  https://beta.quicklisp.org/quicklisp.lisp
 sbcl --noinform --non-interactive --load /tmp/quicklisp.lisp \
   --eval '(quicklisp-quickstart:install)'
 cd /srv/autolith-release-server/source
