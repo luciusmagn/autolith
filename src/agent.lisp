@@ -582,7 +582,8 @@ persisted as history, only the durable summary record is."
     (let* ((result (provider-stream-turn
                     (agent-provider agent)
                     conversation
-                    #()
+                    :tool-namespaces #()
+                    :event-callback
                     (lambda (event)
                       (declare (ignore event))
                       (agent-observer-status observer :provider-progress nil))
@@ -637,8 +638,8 @@ persisted as history, only the durable summary record is."
                  (provider-stream-turn
                   (agent-provider agent)
                   conversation
-                  provider-tools
-                  (agent--provider-event-callback observer)
+                  :tool-namespaces provider-tools
+                  :event-callback (agent--provider-event-callback observer)
                   :turn-budget-state budget-state
                   :goal-context goal-context))
                (calls (provider-result-tool-calls result)))

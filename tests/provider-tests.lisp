@@ -449,9 +449,9 @@
 (defmethod provider-attempt-turn
     ((provider test-codex-provider)
      (conversation conversation)
-     (tool-namespaces vector)
-     (event-callback function)
      &key
+       tool-namespaces
+       event-callback
        force-refresh
        (turn-budget-state :normal)
        goal-context
@@ -503,7 +503,9 @@
                     configuration
                     (list :unauthorized result))))
              (test-assert
-              (eq (provider-stream-turn provider conversation #() #'identity)
+              (eq (provider-stream-turn provider conversation
+                                        :tool-namespaces #()
+                                        :event-callback #'identity)
                   result)
               "a credential reload may satisfy the first unauthorized response")
              (test-assert
@@ -515,7 +517,9 @@
                     configuration
                     (list :unauthorized :unauthorized result))))
              (test-assert
-              (eq (provider-stream-turn provider conversation #() #'identity)
+              (eq (provider-stream-turn provider conversation
+                                        :tool-namespaces #()
+                                        :event-callback #'identity)
                   result)
               "one forced refresh may satisfy two unauthorized responses")
              (test-assert
@@ -529,7 +533,9 @@
              (test-assert
               (handler-case
                   (progn
-                    (provider-stream-turn provider conversation #() #'identity)
+                    (provider-stream-turn provider conversation
+                                          :tool-namespaces #()
+                                          :event-callback #'identity)
                     nil)
                 (authentication-error ()
                   t))

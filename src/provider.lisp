@@ -178,21 +178,26 @@
   provider)
 
 (-> provider-stream-turn
-    (model-provider conversation vector function
-     &key (:turn-budget-state turn-budget-state)
+    (model-provider conversation
+     &key (:tool-namespaces vector)
+          (:event-callback function)
+          (:turn-budget-state turn-budget-state)
           (:goal-context (option string))
           (:compaction-p boolean))
     provider-result)
 (defgeneric provider-stream-turn
-    (provider conversation tool-namespaces event-callback
-     &key turn-budget-state goal-context compaction-p)
+    (provider conversation
+     &key tool-namespaces event-callback turn-budget-state goal-context
+       compaction-p)
   (:documentation
    "Stream one model response for CONVERSATION using TOOL-NAMESPACES and EVENT-CALLBACK."))
 
 (-> provider-open-response-stream
-    (model-provider json-object oauth-credentials conversation)
+    (model-provider json-object
+     &key (:credentials oauth-credentials) (:conversation conversation))
     (values stream integer t))
-(defgeneric provider-open-response-stream (provider request credentials conversation)
+(defgeneric provider-open-response-stream
+    (provider request &key credentials conversation)
   (:documentation "Open an authenticated provider stream and return body, status, and headers."))
 
 
@@ -393,9 +398,10 @@ asks for a context checkpoint handoff."
 (defmethod provider-open-response-stream
     ((provider codex-subscription-provider)
      (request hash-table)
-     (credentials oauth-credentials)
-     (conversation conversation))
+     &key credentials conversation)
   "Open a direct authenticated SSE request to the ChatGPT Codex endpoint."
+  (declare (type oauth-credentials credentials)
+           (type conversation conversation))
   (let* ((configuration (provider-configuration provider))
          (thread-id (conversation-identifier conversation))
          (request-id (make-identifier))
@@ -754,30 +760,35 @@ asks for a context checkpoint handoff."
                      :turn-completion turn-completion))))
 
 (-> provider-attempt-turn
-    (model-provider conversation vector function
-     &key (:force-refresh boolean)
+    (model-provider conversation
+     &key (:tool-namespaces vector)
+          (:event-callback function)
+          (:force-refresh boolean)
           (:turn-budget-state turn-budget-state)
           (:goal-context (option string))
           (:compaction-p boolean))
     provider-result)
 (defgeneric provider-attempt-turn
-    (provider conversation tool-namespaces event-callback
-     &key force-refresh turn-budget-state goal-context compaction-p)
+    (provider conversation
+     &key tool-namespaces event-callback force-refresh turn-budget-state
+       goal-context compaction-p)
   (:documentation
    "Perform one normalized provider attempt, optionally forcing credential refresh."))
 
 (defmethod provider-attempt-turn
     ((provider codex-subscription-provider)
      (conversation conversation)
-     (tool-namespaces vector)
-     (event-callback function)
      &key
+       tool-namespaces
+       event-callback
        force-refresh
        (turn-budget-state :normal)
        goal-context
        compaction-p)
   "Perform one direct request and normalize every HTTP boundary condition."
-  (declare (type boolean force-refresh))
+  (declare (type vector tool-namespaces)
+           (type function event-callback)
+           (type boolean force-refresh))
   (handler-case
       (with-credentials (credentials (provider-credential-manager provider)
                                      :force-refresh force-refresh)
@@ -791,8 +802,8 @@ asks for a context checkpoint handoff."
               :turn-budget-state turn-budget-state
               :goal-context goal-context
               :compaction-p compaction-p)
-             credentials
-             conversation)
+             :credentials credentials
+             :conversation conversation)
           (provider-record-rate-limits provider headers)
           (unless (= status 200)
             (let ((body (provider--drain-error-body stream)))
@@ -820,21 +831,23 @@ asks for a context checkpoint handoff."
 (defmethod provider-stream-turn
     ((provider codex-subscription-provider)
      (conversation conversation)
-     (tool-namespaces vector)
-     (event-callback function)
      &key
+       tool-namespaces
+       event-callback
        (turn-budget-state :normal)
        goal-context
        compaction-p)
   "Stream one Sol turn with one credential reload and one bounded refresh attempt."
+  (declare (type vector tool-namespaces)
+           (type function event-callback))
   (loop for attempt-number from 1 to 3
         for force-refresh = (= attempt-number 3)
         do (handler-case
                (return-from provider-stream-turn
                  (provider-attempt-turn provider
                                         conversation
-                                        tool-namespaces
-                                        event-callback
+                                        :tool-namespaces tool-namespaces
+                                        :event-callback event-callback
                                         :force-refresh force-refresh
                                         :turn-budget-state turn-budget-state
                                         :goal-context goal-context

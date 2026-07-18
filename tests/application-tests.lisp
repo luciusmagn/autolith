@@ -31,9 +31,8 @@
 (defmethod provider-stream-turn :before
     ((provider cursor-observing-provider)
      (conversation conversation)
-     (tool-namespaces vector)
-     (event-callback function)
-     &key turn-budget-state goal-context compaction-p)
+     &key tool-namespaces event-callback turn-budget-state goal-context
+       compaction-p)
   "Record cursor visibility immediately before PROVIDER starts streaming."
   (declare (ignore conversation tool-namespaces event-callback
                    turn-budget-state goal-context compaction-p))
@@ -71,9 +70,8 @@
 (defmethod provider-stream-turn :around
     ((provider gated-provider)
      (conversation conversation)
-     (tool-namespaces vector)
-     (event-callback function)
-     &key turn-budget-state goal-context compaction-p)
+     &key tool-namespaces event-callback turn-budget-state goal-context
+       compaction-p)
   "Hold PROVIDER's first request until its deterministic input gate opens."
   (declare (ignore conversation tool-namespaces event-callback
                    turn-budget-state goal-context compaction-p))

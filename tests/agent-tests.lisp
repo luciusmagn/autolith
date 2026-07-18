@@ -43,13 +43,15 @@
 (defmethod provider-stream-turn
     ((provider scripted-provider)
      (conversation conversation)
-     (tool-namespaces vector)
-     (event-callback function)
      &key
+       tool-namespaces
+       event-callback
        (turn-budget-state :normal)
        goal-context
        compaction-p)
   "Return PROVIDER's next scripted result after recording request state."
+  (declare (type vector tool-namespaces)
+           (type function event-callback))
   (push (length (conversation-input-items conversation))
         (scripted-provider-input-counts provider))
   (push (conversation-turn-state conversation)
