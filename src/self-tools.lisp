@@ -390,8 +390,10 @@ protocol."
         (makunbound symbol)))
   nil)
 
-(-> self--restore-sbcl-info (symbol keyword keyword list) null)
-(defun self--restore-sbcl-info (name category kind snapshot)
+(-> self--restore-sbcl-info
+    (symbol &key (:category keyword) (:kind keyword) (:snapshot list))
+    null)
+(defun self--restore-sbcl-info (name &key category kind snapshot)
   "Restore one SBCL global database entry for NAME from SNAPSHOT."
   (if (second snapshot)
       (setf (sb-int:info category kind name) (first snapshot))
@@ -502,18 +504,24 @@ protocol."
                     (sb-int:info :variable :kind name))))
          (lambda ()
            (self--restore-value-binding name bound-p value)
-           (self--restore-sbcl-info name :variable :kind kind))))
+           (self--restore-sbcl-info name
+                                    :category ':variable
+                                    :kind ':kind
+                                    :snapshot kind))))
       (deftype
        (let ((expander (multiple-value-list
                         (sb-int:info :type :expander name)))
              (source-location (multiple-value-list
                                (sb-int:info :type :source-location name))))
          (lambda ()
-           (self--restore-sbcl-info name :type :expander expander)
            (self--restore-sbcl-info name
-                                    :type
-                                    :source-location
-                                    source-location))))
+                                    :category ':type
+                                    :kind ':expander
+                                    :snapshot expander)
+           (self--restore-sbcl-info name
+                                    :category ':type
+                                    :kind ':source-location
+                                    :snapshot source-location))))
       ((defclass defstruct define-condition)
        (let ((existing-class (find-class name nil))
              (function-snapshot
