@@ -102,6 +102,7 @@
     (test-durable-self-mutation)
     (test-generation-manifest)
     (test-active-image-build-record)
+    (test-image-commit-replay-probe)
     (test-crash-capsule-correlation)
     (run-device-authentication-tests)
     (run-agent-tests)

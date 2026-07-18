@@ -712,6 +712,90 @@
         (delete-file temporary)))
     pathname))
 
+
+;;;; -- Clean Replay Probe --
+
+(define-constant +image-commit-replay-probe-argument+
+  "--autolith-internal-image-commit-replay-probe"
+  :test #'string=
+  :documentation "The private command argument requesting a clean replay probe.")
+
+(define-constant +image-commit-replay-probe-version+ 1
+  :documentation "The clean replay probe protocol version.")
+
+(-> image-commit-replay-probe-output (string) string)
+(defun image-commit-replay-probe-output (identifier)
+  "Return the canonical success marker for private commit IDENTIFIER."
+  (format nil "(:AUTOLITH-IMAGE-COMMIT-REPLAY :VERSION ~D :ID ~S)"
+          +image-commit-replay-probe-version+
+          identifier))
+
+(-> image-commit-replay-probe-main (string string) null)
+(defun image-commit-replay-probe-main (script-name identifier)
+  "Load SCRIPT-NAME in a clean source process and print its probe identity."
+  (unless (image-commit--identifier-p identifier)
+    (error 'image-commit-error
+           :message "The clean replay probe received an invalid commit identity."
+           :tool-name "self.commit"
+           :pathname nil
+           :stage ':replay-probe))
+  (let ((script (pathname script-name)))
+    (unless (probe-file script)
+      (error 'image-commit-error
+             :message "The clean replay probe script does not exist."
+             :tool-name "self.commit"
+             :pathname script
+             :stage ':replay-probe))
+    (let ((*package* (find-package '#:autolith)))
+      (load script)))
+  (write-string (image-commit-replay-probe-output identifier)
+                *standard-output*)
+  (terpri *standard-output*)
+  (finish-output *standard-output*)
+  nil)
+
+(-> image-commit-replay-probe (configuration pathname string) null)
+(defun image-commit-replay-probe (configuration script identifier)
+  "Require SCRIPT to load successfully in a clean pinned Autolith process."
+  (let* ((source-root (configuration-source-root configuration))
+         (entry (merge-pathnames "bin/autolith-active" source-root))
+         (configured-command (uiop:getenv "AUTOLITH_SBCL"))
+         (sbcl-command (if (non-empty-string-p configured-command)
+                           configured-command
+                           "sbcl"))
+         (expected (image-commit-replay-probe-output identifier))
+         (output
+           (handler-case
+               (uiop:run-program
+                (list sbcl-command
+                      "--noinform"
+                      "--script"
+                      (namestring entry)
+                      +image-commit-replay-probe-argument+
+                      (namestring script)
+                      identifier)
+                :input nil
+                :output :string
+                :error-output :output)
+             (error (condition)
+               (error 'image-commit-error
+                      :message
+                      (format nil "The clean private replay probe failed: ~A"
+                              condition)
+                      :tool-name "self.commit"
+                      :pathname script
+                      :stage ':replay-probe)))))
+    (unless (search expected output :test #'char=)
+      (error 'image-commit-error
+             :message "The clean private replay probe returned no success marker."
+             :tool-name "self.commit"
+             :pathname script
+             :stage ':replay-probe)))
+  nil)
+
+(defvar *image-commit-replay-probe-function* #'image-commit-replay-probe
+  "The clean-process replay boundary used before selecting a private commit.")
+
 (-> image-commit--base-source-commit ((option image-commit)) (option string))
 (defun image-commit--base-source-commit (parent)
   "Return the known tracked source revision beneath PARENT or this image."
@@ -775,6 +859,10 @@
             (remove-duplicates mutation-identifiers :test #'string=)
             journal-position
             created-at))
+          (funcall *image-commit-replay-probe-function*
+                   configuration
+                   script-pathname
+                   identifier)
           (let ((history-commit
                   (image-history-commit
                    configuration
@@ -797,8 +885,16 @@
             (image-commit-load configuration identifier
                                :history-commit history-commit)))
       (image-commit-error (condition)
+        (when (probe-file directory)
+          (uiop:delete-directory-tree directory
+                                      :validate t
+                                      :if-does-not-exist :ignore))
         (error condition))
       (error (condition)
+        (when (probe-file directory)
+          (uiop:delete-directory-tree directory
+                                      :validate t
+                                      :if-does-not-exist :ignore))
         (error 'image-commit-error
                :message (format nil "Could not publish private image commit: ~A"
                                 condition)

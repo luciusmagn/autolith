@@ -484,6 +484,14 @@
          (previous-history-commit *active-image-history-commit*)
          (previous-lineage-identifier *active-image-lineage-identifier*)
          (active-check-count 0)
+         (replay-probe-count 0)
+         (*image-commit-replay-probe-function*
+           (lambda (checked-configuration script identifier)
+             (declare (ignore checked-configuration identifier))
+             (test-assert (probe-file script)
+                          "private replay is written before its clean probe")
+             (incf replay-probe-count)
+             nil))
          (checker
            (make-instance
             'callback-mutation-checker
@@ -865,6 +873,8 @@
                 "self.commit leaves tracked workspace changes untouched"))
              (test-assert (= active-check-count 3)
                           "self.commit checks the active image exactly once")
+             (test-assert (= replay-probe-count 3)
+                          "every selected private commit passes a replay probe")
              (test-assert
               (null (image-commit-pending-records configuration))
               "self.commit consumes every successful staged mutation")

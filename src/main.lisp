@@ -320,6 +320,11 @@
 (defun main-dispatch (arguments)
   "Dispatch validated Autolith ARGUMENTS inside the active process."
   (cond
+    ((and (= (length arguments) 3)
+          (string= (first arguments)
+                   +image-commit-replay-probe-argument+))
+     (image-commit-replay-probe-main (second arguments)
+                                     (third arguments)))
     ((member "--worker" arguments :test #'string=)
      (worker-main))
     ((member "--version" arguments :test #'string=)
