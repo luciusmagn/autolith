@@ -81,6 +81,58 @@
                 #:url-encode-params)
   (:import-from #:serapeum
                 #:->)
+  (:import-from #:sbcl-workers
+                #:+minimum-sbcl-worker-core-size+
+                #:+pristine-sbcl-worker-image-identifier+
+                #:sbcl-worker
+                #:sbcl-worker-change-working-directory
+                #:sbcl-worker-create
+                #:sbcl-worker-environment
+                #:sbcl-worker-environment-context
+                #:sbcl-worker-environment-create
+                #:sbcl-worker-error
+                #:sbcl-worker-error-message
+                #:sbcl-worker-error-operation
+                #:sbcl-worker-error-pathname
+                #:sbcl-worker-error-stage
+                #:sbcl-worker-handle-request
+                #:sbcl-worker-image
+                #:sbcl-worker-image-compatible-p
+                #:sbcl-worker-image-core-pathname
+                #:sbcl-worker-image-error
+                #:sbcl-worker-image-identifier
+                #:sbcl-worker-image-load
+                #:sbcl-worker-image-manifest-pathname
+                #:sbcl-worker-image-note
+                #:sbcl-worker-image-parent-identifier
+                #:sbcl-worker-image-plausible-core-p
+                #:sbcl-worker-image-publish-manifest
+                #:sbcl-worker-image-scan
+                #:sbcl-worker-image-staging-directory
+                #:sbcl-worker-image-validate-identifier
+                #:sbcl-worker-main
+                #:sbcl-worker-manager-detach-inherited-processes
+                #:sbcl-worker-name
+                #:sbcl-worker-pool
+                #:sbcl-worker-pool-change-working-directory
+                #:sbcl-worker-pool-create
+                #:sbcl-worker-pool-environment
+                #:sbcl-worker-pool-render
+                #:sbcl-worker-pool-reset
+                #:sbcl-worker-pool-start
+                #:sbcl-worker-pool-stop
+                #:sbcl-worker-pool-stop-all
+                #:sbcl-worker-pool-worker
+                #:sbcl-worker-request
+                #:sbcl-worker-render-value
+                #:sbcl-worker-reset
+                #:sbcl-worker-running-p
+                #:sbcl-worker-runtime-configure
+                #:sbcl-worker-save-image
+                #:sbcl-worker-source
+                #:sbcl-worker-start
+                #:sbcl-worker-stop
+                #:sbcl-worker-used-image-identifier)
   (:import-from #:sexp-store
                 #:log-append
                 #:log-read

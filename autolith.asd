@@ -14,6 +14,7 @@
                #:quri
                #:serapeum
                #:sb-posix
+               #:sbcl-workers
                #:sexp-store
                #:yason)
   :components ((:module "src"

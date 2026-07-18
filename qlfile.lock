@@ -54,3 +54,7 @@
  (:class qlot/source/git:source-git
   :initargs (:remote-url "https://github.com/luciusmagn/sexp-store.git" :ref "92a2ad458e92ecf4526ccb9bb387f89283c4dcc3")
   :version "git-92a2ad458e92ecf4526ccb9bb387f89283c4dcc3"))
+("sbcl-workers" .
+ (:class qlot/source/git:source-git
+  :initargs (:remote-url "https://github.com/luciusmagn/sbcl-workers.git" :ref "fff2bc4bbeb8eec93a963c5ad1f7af85bbf7a6a3")
+  :version "git-fff2bc4bbeb8eec93a963c5ad1f7af85bbf7a6a3"))

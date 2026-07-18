@@ -177,7 +177,7 @@
                     (*package* (find-package '#:autolith)))
                 (setf result-values
                       (multiple-value-list (funcall function)))))))
-      (values (mapcar #'worker-render-value result-values) output))))
+      (values (mapcar #'sbcl-worker-render-value result-values) output))))
 
 (-> self-evaluation-result (list string) string)
 (defun self-evaluation-result (result-values output)
@@ -705,7 +705,7 @@ protocol."
            (value-source (tool-argument arguments "value" :required t))
            (configuration (tool-context-configuration context))
            (previous (and (boundp symbol)
-                          (worker-render-value (symbol-value symbol))))
+                          (sbcl-worker-render-value (symbol-value symbol))))
            (previous-bound-p (boundp symbol))
            (previous-value (and (boundp symbol) (symbol-value symbol))))
       (mutation-journal-append
@@ -743,7 +743,9 @@ protocol."
                                                  previous-bound-p
                                                  previous-value)))
             (tool-success
-             (format nil "~S is now ~A." symbol (worker-render-value value))))
+             (format nil "~S is now ~A."
+                     symbol
+                     (sbcl-worker-render-value value))))
         (error (condition)
           (mutation-journal-append
            configuration
