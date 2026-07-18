@@ -12,7 +12,7 @@ jobs:
   linux-x86-64:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Validate tag
         shell: bash
@@ -25,7 +25,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes \
             bubblewrap build-essential cargo cmake libssl-dev libz-dev \
-            pkg-config sbcl
+            libzstd-dev pkg-config sbcl
+
+      - name: Build the pinned SBCL runtime
+        shell: bash
+        run: |
+          runtime_version=$(tr -d '[:space:]' < sbcl.version)
+          runtime_root="$HOME/.local/share/autolith/runtimes/$runtime_version"
+          runtime_installation="$runtime_root/installation"
+          archive="/tmp/sbcl-$runtime_version-source.tar.bz2"
+          source="/tmp/sbcl-$runtime_version"
+          curl --fail --location --show-error --retry 3 \
+            --proto '=https' --tlsv1.2 \
+            --output "$archive" \
+            "https://downloads.sourceforge.net/project/sbcl/sbcl/$runtime_version/sbcl-$runtime_version-source.tar.bz2"
+          printf '%s  %s\n' "$(tr -d '[:space:]' < sbcl-source.sha256)" "$archive" |
+            sha256sum --check --status
+          tar -xjf "$archive" -C /tmp
+          cd "$source"
+          sh make.sh --prefix="$runtime_installation"
+          env -u SBCL_HOME sh install.sh --prefix="$runtime_installation"
+          test "$("$runtime_installation/bin/sbcl" \
+            --noinform --no-userinit --no-sysinit --non-interactive \
+            --eval '(write-string (lisp-implementation-version))')" = \
+            "$runtime_version"
+          printf 'AUTOLITH_SBCL=%s/bin/sbcl\n' "$runtime_installation" >> "$GITHUB_ENV"
 
       - name: Install Quicklisp
         run: |
