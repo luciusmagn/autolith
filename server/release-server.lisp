@@ -264,7 +264,7 @@
                           :test #'string=))
              (release-server--response
               200
-              (if (uiop:string-suffix-p ".sha256" name)
+              (if (uiop:string-suffix-p name ".sha256")
                   "text/plain; charset=utf-8"
                   "application/gzip")
               (merge-pathnames
@@ -521,18 +521,4 @@
                      (release-server--handle-connection configuration connection))
                    :name "autolith release request"))))
       (ignore-errors (sb-bsd-sockets:socket-close listener))))
-  nil)
-
-
-;;;; -- Process Entry --
-
-(-> release-server-main () null)
-(defun release-server-main ()
-  "Run the release server mode selected by the command line."
-  (let ((arguments (uiop:command-line-arguments)))
-    (unless (or (null arguments)
-                (equal arguments '("serve")))
-      (error 'configuration-error
-             :message "Usage: server/run [serve]"))
-    (release-server-serve (release-server-configuration-create)))
   nil)

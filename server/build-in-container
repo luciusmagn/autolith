@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source_root=/source
+state_root=/state
+output_root=/output
+home=$state_root/home
+runtime_version=$(tr -d '[:space:]' < "$source_root/sbcl.version")
+runtime_root=$state_root/data/autolith/runtimes/$runtime_version
+runtime_installation=$runtime_root/installation
+runtime_command=$runtime_installation/bin/sbcl
+
+runtime_compatible()
+{
+  [[ -x $runtime_command ]] || return 1
+  actual_version=$(
+    env -u SBCL_HOME "$runtime_command" \
+      --noinform --no-userinit --no-sysinit --non-interactive \
+      --eval '(write-string (lisp-implementation-version))' 2>/dev/null
+  ) || return 1
+  [[ $actual_version == "$runtime_version" ]]
+}
+
+mkdir -p -- "$home" "$runtime_root" "$output_root"
+export HOME=$home
+export XDG_DATA_HOME=$state_root/data
+export XDG_STATE_HOME=$state_root/state
+export XDG_CACHE_HOME=$state_root/cache
+
+if ! runtime_compatible; then
+  if [[ -e $runtime_installation ]]; then
+    chmod -R u+w "$runtime_installation" 2>/dev/null || true
+    rm -rf -- "$runtime_installation"
+  fi
+  "$source_root/script/build-release-runtime" "$runtime_installation"
+fi
+export AUTOLITH_SBCL=$runtime_command
+
+if [[ ! -f $home/quicklisp/setup.lisp ]]; then
+  quicklisp_installer=$state_root/quicklisp.lisp
+  curl --fail --location --show-error --retry 3 \
+    --proto '=https' --tlsv1.2 \
+    --output "$quicklisp_installer" \
+    https://beta.quicklisp.org/quicklisp.lisp
+  "$runtime_command" --noinform --non-interactive \
+    --load "$quicklisp_installer" \
+    --eval '(quicklisp-quickstart:install)'
+fi
+
+cd -- "$source_root"
+./script/bootstrap
+./script/check
+./script/build-release "$output_root"
