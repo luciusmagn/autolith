@@ -10,6 +10,9 @@
 (defvar *test-self-setting* :baseline
   "The mutable binding used by private image-commit replay tests.")
 
+(defvar *test-discard-setting* :baseline
+  "The mutable binding used by exploratory discard tests.")
+
 (-> test-self-tools () null)
 (defun test-self-tools ()
   "Test active definition installation, inspection, and form-aware persistence."
@@ -290,6 +293,106 @@
                           "continue redefines the constant deliberately")
              (test-assert (= (symbol-value '+self-restart-trial+) 2)
                           "the constant carries the deliberately chosen value")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-self-discard () null)
+(defun test-self-discard ()
+  "Test exact layered restoration and append-only exploratory discard state."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (previous-function (symbol-function 'test-self-target))
+         (previous-setting *test-discard-setting*)
+         (previous-state-initialized-p *image-state-initialized-p*)
+         (previous-commit-identifier *active-image-commit-identifier*)
+         (previous-history-commit *active-image-history-commit*)
+         (previous-lineage-identifier *active-image-lineage-identifier*))
+    (unwind-protect
+         (let* ((conversation
+                  (conversation-create configuration :identifier "self-discard"))
+                (context
+                  (make-instance 'tool-context
+                                 :configuration configuration
+                                 :worker nil
+                                 :conversation conversation))
+                (registry (make-default-tool-registry))
+                (set-tool (tool-registry-find registry "self" "set"))
+                (discard-tool (tool-registry-find registry "self" "discard")))
+           (setf *image-state-initialized-p* nil
+                 *active-image-commit-identifier* nil
+                 *active-image-history-commit* nil
+                 *active-image-lineage-identifier* nil)
+           (image-state-load configuration)
+           (tool-execute set-tool context
+                         (json-object "symbol" "*test-discard-setting*"
+                                      "value" ":first"))
+           (tool-execute set-tool context
+                         (json-object "symbol" "*test-discard-setting*"
+                                      "value" ":second"))
+           (tool-execute discard-tool context (json-object))
+           (test-assert (eq *test-discard-setting* :first)
+                        "self.discard restores an exact previous object value")
+           (test-assert (= (length (image-commit-pending-records configuration))
+                           1)
+                        "discarding a layered set exposes its preceding mutation")
+           (tool-execute discard-tool context (json-object))
+           (test-assert (eq *test-discard-setting* :baseline)
+                        "discarding the first set restores its baseline binding")
+           (self-install-definition
+            configuration
+            "(defun test-self-target () \"Return first discard layer.\" 1)")
+           (self-install-definition
+            configuration
+            "(defun test-self-target () \"Return second discard layer.\" 2)")
+           (tool-execute discard-tool context (json-object))
+           (test-assert (= (test-self-target) 1)
+                        "self.discard peels back a layered definition")
+           (test-assert
+            (search "Return first discard layer."
+                    (gethash (definition-key '(defun test-self-target () 0))
+                             *exploratory-definitions*))
+            "a layered discard exposes the preceding exploratory source")
+           (let* ((effective
+                    (image-commit-effective-pending-records configuration))
+                  (identifier (getf (rest (first effective)) :id)))
+             (tool-execute discard-tool
+                           context
+                           (json-object "mutation" identifier)))
+           (test-assert (= (test-self-target) 0)
+                        "an identified definition discard restores its exact function")
+           (test-assert
+            (null (gethash (definition-key '(defun test-self-target () 0))
+                           *exploratory-definitions*))
+            "discarding the first definition clears its exploratory source")
+           (self-install-definition
+            configuration
+            "(defun test-new-discard-target () \"Exist only briefly.\" 3)")
+           (test-assert (fboundp 'test-new-discard-target)
+                        "the new exploratory definition is installed")
+           (tool-execute discard-tool context (json-object))
+           (test-assert (not (fboundp 'test-new-discard-target))
+                        "discarding a new definition restores an unbound function")
+           (test-assert (null (image-commit-pending-records configuration))
+                        "completed discards leave no commit candidates")
+           (test-assert
+            (handler-case
+                (progn
+                  (tool-execute discard-tool
+                                context
+                                (json-object "mutation" "absent"))
+                  nil)
+              (source-mutation-error ()
+                t))
+            "self.discard rejects an unknown mutation identifier"))
+      (setf (symbol-function 'test-self-target) previous-function
+            *test-discard-setting* previous-setting
+            *image-state-initialized-p* previous-state-initialized-p
+            *active-image-commit-identifier* previous-commit-identifier
+            *active-image-history-commit* previous-history-commit
+            *active-image-lineage-identifier* previous-lineage-identifier)
+      (when (fboundp 'test-new-discard-target)
+        (fmakunbound 'test-new-discard-target))
+      (clrhash *exploratory-undo-actions*)
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 

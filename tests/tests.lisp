@@ -98,6 +98,7 @@
     (test-lisp-worker-image-snapshot)
     (test-self-tools)
     (test-self-restart-selection)
+    (test-self-discard)
     (test-durable-self-mutation)
     (test-generation-manifest)
     (test-active-image-build-record)

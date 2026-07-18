@@ -46,6 +46,7 @@
                              (:file "image-commits")
                              (:file "generations")
                              (:file "self-status")
+                             (:file "self-discard")
                              (:file "agent")
                              (:file "terminal")
                              (:file "terminal-style")

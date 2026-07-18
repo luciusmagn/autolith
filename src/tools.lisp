@@ -113,6 +113,10 @@
   ()
   (:documentation "Summarize active-image mutation and recovery state."))
 
+(defclass self-discard-tool (mutable-self-tool)
+  ()
+  (:documentation "Restore and discard one effective exploratory mutation."))
+
 (defclass self-diff-tool (self-tool)
   ()
   (:documentation "Show uncommitted reconstructible active-image mutations."))
@@ -825,6 +829,14 @@
                 "self" "status"
                 "Summarize running and selected private image state, effective pending mutations, and retained generations."
                 empty-schema)
+      (register 'self-discard-tool
+                "self" "discard"
+                "Restore and discard the newest effective exploratory mutation, or the effective mutation with a specified identifier."
+                (tool-object-schema
+                 (json-object
+                  "mutation" (tool-string-property
+                                "An effective mutation identifier from self.diff; defaults to the newest effective mutation."))
+                 nil))
       (register 'self-diff-tool
                 "self" "diff"
                 "Show successful self.redefine and self.set mutations not yet persisted by self.commit."
