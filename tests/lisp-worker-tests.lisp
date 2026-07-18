@@ -164,6 +164,51 @@
                             (search "src/code/list.lisp"
                                     (getf (rest response) :output)))
                        "the stable launcher exports matching source to workers")))))
+  (let* ((source-root (asdf:system-source-directory :autolith))
+         (launcher (merge-pathnames "bin/autolith" source-root))
+         (runtime-source (uiop:getenv "AUTOLITH_SBCL_SOURCE_ROOT"))
+         (temporary-root
+           (merge-pathnames
+            (format nil "autolith-inherited-source-~A/" (make-identifier))
+            (uiop:temporary-directory)))
+         (data-home (merge-pathnames "data/" temporary-root))
+         (state-home (merge-pathnames "state/" temporary-root)))
+    (unwind-protect
+         (progn
+           (unless (non-empty-string-p runtime-source)
+             (error "The test runtime has no matching SBCL source root."))
+           (ensure-directories-exist data-home)
+           (ensure-directories-exist state-home)
+           (let ((output
+                   (with-input-from-string
+                       (input
+                        (format nil
+                                "(:request :id 8 :operation :source :arguments ~
+                                 (:name \"CL:MAPCAR\" :kind \"function\"))~%"))
+                     (uiop:run-program
+                      (list "env"
+                            (format nil "XDG_DATA_HOME=~A" data-home)
+                            (format nil "XDG_STATE_HOME=~A" state-home)
+                            (format nil "AUTOLITH_SBCL_SOURCE_ROOT=~A"
+                                    runtime-source)
+                            (namestring launcher)
+                            "--worker")
+                      :input input
+                      :output :string
+                      :error-output *error-output*))))
+             (let ((*read-eval* nil))
+               (with-input-from-string (stream output)
+                 (let ((handshake (read stream t nil))
+                       (response (read stream t nil)))
+                   (test-assert
+                    (and (eq (first handshake) :autolith-worker)
+                         (eq (getf (rest response) :status) :ok)
+                         (search "src/code/list.lisp"
+                                 (getf (rest response) :output)))
+                    "the stable launcher preserves inherited matching source"))))))
+      (uiop:delete-directory-tree temporary-root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (pool (lisp-worker-pool-create configuration)))
