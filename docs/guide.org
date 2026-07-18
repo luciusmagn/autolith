@@ -28,15 +28,55 @@ file boundaries are summarized in [[file:architecture.org][the architecture note
 
 * Requirements and setup
 
-The supported target is Linux x86-64 with Git, OpenSSL, Quicklisp, Bubblewrap,
-=curl=, GNU =tar=, and =sha256sum=. The tracked =sbcl.version= pins SBCL 2.6.4. The setup
-command uses a matching =AUTOLITH_SBCL= when explicitly configured, locates a
-matching system runtime, or downloads the official Linux x86-64 binary and
-checks its pinned SHA-256 identity before installing it under the Autolith data
-root. Setup also downloads the official matching SBCL source archive, verifies
-its separately pinned SHA-256 identity, and publishes the extracted tree without
-write bits beside the runtime. The launcher and development commands remember
-that selection.
+The supported target is Linux x86-64 with Git, OpenSSL, and Bubblewrap.
+
+** Nix package
+
+Nix is the recommended installation path because it supplies the complete
+runtime and native dependencies without borrowing them from the host.
+
+#+BEGIN_SRC sh
+nix run github:luciusmagn/autolith
+#+END_SRC
+
+The first launch creates private recovery and active images without network
+access.
+
+** Binary release
+
+The conventional installer downloads a versioned release archive and its
+SHA-256 record, verifies the archive, installs it atomically below
+=${XDG_DATA_HOME:-~/.local/share}/autolith/installation/=, and links =autolith=
+into =~/.local/bin/=.
+
+#+BEGIN_SRC sh
+curl -fsSL https://sh.lambda-symbolics.com/autolith | sh
+#+END_SRC
+
+Piping a remote script into a shell is intrinsically difficult to audit. Read
+the script first or use Nix when that tradeoff is unwelcome. A binary release
+contains pinned SBCL 2.6.4, its matching source, the locked Lisp dependency
+tree, fff, and the private command sandbox helper. It does not require a source
+checkout, Quicklisp, Cargo, or a compiler. Its first launch automatically builds
+machine-specific pristine recovery and active images from those bundled inputs.
+
+The release launcher checks the newest published Git tag at most once per day
+on an interactive start. It asks before installing a newer tag and records tags
+that were already offered. =autolith --update= performs an explicit check.
+Running the installer again is also an update and keeps older versioned releases
+available under the installation root.
+
+** Source checkout
+
+Source development additionally needs Quicklisp, =curl=, GNU =tar=,
+=sha256sum=, Rust with Cargo, a C compiler, CMake, and =pkg-config=. The tracked
+=sbcl.version= pins SBCL 2.6.4. The setup command uses a matching
+=AUTOLITH_SBCL= when explicitly configured, locates a matching system runtime,
+or downloads the official Linux x86-64 binary and checks its pinned SHA-256
+identity before installing it under the Autolith data root. Setup also downloads
+the official matching SBCL source archive, verifies its separately pinned
+SHA-256 identity, and publishes the extracted tree without write bits beside
+the runtime. The launcher and development commands remember that selection.
 
 Dependencies are pinned by =qlfile= and =qlfile.lock=. With Quicklisp already
 installed at =~/quicklisp=, run:
