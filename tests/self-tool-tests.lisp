@@ -317,6 +317,7 @@
                                  :conversation conversation))
                 (registry (make-default-tool-registry))
                 (set-tool (tool-registry-find registry "self" "set"))
+                (diff-tool (tool-registry-find registry "self" "diff"))
                 (discard-tool (tool-registry-find registry "self" "discard")))
            (setf *image-state-initialized-p* nil
                  *active-image-commit-identifier* nil
@@ -329,6 +330,15 @@
            (tool-execute set-tool context
                          (json-object "symbol" "*test-discard-setting*"
                                       "value" ":second"))
+           (let ((diff (tool-execute diff-tool context (json-object))))
+             (test-assert
+              (and (search "Installed mutations: 2"
+                           (tool-result-content diff))
+                   (search "Effective changes: 1"
+                           (tool-result-content diff))
+                   (search ":second" (tool-result-content diff))
+                   (not (search ":first" (tool-result-content diff))))
+              "self.diff collapses layered edits to their effective state"))
            (tool-execute discard-tool context (json-object))
            (test-assert (eq *test-discard-setting* :first)
                         "self.discard restores an exact previous object value")
@@ -338,6 +348,19 @@
            (tool-execute discard-tool context (json-object))
            (test-assert (eq *test-discard-setting* :baseline)
                         "discarding the first set restores its baseline binding")
+           (tool-execute set-tool context
+                         (json-object "symbol" "*test-discard-setting*"
+                                      "value" ":temporary"))
+           (tool-execute set-tool context
+                         (json-object "symbol" "*test-discard-setting*"
+                                      "value" ":baseline"))
+           (test-assert
+            (search "no effective change"
+                    (tool-result-content
+                     (tool-execute diff-tool context (json-object))))
+            "self.diff recognizes a mutation stack returned to its baseline")
+           (tool-execute discard-tool context (json-object))
+           (tool-execute discard-tool context (json-object))
            (self-install-definition
             configuration
             "(defun test-self-target () \"Return first discard layer.\" 1)")

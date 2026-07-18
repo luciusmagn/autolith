@@ -570,6 +570,70 @@
         (setf effective (nconc effective (list record)))))
     effective))
 
+(-> image-commit--matching-entry (configuration list) (option list))
+(defun image-commit--matching-entry (configuration record)
+  "Return the committed replay entry matching pending RECORD, when present."
+  (let ((properties (rest record)))
+    (find-if
+     (lambda (entry)
+       (and (eq (getf entry :kind) (getf properties :kind))
+            (string= (getf entry :target) (getf properties :target))))
+     (image-commit-base-entries configuration))))
+
+(-> image-commit--same-target-p (list list) boolean)
+(defun image-commit--same-target-p (left right)
+  "Return true when LEFT and RIGHT mutate the same semantic target."
+  (let ((left-properties (rest left))
+        (right-properties (rest right)))
+    (and (eq (getf left-properties :kind)
+             (getf right-properties :kind))
+         (string= (getf left-properties :target)
+                  (getf right-properties :target))
+         t)))
+
+(-> image-commit--pending-baseline (configuration list list) (option string))
+(defun image-commit--pending-baseline (configuration record pending)
+  "Return RECORD's committed or first-journaled baseline source."
+  (let ((entry (image-commit--matching-entry configuration record)))
+    (or (and entry (getf entry :source))
+        (let ((first-record
+                (find-if
+                 (lambda (candidate)
+                   (image-commit--same-target-p candidate record))
+                 pending)))
+          (and first-record (getf (rest first-record) :previous))))))
+
+(-> image-commit--proposal-equal-p (list string string) boolean)
+(defun image-commit--proposal-equal-p (record baseline proposed)
+  "Return true when BASELINE and PROPOSED contain the same readable form."
+  (handler-case
+      (let ((package
+              (self-resolve-package (getf (rest record) :package))))
+        (and (equal (self-read-form baseline
+                                    :read-eval nil
+                                    :package package)
+                    (self-read-form proposed
+                                    :read-eval nil
+                                    :package package))
+             t))
+    (error ()
+      (and (string= baseline proposed) t))))
+
+(-> image-commit-effective-diff-records (configuration) list)
+(defun image-commit-effective-diff-records (configuration)
+  "Return one pending record per target whose proposal differs from its base."
+  (let ((pending (image-commit-pending-records configuration)))
+    (remove-if
+     (lambda (record)
+       (let ((baseline
+               (image-commit--pending-baseline configuration record pending)))
+         (and baseline
+              (image-commit--proposal-equal-p
+               record
+               baseline
+               (getf (rest record) :proposed)))))
+     (image-commit-effective-pending-records configuration))))
+
 (-> image-commit--record->entry (list) list)
 (defun image-commit--record->entry (record)
   "Convert one installed mutation journal RECORD to a replay entry."
@@ -870,18 +934,26 @@
 
 (-> image-commit-render-pending (configuration) string)
 (defun image-commit-render-pending (configuration)
-  "Render the running image's uncommitted reconstructible mutations."
-  (let ((records (image-commit-pending-records configuration)))
-    (if records
+  "Render the running image's effective uncommitted mutation state."
+  (let* ((records (image-commit-pending-records configuration))
+         (effective (image-commit-effective-diff-records configuration)))
+    (cond
+      (effective
         (with-output-to-string (stream)
-          (dolist (record records)
+          (format stream "Installed mutations: ~D~%Effective changes: ~D~2%"
+                  (length records) (length effective))
+          (dolist (record effective)
             (let ((properties (rest record)))
               (format stream "~A  ~A  ~A~%~A~2%"
                       (getf properties :id)
                       (getf properties :kind)
                       (getf properties :target)
-                      (getf properties :proposed)))))
-        "The active image has no uncommitted reconstructible mutations.")))
+                      (getf properties :proposed))))))
+      (records
+       (format nil "Installed mutations: ~D~%Effective changes: 0~%The pending state produces no effective change from the selected private image."
+               (length records)))
+      (t
+       "The active image has no uncommitted reconstructible mutations."))))
 
 (defmethod tool-execute ((tool self-diff-tool)
                          (context tool-context)
@@ -901,12 +973,20 @@
            (title (self-validate-commit-title
                    (tool-argument arguments "title" :required t)))
            (records (image-commit-pending-records configuration))
+           (effective (image-commit-effective-diff-records configuration))
            (identifier (make-identifier))
            (mutation-identifiers
              (mapcar (lambda (record) (getf (rest record) :id)) records)))
       (unless records
         (error 'image-commit-error
                :message "The active image has no reconstructible mutations to commit."
+               :tool-name "self.commit"
+               :pathname (configuration-image-commit-root configuration)
+               :stage ':validation))
+      (unless effective
+        (error 'image-commit-error
+               :message
+               "The pending mutations produce no effective change; discard them instead of creating an empty private commit."
                :tool-name "self.commit"
                :pathname (configuration-image-commit-root configuration)
                :stage ':validation))

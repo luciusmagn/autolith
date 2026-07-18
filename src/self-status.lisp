@@ -24,7 +24,7 @@
   (multiple-value-bind (selected-identifier selected-history-commit)
       (image-commit--pointer-state configuration)
     (let* ((pending (image-commit-pending-records configuration))
-           (effective (image-commit-effective-pending-records configuration))
+           (effective (image-commit-effective-diff-records configuration))
            (generations (generation-list configuration))
            (newest-generation (first generations))
            (selected-generation (generation-selected configuration))

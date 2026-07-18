@@ -839,7 +839,7 @@
                  nil))
       (register 'self-diff-tool
                 "self" "diff"
-                "Show successful self.redefine and self.set mutations not yet persisted by self.commit."
+                "Show the effective self.redefine and self.set changes not yet persisted by self.commit, collapsing repeated edits to each target."
                 empty-schema)
       (register 'self-commit-tool
                 "self" "commit"
