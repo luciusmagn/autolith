@@ -84,24 +84,17 @@
       (unless (probe-file pathname)
         (return (make-instance 'permission-state)))
       (handler-case
-          (with-open-file (stream pathname
-                                  :direction :input
-                                  :external-format :utf-8)
-            (let* ((*read-eval* nil)
-                   (end-marker (cons nil nil))
-                   (form (read stream nil end-marker))
-                   (extra (read stream nil end-marker)))
-              (unless (and (not (eq form end-marker))
-                           (eq extra end-marker)
-                           (permissions--form-p form))
-                (error 'permissions-error
-                       :message (format nil
-                                        "Command permissions at ~A are malformed or unsupported."
-                                        pathname)
-                       :pathname pathname
-                       :operation ':read
-                       :cause nil))
-              (permissions--form->state form)))
+          (multiple-value-bind (form sole-form-p)
+              (readable-state-read-form pathname)
+            (unless (and sole-form-p (permissions--form-p form))
+              (error 'permissions-error
+                     :message (format nil
+                                      "Command permissions at ~A are malformed or unsupported."
+                                      pathname)
+                     :pathname pathname
+                     :operation ':read
+                     :cause nil))
+            (permissions--form->state form))
         (permissions-error (condition)
           (error condition))
         (error (cause)
@@ -138,34 +131,10 @@
 (-> permissions--write (configuration permission-state) null)
 (defun permissions--write (configuration state)
   "Atomically persist command permission STATE with private file permissions."
-  (let* ((pathname (configuration-permissions-path configuration))
-         (temporary
-           (make-pathname
-            :name (format nil ".~A.~A"
-                          (pathname-name pathname)
-                          (make-identifier))
-            :type "tmp"
-            :defaults pathname)))
+  (let ((pathname (configuration-permissions-path configuration)))
     (handler-case
-        (unwind-protect
-             (progn
-               (ensure-directories-exist pathname)
-               (with-open-file (stream temporary
-                                       :direction :output
-                                       :if-exists :supersede
-                                       :if-does-not-exist :create
-                                       :external-format :utf-8)
-                 (let ((*print-circle* t)
-                       (*print-readably* t)
-                       (*print-pretty* t))
-                   (prin1 (permissions--state-form state) stream)
-                   (terpri stream)
-                   (finish-output stream)))
-               (sb-posix:chmod (namestring temporary) #o600)
-               (uiop:rename-file-overwriting-target temporary pathname)
-               (sb-posix:chmod (namestring pathname) #o600))
-          (when (probe-file temporary)
-            (delete-file temporary)))
+        (readable-state-write-form pathname
+                                   (permissions--state-form state))
       (error (cause)
         (error 'permissions-error
                :message (format nil "Could not persist command permissions at ~A: ~A"

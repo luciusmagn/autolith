@@ -22,6 +22,7 @@
                              (:file "conditions")
                              (:file "json")
                              (:file "configuration")
+                             (:file "readable-state")
                              (:file "preferences")
                              (:file "permissions")
                              (:file "later")

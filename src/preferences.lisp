@@ -26,12 +26,6 @@
     :documentation "Whether provider reasoning summaries are requested and shown."))
   (:documentation "Validated global choices restored across Autolith processes."))
 
-(-> preferences--property-present-p (list keyword) boolean)
-(defun preferences--property-present-p (properties property)
-  "Return true when PROPERTIES contains PROPERTY as a plist key."
-  (not (null (loop for tail on properties by #'cddr
-                   thereis (eq (first tail) property)))))
-
 (-> preferences--form-p (t) boolean)
 (defun preferences--form-p (form)
   "Return true when FORM is one complete supported preferences record."
@@ -41,7 +35,7 @@
            (let* ((properties (rest form))
                   (version (getf properties :version -1)))
              (and (evenp (length properties))
-                  (preferences--property-present-p
+                  (readable-state-property-present-p
                    properties :reasoning-traces-p)
                   (typep (getf properties :reasoning-traces-p) 'boolean)
                   (case version
@@ -51,8 +45,8 @@
                      (let ((model (getf properties :model))
                            (effort (getf properties :reasoning-effort)))
                        (and
-                        (preferences--property-present-p properties :model)
-                        (preferences--property-present-p
+                        (readable-state-property-present-p properties :model)
+                        (readable-state-property-present-p
                          properties :reasoning-effort)
                         (or (null model) (non-empty-string-p model))
                         (or (null effort)
@@ -84,24 +78,17 @@
       (unless (probe-file pathname)
         (return (make-instance 'preference-state)))
       (handler-case
-          (with-open-file (stream pathname
-                                  :direction :input
-                                  :external-format :utf-8)
-            (let* ((*read-eval* nil)
-                   (end-marker (cons nil nil))
-                   (form (read stream nil end-marker))
-                   (extra (read stream nil end-marker)))
-              (unless (and (not (eq form end-marker))
-                           (eq extra end-marker)
-                           (preferences--form-p form))
-                (error 'preferences-error
-                       :message (format nil
-                                        "Preferences at ~A are malformed or unsupported."
-                                        pathname)
-                       :pathname pathname
-                       :operation ':read
-                       :cause nil))
-              (preferences--form->state form)))
+          (multiple-value-bind (form sole-form-p)
+              (readable-state-read-form pathname)
+            (unless (and sole-form-p (preferences--form-p form))
+              (error 'preferences-error
+                     :message (format nil
+                                      "Preferences at ~A are malformed or unsupported."
+                                      pathname)
+                     :pathname pathname
+                     :operation ':read
+                     :cause nil))
+            (preferences--form->state form))
         (preferences-error (condition)
           (error condition))
         (error (cause)
@@ -149,41 +136,17 @@
 (-> preferences--write (configuration preference-state) null)
 (defun preferences--write (configuration preferences)
   "Atomically write PREFERENCES under CONFIGURATION's private state root."
-  (let* ((pathname (configuration-preferences-path configuration))
-         (temporary
-           (make-pathname
-            :name (format nil ".~A.~A"
-                          (pathname-name pathname)
-                          (make-identifier))
-            :type "tmp"
-            :defaults pathname)))
+  (let ((pathname (configuration-preferences-path configuration)))
     (handler-case
-        (unwind-protect
-             (progn
-               (ensure-directories-exist pathname)
-               (with-open-file (stream temporary
-                                       :direction :output
-                                       :if-exists :supersede
-                                       :if-does-not-exist :create
-                                       :external-format :utf-8)
-                 (let ((*print-circle* t)
-                       (*print-readably* t)
-                       (*print-pretty* t))
-                   (prin1 (list :preferences
-                                :version +preferences-version+
-                                :model (preference-state-model preferences)
-                                :reasoning-effort
-                                (preference-state-reasoning-effort preferences)
-                                :reasoning-traces-p
-                                (preference-state-reasoning-traces-p preferences))
-                          stream)
-                   (terpri stream)
-                   (finish-output stream)))
-               (sb-posix:chmod (namestring temporary) #o600)
-               (uiop:rename-file-overwriting-target temporary pathname)
-               (sb-posix:chmod (namestring pathname) #o600))
-          (when (probe-file temporary)
-            (delete-file temporary)))
+        (readable-state-write-form
+         pathname
+         (list :preferences
+               :version +preferences-version+
+               :model (preference-state-model preferences)
+               :reasoning-effort
+               (preference-state-reasoning-effort preferences)
+               :reasoning-traces-p
+               (preference-state-reasoning-traces-p preferences)))
       (error (cause)
         (error 'preferences-error
                :message (format nil "Could not persist preferences at ~A: ~A"

@@ -47,12 +47,6 @@
     :documentation "Deferred entries ordered by due time and creation time."))
   (:documentation "Validated deferred inputs restored across Autolith processes."))
 
-(-> later--property-present-p (list keyword) boolean)
-(defun later--property-present-p (properties property)
-  "Return true when PROPERTIES contains PROPERTY as a plist key."
-  (not (null (loop for tail on properties by #'cddr
-                   thereis (eq (first tail) property)))))
-
 (-> later--entry-form-p (t) boolean)
 (defun later--entry-form-p (form)
   "Return true when FORM is one complete portable deferred entry."
@@ -62,7 +56,8 @@
            (let ((properties (rest form)))
              (and (= (length properties) 12)
                   (every (lambda (property)
-                           (later--property-present-p properties property))
+                           (readable-state-property-present-p properties
+                                                              property))
                          '(:id :input :directory :due-at :created-at :window))
                   (non-empty-string-p (getf properties :id))
                   (non-empty-string-p (getf properties :input))
@@ -126,28 +121,21 @@
       (unless (probe-file pathname)
         (return (make-instance 'later-state)))
       (handler-case
-          (with-open-file (stream pathname
-                                  :direction :input
-                                  :external-format :utf-8)
-            (let* ((*read-eval* nil)
-                   (end-marker (cons nil nil))
-                   (form (read stream nil end-marker))
-                   (extra (read stream nil end-marker)))
-              (unless (and (not (eq form end-marker))
-                           (eq extra end-marker)
-                           (later--form-p form))
-                (error 'later-error
-                       :message (format nil
-                                        "Deferred inputs at ~A are malformed or unsupported."
-                                        pathname)
-                       :pathname pathname
-                       :operation ':read
-                       :cause nil))
-              (make-instance
-               'later-state
-               :entries
-               (later--sort-entries
-                (mapcar #'later--entry-form->entry (fifth form))))))
+          (multiple-value-bind (form sole-form-p)
+              (readable-state-read-form pathname)
+            (unless (and sole-form-p (later--form-p form))
+              (error 'later-error
+                     :message (format nil
+                                      "Deferred inputs at ~A are malformed or unsupported."
+                                      pathname)
+                     :pathname pathname
+                     :operation ':read
+                     :cause nil))
+            (make-instance
+             'later-state
+             :entries
+             (later--sort-entries
+              (mapcar #'later--entry-form->entry (fifth form)))))
         (later-error (condition)
           (error condition))
         (error (cause)
@@ -191,34 +179,9 @@
 (-> later--write (configuration later-state) null)
 (defun later--write (configuration state)
   "Atomically persist deferred input STATE with private file permissions."
-  (let* ((pathname (configuration-later-path configuration))
-         (temporary
-           (make-pathname
-            :name (format nil ".~A.~A"
-                          (pathname-name pathname)
-                          (make-identifier))
-            :type "tmp"
-            :defaults pathname)))
+  (let ((pathname (configuration-later-path configuration)))
     (handler-case
-        (unwind-protect
-             (progn
-               (ensure-directories-exist pathname)
-               (with-open-file (stream temporary
-                                       :direction :output
-                                       :if-exists :supersede
-                                       :if-does-not-exist :create
-                                       :external-format :utf-8)
-                 (let ((*print-circle* t)
-                       (*print-readably* t)
-                       (*print-pretty* t))
-                   (prin1 (later--state-form state) stream)
-                   (terpri stream)
-                   (finish-output stream)))
-               (sb-posix:chmod (namestring temporary) #o600)
-               (uiop:rename-file-overwriting-target temporary pathname)
-               (sb-posix:chmod (namestring pathname) #o600))
-          (when (probe-file temporary)
-            (delete-file temporary)))
+        (readable-state-write-form pathname (later--state-form state))
       (error (cause)
         (error 'later-error
                :message (format nil "Could not persist deferred inputs at ~A: ~A"
