@@ -335,7 +335,7 @@ protocol."
 (defun definition-signature (definition)
   "Return the semantic source identity of one top-level DEFINITION."
   (if (eq (first definition) 'defmethod)
-      (let* ((tail (cddr definition))
+      (let* ((tail (rest (rest definition)))
              (lambda-position (position-if #'listp tail)))
         (unless lambda-position
           (error "DEFMETHOD has no lambda list."))
@@ -427,7 +427,7 @@ protocol."
 (-> self--method-components (list package) (values t list list))
 (defun self--method-components (definition package)
   "Return DEFINITION's generic name, qualifiers, and method specializers."
-  (let* ((tail (cddr definition))
+  (let* ((tail (rest (rest definition)))
          (lambda-position (position-if #'listp tail))
          (qualifiers (subseq tail 0 lambda-position))
          (lambda-list (nth lambda-position tail)))

@@ -333,7 +333,7 @@
                  (or (null expected-identifier)
                      (string= identifier expected-identifier))
                  (string= identifier
-                          (car (last (pathname-directory directory))))
+                          (first (last (pathname-directory directory))))
                  core-pathname
                  (uiop:subpathp core-pathname directory)
                  (or (= version 1)
