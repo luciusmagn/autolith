@@ -1,0 +1,107 @@
+#+TITLE: Autolith Release Service
+#+SUBTITLE: Host-built Linux releases and the Common Lisp download server
+#+STARTUP: content
+
+* Components
+
+The release service has two independent long-running processes:
+
+- =server/run serve= runs the Common Lisp HTTP server on loopback. It serves
+  the installer, health check, latest-release redirect, archives, and checksum
+  records. Caddy supplies public TLS.
+- =server/run build= polls immutable semantic Git tags. It checks out each new
+  tag, runs the complete repository check in the pinned Ubuntu 22 builder
+  container, verifies the archive checksum, and publishes the two artifacts by
+  one atomic directory rename.
+
+The HTTP process runs as the unprivileged =autolith-release= user. It can read
+the tracked checkout and published artifacts but cannot write them. The builder
+runs separately with Docker access and never handles public requests. Docker
+authority must not be given to the HTTP process.
+
+The GitHub tag workflow does not build or host binaries. It waits until the
+checksum is reachable from this service, then creates a metadata-only GitHub
+release. That compatibility record lets launchers from before version 0.11.2
+continue to discover new releases through GitHub.
+
+* Filesystem layout
+
+#+BEGIN_SRC text
+/srv/autolith-release-server/source/   root-owned tracked checkout
+/srv/autolith-release-server/public/   root-owned published archives
+/var/lib/autolith-release-server/home/ unprivileged server runtime state
+/var/lib/autolith-release-server/builder/ private builder cache and staging
+#+END_SRC
+
+The builder reuses its container image, pinned SBCL build, Quicklisp tree, and
+locked dependency cache. A failed build remains private under the builder state
+root. The server considers a release visible only when both its archive and
+checksum exist in the final release directory.
+
+* Initial Artix and s6 deployment
+
+Create the service account and roots, then clone the tracked source:
+
+#+BEGIN_SRC sh
+useradd --system --home-dir /var/lib/autolith-release-server/home \
+  --shell /usr/bin/nologin autolith-release
+install -d -m 0755 /srv/autolith-release-server/public
+install -d -m 0700 /var/lib/autolith-release-server/builder
+install -d -o autolith-release -g autolith-release -m 0700 \
+  /var/lib/autolith-release-server/home
+git clone https://github.com/luciusmagn/autolith.git \
+  /srv/autolith-release-server/source
+#+END_SRC
+
+Install Quicklisp into the service home, materialize the locked dependencies,
+and install the pinned runtime. Run the repository bootstrap with =HOME= and
+the XDG variables matching the s6 definitions. Keep the source checkout owned
+by root, then give the service account ownership of only its home:
+
+#+BEGIN_SRC sh
+export HOME=/var/lib/autolith-release-server/home
+export XDG_DATA_HOME=$HOME/.local/share
+export XDG_STATE_HOME=$HOME/.local/state
+export XDG_CACHE_HOME=$HOME/.cache
+sbcl --noinform --non-interactive --load /tmp/quicklisp.lisp \
+  --eval '(quicklisp-quickstart:install)'
+cd /srv/autolith-release-server/source
+./script/bootstrap
+chown -R autolith-release:autolith-release "$HOME"
+#+END_SRC
+
+Copy both tracked service directories from =server/deployment/s6/= into
+=/etc/s6/sv/=, add them to the active s6-rc bundle, and reload the compiled
+database. Replace the public Caddy site with
+=server/deployment/caddy.caddyfile=, validate the complete Caddy configuration,
+then reload Caddy.
+
+* Operation
+
+Run one foreground scan and build with:
+
+#+BEGIN_SRC sh
+HOME=/var/lib/autolith-release-server/home \
+XDG_DATA_HOME=/var/lib/autolith-release-server/home/.local/share \
+XDG_STATE_HOME=/var/lib/autolith-release-server/home/.local/state \
+XDG_CACHE_HOME=/var/lib/autolith-release-server/home/.cache \
+AUTOLITH_RELEASE_SOURCE_ROOT=/srv/autolith-release-server/source \
+AUTOLITH_RELEASE_STATE_ROOT=/var/lib/autolith-release-server/builder \
+AUTOLITH_RELEASE_PUBLIC_ROOT=/srv/autolith-release-server/public \
+  /srv/autolith-release-server/source/server/run build-once
+#+END_SRC
+
+Verify the public boundary after deployment:
+
+#+BEGIN_SRC sh
+curl -fsS https://sh.lambda-symbolics.com/health
+curl -fsSIL https://sh.lambda-symbolics.com/releases/latest
+curl -fsSL https://sh.lambda-symbolics.com/autolith | sh -n
+#+END_SRC
+
+An empty publication root builds only the newest remote tag. After the first
+successful publication, the builder processes every newer missed tag in order.
+Update the service implementation by pulling the source checkout, running
+=./script/bootstrap= when dependencies or the runtime change, and restarting
+both services. Release artifacts remain immutable across implementation
+updates.

@@ -60,11 +60,16 @@ tree, fff, and the private command sandbox helper. It does not require a source
 checkout, Quicklisp, Cargo, or a compiler. Its first launch automatically builds
 machine-specific pristine recovery and active images from those bundled inputs.
 
-The release launcher checks the newest published Git tag at most once per day
-on an interactive start. It asks before installing a newer tag and records tags
-that were already offered. =autolith --update= performs an explicit check.
+The release launcher checks the newest published host-built release at most once
+per day on an interactive start. It asks before installing a newer version and
+records versions that were already offered. =autolith --update= performs an explicit check.
 Running the installer again is also an update and keeps older versioned releases
 available under the installation root.
+
+Tagged Linux archives are built and checked by the installer host, then served
+by the repository's Common Lisp release server. GitHub CI publishes only a
+metadata compatibility record after the host checksum becomes available. See
+[[file:release-service.org][the release service note]] for the build, publication, and deployment flow.
 
 ** Source checkout
 

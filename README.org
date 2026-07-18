@@ -87,9 +87,11 @@ drafted and queued while AL is responding. Type =/help= for commands.
 - =bin/= contains the stable launcher and pinned-runtime adapter.
 - =recovery/= contains the minimal source recovery runtime.
 - =script/= contains setup, image builders, and repository checks.
+- =server/= contains the Common Lisp release server, host builder, and deployment files.
 - =tests/= contains the complete regression suite.
 - [[file:docs/guide.org][docs/guide.org]] covers setup, operation, tools, persistence, and recovery.
 - [[file:docs/architecture.org][docs/architecture.org]] maps the runtime components and invariants.
+- [[file:docs/release-service.org][docs/release-service.org]] documents the host-built release service.
 - [[file:docs/autolith-minimal-technical-spec.org][docs/autolith-minimal-technical-spec.org]] is the product specification.
 - [[file:AGENTS.md][AGENTS.md]] defines repository, Lisp, testing, and commit policy.
 
