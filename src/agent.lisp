@@ -464,9 +464,9 @@
           (conversation-append-tool-result
            (agent-conversation agent)
            call-id
-           tool-name
-           (tool-result-content result)
-           (tool-result-success-p result)
+           :tool-name tool-name
+           :output (tool-result-content result)
+           :success-p (tool-result-success-p result)
            :cpu-microseconds cpu-microseconds
            :real-microseconds real-microseconds)
           (agent-observer-status
@@ -518,9 +518,9 @@
       (conversation-append-tool-result
        (agent-conversation agent)
        call-id
-       tool-name
-       message
-       nil)
+       :tool-name tool-name
+       :output message
+       :success-p nil)
       (agent-observer-status
        observer
        :tool-call-completed

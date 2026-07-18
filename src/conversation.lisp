@@ -244,13 +244,16 @@
   "The provider-visible result synthesized for a tool call interrupted by exit.")
 
 (-> conversation-append-tool-result
-    (conversation string string string boolean
-     &key (:cpu-microseconds (option (integer 0)))
+    (conversation string
+     &key (:tool-name string)
+          (:output string)
+          (:success-p boolean)
+          (:cpu-microseconds (option (integer 0)))
           (:real-microseconds (option (integer 0))))
     json-object)
 (defun conversation-append-tool-result
-    (conversation call-id tool-name output success-p
-     &key cpu-microseconds real-microseconds)
+    (conversation call-id
+     &key tool-name output success-p cpu-microseconds real-microseconds)
   "Persist and append one tool OUTPUT with optional CPU and real timing."
   (unless (or (and (null cpu-microseconds) (null real-microseconds))
               (and (typep cpu-microseconds '(integer 0))
@@ -381,9 +384,10 @@ before the repaired projection can be sent to the provider."
                                   (conversation-append-tool-result
                                    conversation
                                    call-id
+                                   :tool-name
                                    (conversation--tool-call-name call)
-                                   +conversation-interrupted-tool-output+
-                                   nil)
+                                   :output +conversation-interrupted-tool-output+
+                                   :success-p nil)
                                   (gethash call-id outputs) output))
                           (push output repaired)))))
                    (t

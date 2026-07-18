@@ -977,7 +977,11 @@
                             (application-ui application))))
                 "tool-only provider steps finalize one trace before the tool call")))
            (conversation-append-tool-result
-            conversation "call-live" "self.eval" "42" t)
+            conversation
+            "call-live"
+            :tool-name "self.eval"
+            :output "42"
+            :success-p t)
            (recording-terminal-reset terminal)
            (funcall send-status :tool-call-completed (list :tool "self.eval"))
            (test-assert (search "✓ self.eval"

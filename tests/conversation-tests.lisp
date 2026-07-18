@@ -231,7 +231,11 @@
                           "first persistence atomically publishes header and record"))
            (conversation-append-provider-item conversation assistant-item)
            (conversation-append-tool-result
-            conversation "call-1" "lisp.eval" "42" t)
+            conversation
+            "call-1"
+            :tool-name "lisp.eval"
+            :output "42"
+            :success-p t)
            (with-open-file (stream (conversation-pathname conversation)
                                    :direction :output
                                    :if-exists :append
