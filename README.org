@@ -14,7 +14,7 @@ c$$$cc$$$c  $$'        workspace     /root/common-lisp/frob/
  YMM   ""` """"YUMMM
 
 Autolith executes model-generated code with your user privileges.
-It is not a security sandbox.
+Sandboxing is no substitute for human oversight
 
 ❯ Ask Autolith anything. Type /help for commands.
 #+END_SRC

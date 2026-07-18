@@ -145,7 +145,7 @@
       (terminal-span
        :notice
        (format nil "~%Autolith executes model-generated code with your user ~
-                    privileges.~%It is not a security sandbox."))))))
+                    privileges.~%Sandboxing is no substitute for human oversight"))))))
 
 (-> application-handle-expected-error (application autolith-error) null)
 (defun application-handle-expected-error (application condition)
