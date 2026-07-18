@@ -174,7 +174,7 @@
 (-> application--resume-command (application) string)
 (defun application--resume-command (application)
   "Return the shell command that resumes APPLICATION's exact conversation."
-  (format nil "autolith --resume ~A"
+  (format nil "autolith resume ~A"
           (uiop:escape-shell-token
            (conversation-identifier
             (application-conversation application)))))
@@ -282,8 +282,8 @@
 (-> main-usage () string)
 (defun main-usage ()
   "Return the command-line usage text."
-  "Usage: autolith [--immutable] [--resume [ID]]
-       autolith resume [ID]
+  "Usage: autolith [--immutable]
+       autolith [--immutable] resume [ID]
        autolith --auth
        autolith --version
        autolith --recovery [--generation ID | --list]")
@@ -304,10 +304,7 @@
 (defun main--resume-selection (arguments)
   "Return whether ARGUMENTS request resume and their optional identifier."
   (let ((position
-          (position-if (lambda (argument)
-                         (member argument '("resume" "--resume")
-                                 :test #'string=))
-                       arguments)))
+          (position "resume" arguments :test #'string=)))
     (if position
         (let ((candidate (nth (1+ position) arguments)))
           (values t

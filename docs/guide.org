@@ -197,7 +197,7 @@ conversation file and adds nothing to =/resume= or =/conversations=.
 
 =Ctrl-C= clears a nonempty input draft. At an empty prompt it exits Autolith;
 when the conversation is durable, shutdown prints the exact
-=autolith --resume ID= command that reopens it. Empty conversations produce no
+=autolith resume ID= command that reopens it. Empty conversations produce no
 resume instruction.
 
 Long agent turns are allowed to continue well beyond eight tool batches. Autolith
@@ -236,8 +236,8 @@ prefix from before selection. The commands are:
 =/resume=, =/rollback=, =/model=, and =/effort= open a vertical interactive
 picker; each also accepts an explicit argument. Tab cycles the picker alongside
 Up and Down navigation. Conversations and generations are listed newest first.
-From the shell, =autolith resume= and =autolith --resume= open the same picker;
-either spelling may be followed by an explicit conversation identifier.
+From the shell, =autolith resume= opens the same picker and may be followed by
+an explicit conversation identifier.
 Conversations remember the directory they were started in, and the picker
 shows it.
 
@@ -563,8 +563,8 @@ executable, the preloaded active baseline, or the pristine recovery core.
 Automatic recovery forwards the original application arguments while marking
 the resumed process as recovered, restores the capsule's conversation, and
 retains the last rendered sequence so ordinary terminal scrollback is not
-duplicated. An explicit =--resume ID= overrides checkpoint-time conversation
-state.
+duplicated. An explicit =resume ID= command overrides checkpoint-time
+conversation state.
 
 Saved cores are compatible only with the recorded SBCL version, operating system
 build, and architecture. Source remains authoritative for rebuilding the base.
