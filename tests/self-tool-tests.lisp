@@ -390,6 +390,7 @@
                                                     "self"
                                                     "persist-definition"))
                   (set-tool (tool-registry-find registry "self" "set"))
+                  (status-tool (tool-registry-find registry "self" "status"))
                   (diff-tool (tool-registry-find registry "self" "diff"))
                   (commit-tool (tool-registry-find registry "self" "commit"))
                   (broken (merge-pathnames
@@ -601,6 +602,17 @@
                      (search ":committed-setting"
                              (tool-result-content diff)))
                 "self.diff shows pending reconstructible image mutations"))
+             (let ((status
+                     (tool-execute status-tool context (json-object))))
+               (test-assert
+                (and (tool-result-success-p status)
+                     (search "pending     2 installed, 2 effective"
+                             (tool-result-content status))
+                     (search "AUTOLITH::*TEST-SELF-SETTING*"
+                             (tool-result-content status))
+                     (search "publishing  no"
+                             (tool-result-content status)))
+                "self.status summarizes live mutation and recovery state"))
              (test-assert (= (length (image-commit-pending-records configuration))
                              2)
                           "only successful uncommitted mutations are staged")

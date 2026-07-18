@@ -44,6 +44,7 @@
     (test-assert
      (and (search "started with --immutable" immutable-prompt)
           (search "self namespace is inspection-only" immutable-prompt)
+          (search "Use self.status" immutable-prompt)
           (not (search "self.redefine accepts" immutable-prompt)))
      "immutable prompts describe only their registered self capabilities")
     (test-assert

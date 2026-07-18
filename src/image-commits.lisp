@@ -534,6 +534,24 @@
             (push record records)))))
     (nreverse records)))
 
+(-> image-commit-effective-pending-records (configuration) list)
+(defun image-commit-effective-pending-records (configuration)
+  "Return the newest pending mutation for each semantic kind and target."
+  (let ((effective nil))
+    (dolist (record (image-commit-pending-records configuration))
+      (let ((properties (rest record)))
+        (setf effective
+              (remove-if
+               (lambda (candidate)
+                 (let ((candidate-properties (rest candidate)))
+                   (and (eq (getf candidate-properties :kind)
+                            (getf properties :kind))
+                        (string= (getf candidate-properties :target)
+                                 (getf properties :target)))))
+               effective))
+        (setf effective (nconc effective (list record)))))
+    effective))
+
 (-> image-commit--record->entry (list) list)
 (defun image-commit--record->entry (record)
   "Convert one installed mutation journal RECORD to a replay entry."

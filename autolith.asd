@@ -45,6 +45,7 @@
                              (:file "durable-mutations")
                              (:file "image-commits")
                              (:file "generations")
+                             (:file "self-status")
                              (:file "agent")
                              (:file "terminal")
                              (:file "terminal-style")

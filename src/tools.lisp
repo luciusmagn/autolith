@@ -109,6 +109,10 @@
   ()
   (:documentation "Install and privately commit one complete definition."))
 
+(defclass self-status-tool (self-tool)
+  ()
+  (:documentation "Summarize active-image mutation and recovery state."))
+
 (defclass self-diff-tool (self-tool)
   ()
   (:documentation "Show uncommitted reconstructible active-image mutations."))
@@ -817,6 +821,10 @@
                   "restart" (tool-restart-property)
                   "restart-value" (tool-restart-value-property))
                  '("definition")))
+      (register 'self-status-tool
+                "self" "status"
+                "Summarize running and selected private image state, effective pending mutations, and retained generations."
+                empty-schema)
       (register 'self-diff-tool
                 "self" "diff"
                 "Show successful self.redefine and self.set mutations not yet persisted by self.commit."
