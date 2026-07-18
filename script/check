@@ -5,5 +5,7 @@ set -euo pipefail
 launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
 source_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
 
+"$source_root/script/check-release"
+
 exec "$source_root/bin/autolith-runtime" \
   --script "$source_root/script/check.lisp" "$@"

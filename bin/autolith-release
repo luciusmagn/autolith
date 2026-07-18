@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+installer_url=${AUTOLITH_INSTALLER_URL:-https://sh.lambda-symbolics.com/autolith}
+update_interval=${AUTOLITH_UPDATE_INTERVAL_SECONDS:-86400}
+launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
+release_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
+release_record=$release_root/RELEASE
+source_root=$release_root/libexec/autolith
+runtime_root=$release_root/runtime
+runtime_source_root=$release_root/libexec/sbcl-source
+sbcl_command=$runtime_root/bin/sbcl
+sandbox_helper=$release_root/libexec/cl-exec-sandbox-helper
+fff_library=$release_root/lib/libfff_c.so
+home=${HOME:-}
+data_home=${XDG_DATA_HOME:-$home/.local/share}
+state_home=${XDG_STATE_HOME:-$home/.local/state}
+active_core=$data_home/autolith/active/autolith-active.core
+recovery_core=$data_home/autolith/recovery/autolith-recovery.core
+image_marker=$data_home/autolith/release-images
+
+fail()
+{
+  printf 'Autolith release failed: %s\n' "$1" >&2
+  exit 1
+}
+
+release_field()
+{
+  sed -n "s/^$1=//p" "$release_record"
+}
+
+semantic_version_valid_p()
+{
+  [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+release_tag_valid_p()
+{
+  [[ $1 =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+semantic_version_newer_p()
+{
+  local candidate=$1
+  local installed=$2
+  local candidate_major candidate_minor candidate_patch
+  local installed_major installed_minor installed_patch
+
+  IFS=. read -r candidate_major candidate_minor candidate_patch <<< "$candidate"
+  IFS=. read -r installed_major installed_minor installed_patch <<< "$installed"
+  ((10#$candidate_major > 10#$installed_major)) ||
+    ((10#$candidate_major == 10#$installed_major &&
+      10#$candidate_minor > 10#$installed_minor)) ||
+    ((10#$candidate_major == 10#$installed_major &&
+      10#$candidate_minor == 10#$installed_minor &&
+      10#$candidate_patch > 10#$installed_patch))
+}
+
+release_latest_tag()
+{
+  local effective_url
+  local tag
+
+  effective_url=$(curl --fail --silent --show-error --location \
+    --max-time 5 --output /dev/null --write-out '%{url_effective}' \
+    https://github.com/luciusmagn/autolith/releases/latest) || return 1
+  tag=${effective_url##*/}
+  release_tag_valid_p "$tag" || return 1
+  printf '%s\n' "$tag"
+}
+
+release_update()
+{
+  local requested_tag=${1:-}
+  local install_root
+  local updated_launcher
+
+  if [[ -z $requested_tag ]]; then
+    requested_tag=$(release_latest_tag) ||
+      fail "the latest release tag could not be discovered."
+  fi
+  release_tag_valid_p "$requested_tag" ||
+    fail "the requested release tag is malformed."
+  curl --fail --silent --show-error --location \
+    --proto '=https' --tlsv1.2 "$installer_url" |
+    sh -s -- --version "$requested_tag"
+
+  install_root=$(CDPATH= cd -- "$release_root/../.." && pwd)
+  updated_launcher=$install_root/current/bin/autolith
+  [[ -x $updated_launcher ]] ||
+    fail "the updater did not publish a runnable release."
+  export AUTOLITH_NO_UPDATE_CHECK=1
+  exec "$updated_launcher" "${remaining_arguments[@]}"
+}
+
+release_update_check()
+{
+  local check_root=$state_home/autolith/update
+  local checked_path=$check_root/checked-at
+  local offered_path=$check_root/offered-tag
+  local now checked_at=0 offered_tag= latest_tag latest_version answer
+
+  [[ ${AUTOLITH_NO_UPDATE_CHECK:-0} != 1 ]] || return 0
+  [[ -t 0 && -t 2 && -r /dev/tty && -w /dev/tty ]] || return 0
+  [[ $update_interval =~ ^[0-9]+$ ]] || return 0
+  now=$(date +%s)
+  if [[ -r $checked_path ]]; then
+    IFS= read -r checked_at < "$checked_path" || checked_at=0
+  fi
+  if [[ $checked_at =~ ^[0-9]+$ ]] &&
+     ((now - checked_at < update_interval)); then
+    return 0
+  fi
+
+  mkdir -p -- "$check_root"
+  chmod 700 -- "$check_root"
+  printf '%s\n' "$now" > "$checked_path"
+  latest_tag=$(release_latest_tag) || return 0
+  latest_version=${latest_tag#v}
+  semantic_version_newer_p "$latest_version" "$release_version" || return 0
+  if [[ -r $offered_path ]]; then
+    IFS= read -r offered_tag < "$offered_path" || offered_tag=
+  fi
+  [[ $offered_tag != "$latest_tag" ]] || return 0
+  printf '%s\n' "$latest_tag" > "$offered_path"
+
+  printf 'Autolith %s is available. Update now? [y/N] ' \
+    "$latest_version" > /dev/tty
+  IFS= read -r answer < /dev/tty || answer=
+  case $answer in
+    y|Y|yes|YES|Yes)
+      release_update "$latest_tag"
+      ;;
+  esac
+}
+
+release_images_usable_p()
+{
+  local active_manifest
+  local recovery_manifest
+
+  active_manifest=$(dirname -- "$active_core")/manifest.sexp
+  recovery_manifest=$(dirname -- "$recovery_core")/manifest.sexp
+  [[ -r $image_marker ]] || return 1
+  [[ $(<"$image_marker") == "$release_tag" ]] || return 1
+  [[ -f $active_core && -f $active_manifest ]] || return 1
+  [[ -f $recovery_core && -f $recovery_manifest ]] || return 1
+  grep -Eq '^\(:ACTIVE-IMAGE :VERSION 1([[:space:]]|$)' \
+    "$active_manifest" || return 1
+  grep -Eq '^\(:RECOVERY-IMAGE :VERSION 2([[:space:]]|$)' \
+    "$recovery_manifest" || return 1
+  "$sbcl_command" --noinform --core "$recovery_core" \
+    --end-runtime-options "$source_root" --probe >/dev/null 2>&1 || return 1
+  "$sbcl_command" --noinform --core "$active_core" \
+    --end-runtime-options "$source_root" \
+    --autolith-internal-active-image-probe >/dev/null 2>&1
+}
+
+release_images_build()
+{
+  local marker_directory
+  local temporary_marker
+
+  printf 'Building Autolith images for this machine. This happens once per release.\n' >&2
+  "$sbcl_command" --script "$source_root/script/build-recovery.lisp" \
+    "$recovery_core"
+  "$sbcl_command" --script "$source_root/script/build-active.lisp" \
+    "$active_core"
+  marker_directory=$(dirname -- "$image_marker")
+  mkdir -p -- "$marker_directory"
+  temporary_marker=$marker_directory/.release-images.$$
+  printf '%s\n' "$release_tag" > "$temporary_marker"
+  chmod 600 -- "$temporary_marker"
+  mv -f -- "$temporary_marker" "$image_marker"
+}
+
+[[ -n $home ]] || fail "HOME is not set."
+[[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] ||
+  fail "binary releases currently support Linux x86-64 only."
+[[ -r $release_record ]] || fail "RELEASE is missing."
+release_version=$(release_field version)
+release_tag=$(release_field tag)
+release_commit=$(release_field commit)
+semantic_version_valid_p "$release_version" || fail "RELEASE has an invalid version."
+[[ $release_tag == "v$release_version" ]] || fail "RELEASE has an inconsistent tag."
+[[ $release_commit =~ ^[0-9a-f]{40}$ ]] || fail "RELEASE has an invalid commit."
+[[ -x $sbcl_command ]] || fail "the bundled SBCL runtime is missing."
+[[ -f $runtime_source_root/version.lisp-expr ]] ||
+  fail "the bundled SBCL source is missing."
+[[ -f $source_root/autolith.asd && -f $source_root/.qlot/setup.lisp ]] ||
+  fail "the bundled Autolith source or dependencies are missing."
+[[ -x $sandbox_helper ]] || fail "the private sandbox helper is missing."
+[[ -f $fff_library ]] || fail "the private search library is missing."
+command -v git >/dev/null 2>&1 || fail "Git is required."
+command -v bwrap >/dev/null 2>&1 || fail "Bubblewrap is required."
+
+export AUTOLITH_SBCL=$sbcl_command
+export AUTOLITH_SBCL_SOURCE_ROOT=$runtime_source_root
+export AUTOLITH_FFF_LIBRARY=$fff_library
+export AUTOLITH_ACTIVE_CORE=$active_core
+export AUTOLITH_RECOVERY_CORE=$recovery_core
+export CL_EXEC_SANDBOX_BWRAP
+CL_EXEC_SANDBOX_BWRAP=$(command -v bwrap)
+export CL_EXEC_SANDBOX_HELPER=$sandbox_helper
+export GIT_OPTIONAL_LOCKS=0
+
+remaining_arguments=("$@")
+if [[ ${1:-} == --autolith-release-probe ]]; then
+  printf 'version=%s\ntag=%s\ncommit=%s\nsource=%s\nruntime=%s\n' \
+    "$release_version" "$release_tag" "$release_commit" \
+    "$source_root" "$sbcl_command"
+  exit 0
+fi
+if [[ ${1:-} == --update ]]; then
+  remaining_arguments=("${@:2}")
+  release_update
+fi
+
+release_update_check
+if ! release_images_usable_p; then
+  release_images_build
+fi
+
+exec "$source_root/bin/autolith" "$@"

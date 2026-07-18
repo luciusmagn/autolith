@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
+source_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
+temporary_root=$(mktemp -d)
+release_root=$temporary_root/autolith-v0.11.0
+
+cleanup()
+{
+  chmod -R u+w "$temporary_root" 2>/dev/null || true
+  rm -rf -- "$temporary_root"
+}
+
+trap cleanup EXIT HUP INT TERM
+
+bash -n "$source_root/bin/autolith-release"
+mkdir -p "$release_root/bin" \
+  "$release_root/libexec/autolith/.qlot" \
+  "$release_root/libexec/autolith" \
+  "$release_root/libexec/sbcl-source" \
+  "$release_root/runtime/bin" \
+  "$release_root/lib"
+cp "$source_root/bin/autolith-release" "$release_root/bin/autolith"
+touch "$release_root/libexec/autolith/.qlot/setup.lisp" \
+  "$release_root/libexec/autolith/autolith.asd" \
+  "$release_root/libexec/sbcl-source/version.lisp-expr" \
+  "$release_root/lib/libfff_c.so" \
+  "$release_root/runtime/bin/sbcl" \
+  "$release_root/libexec/cl-exec-sandbox-helper"
+chmod +x "$release_root/bin/autolith" \
+  "$release_root/runtime/bin/sbcl" \
+  "$release_root/libexec/cl-exec-sandbox-helper"
+printf '%s\n' \
+  'version=0.11.0' \
+  'tag=v0.11.0' \
+  'commit=0123456789abcdef0123456789abcdef01234567' > "$release_root/RELEASE"
+
+output=$(AUTOLITH_NO_UPDATE_CHECK=1 \
+  "$release_root/bin/autolith" --autolith-release-probe)
+grep -Fx 'version=0.11.0' <<< "$output" >/dev/null
+grep -Fx 'tag=v0.11.0' <<< "$output" >/dev/null
+grep -Fx 'commit=0123456789abcdef0123456789abcdef01234567' \
+  <<< "$output" >/dev/null
+grep -Fx "source=$release_root/libexec/autolith" <<< "$output" >/dev/null
+grep -Fx "runtime=$release_root/runtime/bin/sbcl" <<< "$output" >/dev/null
+
+printf 'version=0.11.0\ntag=v0.12.0\ncommit=0123456789abcdef0123456789abcdef01234567\n' \
+  > "$release_root/RELEASE"
+if AUTOLITH_NO_UPDATE_CHECK=1 \
+     "$release_root/bin/autolith" --autolith-release-probe >/dev/null 2>&1; then
+  printf 'The release launcher accepted an inconsistent release record.\n' >&2
+  exit 1
+fi
+
+printf 'Autolith release launcher checks passed.\n'
