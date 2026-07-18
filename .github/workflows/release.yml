@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  linux-x86-64:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate tag
+        shell: bash
+        run: |
+          version=$(sed -n 's/^  :version "\([0-9][0-9.]*\)"$/\1/p' autolith.asd)
+          test "v$version" = "$GITHUB_REF_NAME"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            bubblewrap build-essential cargo cmake libssl-dev libz-dev \
+            pkg-config sbcl
+
+      - name: Install Quicklisp
+        run: |
+          curl --fail --location --show-error --retry 3 \
+            --proto '=https' --tlsv1.2 \
+            --output /tmp/quicklisp.lisp \
+            https://beta.quicklisp.org/quicklisp.lisp
+          sbcl --noinform --non-interactive \
+            --load /tmp/quicklisp.lisp \
+            --eval '(quicklisp-quickstart:install)'
+
+      - name: Build and check Autolith
+        run: |
+          ./script/bootstrap
+          ./script/check
+
+      - name: Build release archive
+        run: ./script/build-release
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/autolith-"$GITHUB_REF_NAME"-x86_64-linux.tar.gz \
+            dist/autolith-"$GITHUB_REF_NAME"-x86_64-linux.tar.gz.sha256 \
+            --verify-tag \
+            --generate-notes \
+            --title "Autolith ${GITHUB_REF_NAME#v}"
