@@ -123,9 +123,10 @@
 (-> read-portable-form (pathname) t)
 (defun read-portable-form (pathname)
   "Read one portable form from PATHNAME with reader evaluation disabled."
-  (with-open-file (stream pathname :direction :input :external-format :utf-8)
-    (let ((*read-eval* nil))
-      (read stream t nil))))
+  (multiple-value-bind (form sole-form-p)
+      (snapshot-read pathname)
+    (declare (ignore sole-form-p))
+    form))
 
 (-> read-json-file-with-retry (pathname &key (:attempts integer)) json-object)
 (defun read-json-file-with-retry (pathname &key (attempts 3))
@@ -199,10 +200,6 @@
                                    (credentials oauth-credentials))
   "Atomically save CREDENTIALS to Autolith's private store with mode 0600."
   (let* ((pathname (credential-source-pathname source))
-         (directory (uiop:pathname-directory-pathname pathname))
-         (temporary (merge-pathnames
-                     (format nil ".auth.~D.tmp" (sb-posix:getpid))
-                     directory))
          (record (list :oauth
                        :version 1
                        :access-token (oauth-credentials-access-token credentials)
@@ -210,19 +207,7 @@
                        :id-token (oauth-credentials-id-token credentials)
                        :account-id (oauth-credentials-account-id credentials)
                        :expires-at (oauth-credentials-expires-at credentials))))
-    (ensure-directories-exist pathname)
-    (with-open-file (stream temporary
-                            :direction :output
-                            :if-exists :supersede
-                            :if-does-not-exist :create
-                            :external-format :utf-8)
-      (let ((*print-circle* t)
-            (*print-readably* t))
-        (prin1 record stream)
-        (terpri stream)
-        (finish-output stream)))
-    (sb-posix:chmod (namestring temporary) #o600)
-    (uiop:rename-file-overwriting-target temporary pathname)
+    (snapshot-write pathname record)
     credentials))
 
 (defmethod credential-source-save ((source codex-bootstrap-credential-source)

@@ -81,6 +81,11 @@
                 #:url-encode-params)
   (:import-from #:serapeum
                 #:->)
+  (:import-from #:sexp-store
+                #:log-append
+                #:log-read
+                #:snapshot-read
+                #:snapshot-write)
   (:import-from #:yason
                 #:false)
   (:export #:main

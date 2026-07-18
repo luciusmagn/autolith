@@ -181,95 +181,35 @@
 
 ;;;; -- Readable Log --
 
-(-> memory--write-forms (pathname list &key (:append boolean)) null)
-(defun memory--write-forms (pathname forms &key append)
-  "Write portable memory FORMS to PATHNAME, appending when requested."
-  (ensure-directories-exist pathname)
-  (with-open-file (stream pathname
-                          :direction :output
-                          :if-exists (if append :append :supersede)
-                          :if-does-not-exist :create
-                          :external-format :utf-8)
-    (let ((*print-circle* t)
-          (*print-readably* t)
-          (*print-pretty* t))
-      (dolist (form forms)
-        (prin1 form stream)
-        (terpri stream))
-      (finish-output stream)))
-  nil)
-
-(-> memory--write-forms-atomically
-    (pathname list &key (:require-absent boolean))
-    null)
-(defun memory--write-forms-atomically (pathname forms &key require-absent)
-  "Atomically replace PATHNAME with complete FORMS.
-
-When REQUIRE-ABSENT is true, refuse to replace a path that appeared while the
-temporary file was being written."
-  (let ((temporary
-          (make-pathname
-           :name (format nil ".memories.~A" (make-identifier))
-           :type "tmp"
-           :defaults pathname)))
-    (unwind-protect
-         (progn
-           (memory--write-forms temporary forms)
-           (when (and require-absent (probe-file pathname))
-             (error 'memory-error
-                    :message "The memory log appeared during publication."
-                    :pathname pathname
-                    :identifier nil))
-           (uiop:rename-file-overwriting-target temporary pathname))
-      (when (probe-file temporary)
-        (delete-file temporary))))
-  nil)
-
 (-> memory--append-record (configuration list) null)
 (defun memory--append-record (configuration record)
   "Append one complete memory RECORD, atomically creating the log if absent."
   (let ((pathname (configuration-memory-path configuration)))
-    (if (probe-file pathname)
-        (multiple-value-bind (forms incomplete-final-form-p)
-            (memory--read-forms pathname)
-          (if incomplete-final-form-p
-              (memory--write-forms-atomically
-               pathname
-               (nconc forms (list record)))
-              (memory--write-forms pathname (list record) :append t)))
-        (memory--write-forms-atomically
+    (handler-case
+        (log-append
          pathname
-         (list (list :memories :version +memory-format-version+)
-               record)
-         :require-absent t)))
+         record
+         :initial-forms
+         (list (list :memories :version +memory-format-version+)))
+      (error (cause)
+        (error 'memory-error
+               :message (format nil "Could not append persistent memory: ~A"
+                                cause)
+               :pathname pathname
+               :identifier nil))))
   nil)
 
 (-> memory--read-forms (pathname) (values list boolean))
 (defun memory--read-forms (pathname)
-  "Read complete forms from PATHNAME and identify an incomplete final form.
-
-The first value is the complete form list. The second value is true only when
-reading stopped inside a final form."
-  (if (not (probe-file pathname))
-      (values nil nil)
-      (with-open-file (stream pathname :direction :input :external-format :utf-8)
-        (let ((*read-eval* nil)
-              (end-marker (cons nil nil))
-              (records nil)
-              (incomplete-final-form-p nil))
-          (handler-case
-              (loop for record = (read stream nil end-marker)
-                    until (eq record end-marker)
-                    do (push record records))
-            (end-of-file ()
-              (setf incomplete-final-form-p t))
-            (reader-error (condition)
-              (error 'memory-error
-                     :message (format nil "Malformed persistent memory data: ~A"
-                                      condition)
-                     :pathname pathname
-                     :identifier nil)))
-          (values (nreverse records) incomplete-final-form-p)))))
+  "Read complete memory forms and report an incomplete final form."
+  (handler-case
+      (log-read pathname)
+    (error (cause)
+      (error 'memory-error
+             :message (format nil "Malformed persistent memory data: ~A"
+                              cause)
+             :pathname pathname
+             :identifier nil))))
 
 (-> memory--replay-unlocked (configuration) list)
 (defun memory--replay-unlocked (configuration)

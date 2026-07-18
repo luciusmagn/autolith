@@ -46,12 +46,13 @@ sequences, source editing, or subprocess protocols.
 Defines immutable runtime choices and paths. Configuration contains credential
 locations, never credential values.
 
-** =readable-state.lisp=
+** =sexp-store= and =readable-state.lisp=
 
-Owns strict one-form reading and atomic private S-expression snapshots shared by
-preferences, command permissions, deferred work, and workspace agendas. Readers
-disable =*read-eval*=, reject trailing forms, and never expose a half-published
-replacement.
+The pinned =sexp-store= dependency owns strict one-form reading, atomic private
+S-expression snapshots, append-only readable logs, and incomplete-tail repair.
+Readers disable =*read-eval*=, snapshot consumers reject trailing forms, and no
+consumer sees a half-published replacement. =readable-state.lisp= retains only
+the property-list key predicate used by Autolith record validators.
 
 ** =authentication.lisp=
 
@@ -73,7 +74,9 @@ publishes the header and that record together. Empty sessions therefore create
 no conversation file. It persists each user message before network work begins
 and treats completed provider output items as authoritative history. The header
 records the initial model and reasoning effort; later selection changes append
-configuration records so resuming restores the latest choices.
+configuration records so resuming restores the latest choices. Loading records
+whether a crash interrupted the final form, and the next append asks
+=sexp-store= to remove that tail atomically before publishing new history.
 
 ** =memories.lisp= and =memory-tools.lisp=
 

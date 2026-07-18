@@ -69,7 +69,7 @@
                                  expected)
                         "peeking reads the origin directory cheaply")
            (let ((legacy (conversation-pathname-for-id configuration "legacy")))
-             (conversation--write-form
+             (snapshot-write
               legacy
               (list :conversation :version 1 :id "legacy" :created-at 1))
              (test-assert (null (conversation-origin-directory
@@ -124,7 +124,7 @@
               (string= (conversation-reasoning-effort reloaded) "low")
               "conversation replay restores the latest effort"))
            (let ((legacy (conversation-pathname-for-id configuration "legacy-model")))
-             (conversation--write-form
+             (snapshot-write
               legacy
               (list :conversation :version 1 :id "legacy-model" :created-at 1))
              (let ((loaded (conversation-load-by-id configuration "legacy-model")))
@@ -249,6 +249,15 @@
              (test-assert
               (string= (json-get (first (conversation-input-items loaded)) "role")
                        "user")
-              "conversation reload preserves the first user message")))
+              "conversation reload preserves the first user message")
+             (conversation-append-user-message loaded "after interrupted write")
+             (multiple-value-bind (records incomplete-tail-p)
+                 (conversation--read-records (conversation-pathname loaded))
+               (test-assert
+                (and (not incomplete-tail-p)
+                     (= (length records) 5)
+                     (string= (getf (rest (first (last records))) :content)
+                              "after interrupted write"))
+                "the next conversation append atomically repairs its tail"))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

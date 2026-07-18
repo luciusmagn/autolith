@@ -122,7 +122,7 @@
         (return (make-instance 'later-state)))
       (handler-case
           (multiple-value-bind (form sole-form-p)
-              (readable-state-read-form pathname)
+              (snapshot-read pathname)
             (unless (and sole-form-p (later--form-p form))
               (error 'later-error
                      :message (format nil
@@ -181,7 +181,7 @@
   "Atomically persist deferred input STATE with private file permissions."
   (let ((pathname (configuration-later-path configuration)))
     (handler-case
-        (readable-state-write-form pathname (later--state-form state))
+        (snapshot-write pathname (later--state-form state))
       (error (cause)
         (error 'later-error
                :message (format nil "Could not persist deferred inputs at ~A: ~A"

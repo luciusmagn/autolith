@@ -284,24 +284,7 @@
 (-> active-image--write-manifest (pathname list) pathname)
 (defun active-image--write-manifest (pathname form)
   "Atomically replace PATHNAME with portable active-image manifest FORM."
-  (let ((temporary
-          (merge-pathnames
-           (format nil ".manifest.~D.tmp" (sb-posix:getpid))
-           (uiop:pathname-directory-pathname pathname))))
-    (with-open-file (stream temporary
-                            :direction :output
-                            :if-exists :supersede
-                            :if-does-not-exist :create
-                            :external-format :utf-8)
-      (let ((*print-circle* t)
-            (*print-pretty* nil)
-            (*print-readably* t))
-        (prin1 form stream)
-        (terpri stream)
-        (finish-output stream)))
-    (sb-posix:chmod (namestring temporary) #o444)
-    (uiop:rename-file-overwriting-target temporary pathname)
-    pathname))
+  (snapshot-write pathname form :mode #o444))
 
 (-> active-image-install (pathname pathname) pathname)
 (defun active-image-install (source-root core-pathname)

@@ -39,6 +39,9 @@ Realized net Autolith reduction: 965 source lines across the two search files.
 
 Natural home: =luciusmagn/sexp-store=.
 
+Status: implemented and integrated at
+=92a2ad458e92ecf4526ccb9bb387f89283c4dcc3=.
+
 The reusable storage layer should support atomic readable snapshots and
 append-only sequences of top-level S-expressions. Reads must bind
 =*read-eval*= to =nil=. Append logs must retain every complete preceding form,
@@ -48,13 +51,16 @@ next successful append.
 Autolith should retain record formats, domain validation, projections, and
 semantic repairs such as unmatched conversation tool-call handling.
 
-Current source boundary:
+The remaining Autolith storage policy is:
 
-- =src/readable-state.lisp=
-- Duplicate atomic and append-log mechanics in =src/conversation.lisp=
-- Duplicate atomic and append-log mechanics in =src/memories.lisp=
+- Property-list record validation in =src/readable-state.lisp=.
+- Conversation formats, sequencing, and provider projection in
+  =src/conversation.lisp=.
+- Memory formats, replay, selection, and validation in =src/memories.lisp=.
 
-Expected net Autolith reduction: 180 to 300 source lines.
+The dependency also publishes credential, generation, private image, worker
+image, and preloaded active-image manifests. Realized net Autolith reduction:
+220 source lines.
 
 ** =sbcl-workers=
 

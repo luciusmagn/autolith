@@ -139,14 +139,7 @@
 (-> image-commit--write-form-atomically (pathname list) pathname)
 (defun image-commit--write-form-atomically (pathname form)
   "Atomically write portable FORM to PATHNAME."
-  (image-commit--write-atomically
-   pathname
-   (lambda (stream)
-     (let ((*print-circle* t)
-           (*print-readably* t)
-           (*print-pretty* t))
-       (prin1 form stream)
-       (terpri stream)))))
+  (snapshot-write pathname form :mode #o444))
 
 (-> image-commit--write-string-atomically (pathname string) pathname)
 (defun image-commit--write-string-atomically (pathname content)

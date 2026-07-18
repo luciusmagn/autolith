@@ -85,7 +85,7 @@
         (return (make-instance 'permission-state)))
       (handler-case
           (multiple-value-bind (form sole-form-p)
-              (readable-state-read-form pathname)
+              (snapshot-read pathname)
             (unless (and sole-form-p (permissions--form-p form))
               (error 'permissions-error
                      :message (format nil
@@ -133,8 +133,7 @@
   "Atomically persist command permission STATE with private file permissions."
   (let ((pathname (configuration-permissions-path configuration)))
     (handler-case
-        (readable-state-write-form pathname
-                                   (permissions--state-form state))
+        (snapshot-write pathname (permissions--state-form state))
       (error (cause)
         (error 'permissions-error
                :message (format nil "Could not persist command permissions at ~A: ~A"

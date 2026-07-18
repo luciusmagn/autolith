@@ -79,7 +79,7 @@
         (return (make-instance 'preference-state)))
       (handler-case
           (multiple-value-bind (form sole-form-p)
-              (readable-state-read-form pathname)
+              (snapshot-read pathname)
             (unless (and sole-form-p (preferences--form-p form))
               (error 'preferences-error
                      :message (format nil
@@ -138,7 +138,7 @@
   "Atomically write PREFERENCES under CONFIGURATION's private state root."
   (let ((pathname (configuration-preferences-path configuration)))
     (handler-case
-        (readable-state-write-form
+        (snapshot-write
          pathname
          (list :preferences
                :version +preferences-version+

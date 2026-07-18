@@ -18,6 +18,12 @@
     :accessor conversation-persisted-p
     :type boolean
     :documentation "True after the header and first durable record are published.")
+   (incomplete-tail-p
+    :initarg :incomplete-tail-p
+    :initform nil
+    :accessor conversation-incomplete-tail-p
+    :type boolean
+    :documentation "Whether the next append must repair an interrupted final form.")
    (created-at
     :initarg :created-at
     :reader conversation-created-at
@@ -74,54 +80,21 @@
         :model (conversation-model conversation)
         :reasoning-effort (conversation-reasoning-effort conversation)))
 
-(-> conversation--write-forms (pathname list &key (:append boolean)) null)
-(defun conversation--write-forms (pathname forms &key append)
-  "Write portable FORMS to PATHNAME, appending when APPEND is true."
-  (ensure-directories-exist pathname)
-  (with-open-file (stream pathname
-                          :direction :output
-                          :if-exists (if append :append :supersede)
-                          :if-does-not-exist :create
-                          :external-format :utf-8)
-    (let ((*print-circle* t)
-          (*print-readably* t)
-          (*print-pretty* t))
-      (dolist (form forms)
-        (prin1 form stream)
-        (terpri stream))
-      (finish-output stream)))
-  nil)
-
-(-> conversation--write-form (pathname list &key (:append boolean)) null)
-(defun conversation--write-form (pathname form &key append)
-  "Write portable FORM to PATHNAME, appending when APPEND is true."
-  (conversation--write-forms pathname (list form) :append append))
-
 (-> conversation--write-initial-record (conversation list) null)
 (defun conversation--write-initial-record (conversation record)
   "Atomically publish CONVERSATION's header and first durable RECORD."
-  (let* ((pathname (conversation-pathname conversation))
-         (temporary
-           (make-pathname
-            :name (format nil ".~A.~A"
-                          (conversation-identifier conversation)
-                          (make-identifier))
-            :type "tmp"
-            :defaults pathname)))
+  (let ((pathname (conversation-pathname conversation)))
     (when (probe-file pathname)
       (error 'conversation-invariant-error
              :message "A new conversation pathname became occupied."
              :pathname pathname
              :sequence (conversation-next-sequence conversation)))
-    (unwind-protect
-         (progn
-           (conversation--write-forms
-            temporary
-            (list (conversation--header-record conversation) record))
-           (uiop:rename-file-overwriting-target temporary pathname)
-           (setf (conversation-persisted-p conversation) t))
-      (when (probe-file temporary)
-        (delete-file temporary))))
+    (log-append pathname
+                record
+                :initial-forms
+                (list (conversation--header-record conversation)))
+    (setf (conversation-persisted-p conversation) t
+          (conversation-incomplete-tail-p conversation) nil))
   nil)
 
 (-> conversation-create (configuration &key (:identifier (option string))) conversation)
@@ -144,6 +117,7 @@
                    :identifier conversation-id
                    :pathname pathname
                    :persisted-p nil
+                   :incomplete-tail-p nil
                    :created-at created-at
                    :origin-directory origin-directory
                    :model (configuration-model configuration)
@@ -176,10 +150,11 @@
                        :message "The persisted conversation file is missing."
                        :pathname (conversation-pathname conversation)
                        :sequence sequence))
-              (conversation--write-form
+              (log-append
                (conversation-pathname conversation)
                sequenced
-               :append t))
+               :repair-tail-p (conversation-incomplete-tail-p conversation))
+              (setf (conversation-incomplete-tail-p conversation) nil))
             (conversation--write-initial-record conversation sequenced))
       (error (condition)
         (error 'conversation-invariant-error
@@ -490,28 +465,17 @@ it described the uncompacted context."
 
 ;;;; -- Conversation Loading --
 
-(-> conversation--read-records (pathname) list)
+(-> conversation--read-records (pathname) (values list boolean))
 (defun conversation--read-records (pathname)
-  "Read complete forms from PATHNAME, returning NIL when it does not yet exist."
-  (if (not (probe-file pathname))
-      nil
-      (with-open-file (stream pathname :direction :input :external-format :utf-8)
-        (let ((*read-eval* nil)
-              (end-marker (cons nil nil))
-              (records nil))
-          (handler-case
-              (loop for record = (read stream nil end-marker)
-                    until (eq record end-marker)
-                    do (push record records))
-            (end-of-file ()
-              nil)
-            (reader-error (condition)
-              (error 'conversation-invariant-error
-                     :message (format nil "Malformed conversation record: ~A"
-                                      condition)
-                     :pathname pathname
-                     :sequence nil)))
-          (nreverse records)))))
+  "Read complete forms and report whether PATHNAME has an incomplete tail."
+  (handler-case
+      (log-read pathname)
+    (error (condition)
+      (error 'conversation-invariant-error
+             :message (format nil "Malformed conversation record: ~A"
+                              condition)
+             :pathname pathname
+             :sequence nil))))
 
 (-> conversation--apply-record (conversation list) null)
 (defun conversation--apply-record (conversation record)
@@ -580,8 +544,9 @@ conversation files."
 (-> conversation-load (pathname) conversation)
 (defun conversation-load (pathname)
   "Load a conversation from PATHNAME and rebuild its provider input projection."
-  (let* ((records (conversation--read-records pathname))
-         (header (first records)))
+  (multiple-value-bind (records incomplete-tail-p)
+      (conversation--read-records pathname)
+    (let ((header (first records)))
     (unless (and (listp header)
                  (eq (first header) :conversation)
                  (= (or (getf (rest header) :version) 0) 1)
@@ -598,6 +563,7 @@ conversation files."
                             :identifier (getf (rest header) :id)
                             :pathname pathname
                             :persisted-p t
+                            :incomplete-tail-p incomplete-tail-p
                             :created-at (getf (rest header) :created-at)
                             :origin-directory (and (stringp directory)
                                                    directory)
@@ -616,7 +582,7 @@ conversation files."
       (dolist (record (rest records))
         (conversation--apply-record conversation record))
       (conversation--repair-incomplete-tool-calls conversation)
-      conversation)))
+      conversation))))
 
 (-> conversation-pathname-for-id (configuration string) pathname)
 (defun conversation-pathname-for-id (configuration identifier)

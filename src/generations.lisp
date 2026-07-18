@@ -245,24 +245,7 @@
 (-> generation--write-form-atomically (pathname list) pathname)
 (defun generation--write-form-atomically (pathname form)
   "Atomically write portable FORM to PATHNAME."
-  (let ((temporary (merge-pathnames
-                    (format nil ".~A.~D.tmp"
-                            (pathname-name pathname)
-                            (sb-posix:getpid))
-                    (uiop:pathname-directory-pathname pathname))))
-    (ensure-directories-exist pathname)
-    (with-open-file (stream temporary
-                            :direction :output
-                            :if-exists :supersede
-                            :if-does-not-exist :create
-                            :external-format :utf-8)
-      (let ((*print-circle* t)
-            (*print-readably* t))
-        (prin1 form stream)
-        (terpri stream)
-        (finish-output stream)))
-    (uiop:rename-file-overwriting-target temporary pathname)
-    pathname))
+  (snapshot-write pathname form))
 
 (-> generation--validate-core-probe
     (generation generation-core-probe-runner)

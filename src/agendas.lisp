@@ -167,7 +167,7 @@
         (return (make-instance 'agenda-state)))
       (handler-case
           (multiple-value-bind (form sole-form-p)
-              (readable-state-read-form pathname)
+              (snapshot-read pathname)
             (unless (and sole-form-p (agenda--form-p form))
               (error 'agenda-error
                      :message (format nil
@@ -233,7 +233,7 @@
   "Atomically persist workspace agenda STATE with private permissions."
   (let ((pathname (configuration-agenda-path configuration)))
     (handler-case
-        (readable-state-write-form pathname (agenda--state-form state))
+        (snapshot-write pathname (agenda--state-form state))
       (error (cause)
         (error 'agenda-error
                :message (format nil "Could not persist agendas at ~A: ~A"

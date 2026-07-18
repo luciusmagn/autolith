@@ -148,32 +148,7 @@
 (-> lisp-image--write-manifest (pathname list) pathname)
 (defun lisp-image--write-manifest (pathname form)
   "Atomically publish immutable worker-image manifest FORM at PATHNAME."
-  (let ((temporary
-          (make-pathname
-           :name (format nil ".~A.~A"
-                         (pathname-name pathname)
-                         (make-identifier))
-           :type "tmp"
-           :defaults pathname)))
-    (ensure-directories-exist pathname)
-    (unwind-protect
-         (progn
-           (with-open-file (stream temporary
-                                   :direction :output
-                                   :if-exists :error
-                                   :if-does-not-exist :create
-                                   :external-format :utf-8)
-             (let ((*print-circle* t)
-                   (*print-readably* t)
-                   (*print-pretty* t))
-               (prin1 form stream)
-               (terpri stream)
-               (finish-output stream)))
-           (uiop:rename-file-overwriting-target temporary pathname)
-           (sb-posix:chmod (namestring pathname) #o444))
-      (when (probe-file temporary)
-        (delete-file temporary))))
-  pathname)
+  (snapshot-write pathname form :mode #o444))
 
 (-> lisp-image-publish-manifest
     (configuration

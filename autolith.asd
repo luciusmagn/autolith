@@ -14,6 +14,7 @@
                #:quri
                #:serapeum
                #:sb-posix
+               #:sexp-store
                #:yason)
   :components ((:module "src"
                 :serial t
