@@ -30,45 +30,17 @@ jobs:
       - name: Build the pinned SBCL runtime
         shell: bash
         run: |
-          bootstrap_version=2.4.0
-          bootstrap_sha256=50afb9765d6a2f937f609ac33ebe553326347aef23eddd49c46d76456a5b3095
-          bootstrap_archive="/tmp/sbcl-$bootstrap_version-x86-64-linux-binary.tar.bz2"
-          bootstrap_source="/tmp/sbcl-$bootstrap_version-x86-64-linux"
-          bootstrap_installation="/tmp/sbcl-bootstrap-$bootstrap_version"
           runtime_version=$(tr -d '[:space:]' < sbcl.version)
           runtime_root="$HOME/.local/share/autolith/runtimes/$runtime_version"
           runtime_installation="$runtime_root/installation"
-          archive="/tmp/sbcl-$runtime_version-source.tar.bz2"
-          source="/tmp/sbcl-$runtime_version"
-          curl --fail --location --show-error --retry 3 \
-            --proto '=https' --tlsv1.2 \
-            --output "$bootstrap_archive" \
-            "https://downloads.sourceforge.net/project/sbcl/sbcl/$bootstrap_version/sbcl-$bootstrap_version-x86-64-linux-binary.tar.bz2"
-          printf '%s  %s\n' "$bootstrap_sha256" "$bootstrap_archive" |
-            sha256sum --check --status
-          tar -xjf "$bootstrap_archive" -C /tmp
-          cd "$bootstrap_source"
-          env -u SBCL_HOME sh install.sh --prefix="$bootstrap_installation"
-          test "$(env -u SBCL_HOME "$bootstrap_installation/bin/sbcl" \
-            --noinform --no-userinit --no-sysinit --non-interactive \
-            --eval '(write-string (lisp-implementation-version))')" = \
-            "$bootstrap_version"
-          curl --fail --location --show-error --retry 3 \
-            --proto '=https' --tlsv1.2 \
-            --output "$archive" \
-            "https://downloads.sourceforge.net/project/sbcl/sbcl/$runtime_version/sbcl-$runtime_version-source.tar.bz2"
-          printf '%s  %s\n' "$(tr -d '[:space:]' < sbcl-source.sha256)" "$archive" |
-            sha256sum --check --status
-          tar -xjf "$archive" -C /tmp
-          cd "$source"
-          sh make.sh \
-            --prefix="$runtime_installation" \
-            --xc-host="$bootstrap_installation/bin/sbcl --no-userinit --no-sysinit"
-          env -u SBCL_HOME sh install.sh --prefix="$runtime_installation"
-          test "$("$runtime_installation/bin/sbcl" \
-            --noinform --no-userinit --no-sysinit --non-interactive \
-            --eval '(write-string (lisp-implementation-version))')" = \
-            "$runtime_version"
+          mkdir -p "$runtime_installation"
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace:ro" \
+            --volume "$runtime_installation:/runtime" \
+            --workdir /workspace \
+            ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982 \
+            bash -c 'apt-get update && apt-get install --yes build-essential ca-certificates curl libz-dev libzstd-dev && ./script/build-release-runtime /runtime'
+          sudo chown -R "$(id -u):$(id -g)" "$runtime_root"
           printf 'AUTOLITH_SBCL=%s/bin/sbcl\n' "$runtime_installation" >> "$GITHUB_ENV"
 
       - name: Install Quicklisp

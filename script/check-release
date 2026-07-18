@@ -17,6 +17,7 @@ trap cleanup EXIT HUP INT TERM
 
 bash -n "$source_root/bin/autolith-release"
 bash -n "$source_root/script/build-release"
+bash -n "$source_root/script/build-release-runtime"
 sh -n "$source_root/script/install"
 mkdir -p "$release_root/bin" \
   "$release_root/libexec/autolith/.qlot" \
