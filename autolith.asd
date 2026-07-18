@@ -64,9 +64,19 @@
                              (:file "active-image"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:autolith/tests))))
 
+(asdf:defsystem #:autolith/release-server
+  :description "The Autolith installer and binary release service."
+  :depends-on (#:autolith
+               #:sb-bsd-sockets)
+  :serial t
+  :components ((:module "server"
+                :serial t
+                :components ((:file "release-server")))))
+
 (asdf:defsystem #:autolith/tests
   :description "Tests for Autolith."
-  :depends-on (#:autolith)
+  :depends-on (#:autolith
+               #:autolith/release-server)
   :serial t
   :components ((:module "tests"
                 :serial t
@@ -91,6 +101,7 @@
                              (:file "terminal-tests")
                              (:file "layout-tests")
                              (:file "markdown-tests")
+                             (:file "release-server-tests")
                              (:file "application-tests")
                              (:file "tests"))))
   :perform (asdf:test-op (operation component)

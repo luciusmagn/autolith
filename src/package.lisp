@@ -85,6 +85,7 @@
   (:import-from #:yason
                 #:false)
   (:export #:main
+           #:release-server-main
            #:run-tests
            #:search-worker-main
            #:worker-main))

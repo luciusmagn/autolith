@@ -109,6 +109,7 @@
     (run-terminal-tests)
     (run-layout-tests)
     (run-markdown-tests)
+    (test-release-server)
     (run-application-tests))
   (format t "~&~:D Autolith tests passed.~%" *test-count*)
   t)

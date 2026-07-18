@@ -1,0 +1,12 @@
+(require :asdf)
+
+(let* ((script-path (truename *load-truename*))
+       (server-root (uiop:pathname-directory-pathname script-path))
+       (source-root (uiop:pathname-parent-directory-pathname server-root))
+       (project-setup (merge-pathnames ".qlot/setup.lisp" source-root)))
+  (unless (probe-file project-setup)
+    (error "The release server needs locked dependencies; run ./script/bootstrap."))
+  (load project-setup)
+  (asdf:load-asd (merge-pathnames "autolith.asd" source-root))
+  (asdf:load-system :autolith/release-server)
+  (uiop:symbol-call '#:autolith '#:release-server-main))
