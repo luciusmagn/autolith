@@ -5,6 +5,9 @@
 (defvar *exploratory-definitions* (make-hash-table :test #'equal)
   "Complete source forms installed exploratorily in the active image.")
 
+(defvar *exploratory-undo-actions* (make-hash-table :test #'equal)
+  "Exact in-memory undo actions for this process's pending mutations.")
+
 (-> self-resolve-package ((option string)) package)
 (defun self-resolve-package (name)
   "Return existing package NAME, defaulting to the AUTOLITH package."
@@ -351,23 +354,193 @@ protocol."
                    :readably t
                    :case :downcase))
 
-(-> self-previous-definition (list) t)
-(defun self-previous-definition (definition)
-  "Return the best recoverable active representation preceding DEFINITION."
-  (let ((name (second definition)))
-    (or (gethash (definition-key definition) *exploratory-definitions*)
-        (when (and (member (first definition)
-                           '(defun defgeneric defmethod defmacro define-compiler-macro)
-                           :test #'eq)
-                   (fboundp name))
-          (multiple-value-bind (lambda-expression closure-p lexical-name)
-              (function-lambda-expression (fdefinition name))
-            (declare (ignore closure-p lexical-name))
-            (and lambda-expression
-                 (write-to-string lambda-expression
-                                  :circle t
-                                  :level 10
-                                  :length 100)))))))
+(-> self-previous-definition (configuration list) (option string))
+(defun self-previous-definition (configuration definition)
+  "Return complete reconstructible source preceding DEFINITION, when known."
+  (let ((target (definition-key definition)))
+    (or (gethash target *exploratory-definitions*)
+        (and (fboundp 'image-commit-definition-source)
+             (funcall (symbol-function 'image-commit-definition-source)
+                      configuration
+                      target))
+        (and (fboundp 'overlay-read)
+             (funcall (symbol-function 'overlay-read)
+                      configuration
+                      target))
+        (and (fboundp 'durable-mutation--fallback-source)
+             (funcall (symbol-function 'durable-mutation--fallback-source)
+                      configuration
+                      definition)))))
+
+(-> self--restore-function-binding (t boolean t) null)
+(defun self--restore-function-binding (name bound-p binding)
+  "Restore NAME's exact function BINDING or its prior unbound state."
+  (if bound-p
+      (setf (fdefinition name) binding)
+      (when (fboundp name)
+        (fmakunbound name)))
+  nil)
+
+(-> self--restore-value-binding (symbol boolean t) null)
+(defun self--restore-value-binding (symbol bound-p value)
+  "Restore SYMBOL's exact VALUE or its prior unbound state."
+  (if bound-p
+      (setf (symbol-value symbol) value)
+      (when (boundp symbol)
+        (makunbound symbol)))
+  nil)
+
+(-> self--restore-sbcl-info (symbol keyword keyword list) null)
+(defun self--restore-sbcl-info (name category kind snapshot)
+  "Restore one SBCL global database entry for NAME from SNAPSHOT."
+  (if (second snapshot)
+      (setf (sb-int:info category kind name) (first snapshot))
+      (sb-int:clear-info category kind name))
+  nil)
+
+(-> self--package-function-snapshot (package) hash-table)
+(defun self--package-function-snapshot (package)
+  "Capture exact function bindings currently interned in PACKAGE."
+  (let ((snapshot (make-hash-table :test #'eq)))
+    (do-symbols (symbol package)
+      (when (eq (symbol-package symbol) package)
+        (setf (gethash symbol snapshot)
+              (list (not (null (fboundp symbol)))
+                    (and (fboundp symbol) (fdefinition symbol))))))
+    snapshot))
+
+(-> self--restore-package-functions (package hash-table) null)
+(defun self--restore-package-functions (package snapshot)
+  "Restore PACKAGE's function bindings from SNAPSHOT."
+  (do-symbols (symbol package)
+    (when (eq (symbol-package symbol) package)
+      (multiple-value-bind (state present-p)
+          (gethash symbol snapshot)
+        (if present-p
+            (self--restore-function-binding symbol
+                                            (first state)
+                                            (second state))
+            (when (fboundp symbol)
+              (fmakunbound symbol))))))
+  nil)
+
+(-> self--method-components (list package) (values t list list))
+(defun self--method-components (definition package)
+  "Return DEFINITION's generic name, qualifiers, and method specializers."
+  (let* ((tail (cddr definition))
+         (lambda-position (position-if #'listp tail))
+         (qualifiers (subseq tail 0 lambda-position))
+         (lambda-list (nth lambda-position tail)))
+    (values
+     (second definition)
+     qualifiers
+     (loop for parameter in lambda-list
+           until (member parameter lambda-list-keywords :test #'eq)
+           for specializer = (and (consp parameter) (second parameter))
+           collect
+           (cond
+             ((null specializer)
+              (find-class 't))
+             ((and (consp specializer) (eq (first specializer) 'eql))
+              (closer-mop:intern-eql-specializer
+               (let ((*package* package))
+                 (eval (second specializer)))))
+             (t
+              (find-class
+               (if (symbolp specializer)
+                   specializer
+                   (let ((*package* package))
+                     (eval specializer))))))))))
+
+(-> self--find-definition-method (list package) (values t t))
+(defun self--find-definition-method (definition package)
+  "Return DEFINITION's generic function and current method, when present."
+  (multiple-value-bind (name qualifiers specializers)
+      (self--method-components definition package)
+    (let ((generic-function (and (fboundp name) (fdefinition name))))
+      (values generic-function
+              (and (typep generic-function 'generic-function)
+                   (find-method generic-function
+                                qualifiers
+                                specializers
+                                nil))))))
+
+(-> self--definition-undo-action (list (option string) package) function)
+(defun self--definition-undo-action (definition previous-source package)
+  "Return an exact undo action for installing DEFINITION in PACKAGE."
+  (let ((operator (first definition))
+        (name (second definition)))
+    (case operator
+      ((defun defgeneric defmacro)
+       (let ((bound-p (not (null (fboundp name))))
+             (binding (and (fboundp name) (fdefinition name))))
+         (lambda ()
+           (self--restore-function-binding name bound-p binding))))
+      (define-compiler-macro
+       (let ((binding (compiler-macro-function name)))
+         (lambda ()
+           (setf (compiler-macro-function name) binding))))
+      (defmethod
+       (multiple-value-bind (generic-function method)
+           (self--find-definition-method definition package)
+         (let ((generic-function-existed-p
+                 (typep generic-function 'generic-function)))
+           (lambda ()
+             (multiple-value-bind (current-generic-function current-method)
+                 (self--find-definition-method definition package)
+               (when current-method
+                 (remove-method current-generic-function current-method))
+               (when method
+                 (add-method current-generic-function method))
+               (unless generic-function-existed-p
+                 (when (fboundp name)
+                   (fmakunbound name))))))))
+      ((defvar defparameter define-constant)
+       (let ((bound-p (boundp name))
+             (value (and (boundp name) (symbol-value name)))
+             (kind (multiple-value-list
+                    (sb-int:info :variable :kind name))))
+         (lambda ()
+           (self--restore-value-binding name bound-p value)
+           (self--restore-sbcl-info name :variable :kind kind))))
+      (deftype
+       (let ((expander (multiple-value-list
+                        (sb-int:info :type :expander name)))
+             (source-location (multiple-value-list
+                               (sb-int:info :type :source-location name))))
+         (lambda ()
+           (self--restore-sbcl-info name :type :expander expander)
+           (self--restore-sbcl-info name
+                                    :type
+                                    :source-location
+                                    source-location))))
+      ((defclass defstruct define-condition)
+       (let ((existing-class (find-class name nil))
+             (function-snapshot
+               (self--package-function-snapshot package)))
+         (when (and existing-class (null previous-source))
+           (error 'source-mutation-error
+                  :message
+                  "The existing class has no recoverable source, so this exploratory redefinition cannot be made safely reversible."
+                  :tool-name "self.redefine"
+                  :pathname nil))
+         (lambda ()
+           (if previous-source
+               (self--install-definition
+                (self-read-form previous-source
+                                :read-eval nil
+                                :package package)
+                previous-source
+                :package package)
+               (progn
+                 (when (find-class name nil)
+                   (setf (find-class name) nil))
+                 (self--restore-package-functions package function-snapshot))))))
+      (otherwise
+       (error 'source-mutation-error
+              :message "The definition kind has no reversible installation strategy."
+              :tool-name "self.redefine"
+              :pathname nil)))))
 
 (-> self--install-definition (list string &key (:package package)) t)
 (defun self--install-definition
@@ -445,7 +618,10 @@ protocol."
                :pathname nil))
       (let ((identifier (make-identifier))
             (key (definition-key definition))
-            (previous (self-previous-definition definition)))
+            (previous (self-previous-definition configuration definition))
+            (undo-action nil))
+        (setf undo-action
+              (self--definition-undo-action definition previous package))
         (mutation-journal-append
          configuration
          (list :mutation
@@ -472,6 +648,8 @@ protocol."
                      :previous previous
                      :proposed source
                      :result :installed))
+              (setf (gethash identifier *exploratory-undo-actions*)
+                    undo-action)
               result)
           (error (condition)
             (mutation-journal-append
@@ -519,7 +697,9 @@ protocol."
            (value-source (tool-argument arguments "value" :required t))
            (configuration (tool-context-configuration context))
            (previous (and (boundp symbol)
-                          (worker-render-value (symbol-value symbol)))))
+                          (worker-render-value (symbol-value symbol))))
+           (previous-bound-p (boundp symbol))
+           (previous-value (and (boundp symbol) (symbol-value symbol))))
       (mutation-journal-append
        configuration
        (list :mutation
@@ -549,6 +729,11 @@ protocol."
                    :previous previous
                    :proposed value-source
                    :result :installed))
+            (setf (gethash identifier *exploratory-undo-actions*)
+                  (lambda ()
+                    (self--restore-value-binding symbol
+                                                 previous-bound-p
+                                                 previous-value)))
             (tool-success
              (format nil "~S is now ~A." symbol (worker-render-value value))))
         (error (condition)

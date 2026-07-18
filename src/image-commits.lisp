@@ -509,6 +509,17 @@
            (non-empty-string-p (getf (rest record) :package)))
        t))
 
+(-> image-commit--discard-record-p (t string) boolean)
+(defun image-commit--discard-record-p (record lineage)
+  "Return true when RECORD completes a discard in LINEAGE."
+  (and (listp record)
+       (eq (first record) :mutation)
+       (eq (getf (rest record) :kind) :discard)
+       (eq (getf (rest record) :result) :discarded)
+       (non-empty-string-p (getf (rest record) :id))
+       (string= (or (getf (rest record) :lineage) "") lineage)
+       t))
+
 (-> image-commit-pending-records (configuration) list)
 (defun image-commit-pending-records (configuration)
   "Return successful uncommitted mutations from the running image lineage."
@@ -522,17 +533,24 @@
   (let* ((current (image-commit-current configuration))
          (consumed (and current
                         (image-commit-consumed-mutation-identifiers current)))
-         (seen (make-hash-table :test #'equal))
-         (records nil))
+         (records-by-identifier (make-hash-table :test #'equal))
+         (order nil))
     (dolist (record (mutation-journal-read-records configuration))
-      (when (image-commit--record-p record
-                                    *active-image-lineage-identifier*)
-        (let ((identifier (getf (rest record) :id)))
-          (unless (or (member identifier consumed :test #'string=)
-                      (gethash identifier seen))
-            (setf (gethash identifier seen) t)
-            (push record records)))))
-    (nreverse records)))
+      (cond
+        ((image-commit--record-p record *active-image-lineage-identifier*)
+         (let ((identifier (getf (rest record) :id)))
+           (unless (or (member identifier consumed :test #'string=)
+                       (gethash identifier records-by-identifier))
+             (setf (gethash identifier records-by-identifier) record)
+             (setf order (nconc order (list identifier))))))
+        ((image-commit--discard-record-p
+          record
+          *active-image-lineage-identifier*)
+         (remhash (getf (rest record) :id) records-by-identifier))))
+    (loop for identifier in order
+          for record = (gethash identifier records-by-identifier)
+          when record
+            collect record)))
 
 (-> image-commit-effective-pending-records (configuration) list)
 (defun image-commit-effective-pending-records (configuration)
@@ -709,6 +727,9 @@
                    :history-commit history-commit))
             (setf *active-image-commit-identifier* identifier
                   *active-image-history-commit* history-commit)
+            (dolist (mutation-record mutation-records)
+              (remhash (getf (rest mutation-record) :id)
+                       *exploratory-undo-actions*))
             (image-commit-load configuration identifier
                                :history-commit history-commit)))
       (image-commit-error (condition)
@@ -737,6 +758,7 @@
 (-> image-state-load (configuration) list)
 (defun image-state-load (configuration)
   "Load normal startup mutation state and begin a fresh journal lineage."
+  (clrhash *exploratory-undo-actions*)
   (multiple-value-bind (identifier history-commit)
       (image-commit--pointer-state configuration)
     (let ((failures nil))
@@ -760,6 +782,7 @@
 (-> image-state-reconnect () null)
 (defun image-state-reconnect ()
   "Preserve the checkpointed commit while beginning a new branch lineage."
+  (clrhash *exploratory-undo-actions*)
   (setf *active-image-lineage-identifier* (make-identifier)
         *image-state-initialized-p* t)
   nil)
