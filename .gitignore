@@ -3,5 +3,6 @@
 .cache/
 .qlot/
 .bundle-libs/
+dist/
 var/
 tools/paren-check

@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
+source_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
+output_directory=${1:-$source_root/dist}
+runtime_version=$(tr -d '[:space:]' < "$source_root/sbcl.version")
+home=${HOME:-}
+data_home=${XDG_DATA_HOME:-$home/.local/share}
+runtime_installation=${AUTOLITH_RELEASE_RUNTIME:-$data_home/autolith/runtimes/$runtime_version/installation}
+runtime_source=${AUTOLITH_RELEASE_SBCL_SOURCE:-$data_home/autolith/runtimes/$runtime_version/source}
+fff_library=${AUTOLITH_RELEASE_FFF_LIBRARY:-$data_home/autolith/native/fff/libfff_c.so}
+temporary_root=
+
+fail()
+{
+  printf 'Autolith release build failed: %s\n' "$1" >&2
+  exit 1
+}
+
+cleanup()
+{
+  if [[ -n $temporary_root && -d $temporary_root ]]; then
+    chmod -R u+w "$temporary_root" 2>/dev/null || true
+    rm -rf -- "$temporary_root"
+  fi
+}
+
+materialize_dependency_links()
+{
+  local dependency_root=$1
+  local link
+  local target
+
+  while IFS= read -r -d '' link; do
+    if [[ -e $link ]]; then
+      target=$(readlink -f -- "$link")
+      unlink -- "$link"
+      cp -a -- "$target" "$link"
+    else
+      unlink -- "$link"
+    fi
+  done < <(find "$dependency_root" -type l -print0)
+}
+
+trap cleanup EXIT HUP INT TERM
+
+for command in cp cut find git gzip readlink sha256sum tar; do
+  command -v -- "$command" >/dev/null 2>&1 ||
+    fail "$command is required."
+done
+[[ -n $home ]] || fail "HOME is not set."
+[[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] ||
+  fail "binary releases currently support Linux x86-64 only."
+[[ $runtime_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  fail "sbcl.version is malformed."
+[[ -f $source_root/.qlot/setup.lisp ]] ||
+  fail "locked dependencies are absent; run ./script/bootstrap."
+[[ -x $runtime_installation/bin/sbcl ]] ||
+  fail "the managed SBCL runtime is absent; run ./script/bootstrap."
+[[ -f $runtime_source/version.lisp-expr ]] ||
+  fail "the managed SBCL source is absent; run ./script/bootstrap."
+[[ -f $fff_library ]] ||
+  fail "the private fff library is absent; run ./script/bootstrap."
+
+sandbox_helper=${AUTOLITH_RELEASE_SANDBOX_HELPER:-}
+if [[ -z $sandbox_helper ]]; then
+  sandbox_helper=$(find -L \
+    "$source_root/.qlot/dists/cl-exec-sandbox/software" \
+    -type f -name cl-exec-sandbox-helper -print -quit 2>/dev/null || true)
+fi
+[[ -x $sandbox_helper ]] ||
+  fail "the private sandbox helper is absent; run ./script/check."
+
+version=$(sed -n 's/^  :version "\([0-9][0-9.]*\)"$/\1/p' \
+  "$source_root/autolith.asd")
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  fail "autolith.asd does not contain one semantic version."
+tag=v$version
+commit=$(git -C "$source_root" rev-parse HEAD)
+commit_time=$(git -C "$source_root" show -s --format=%ct HEAD)
+[[ $commit =~ ^[0-9a-f]{40}$ ]] || fail "the source commit is malformed."
+[[ $commit_time =~ ^[0-9]+$ ]] || fail "the source commit time is malformed."
+
+mkdir -p -- "$output_directory"
+output_directory=$(readlink -f -- "$output_directory")
+temporary_root=$(mktemp -d "$output_directory/.autolith-release.XXXXXX")
+release_name=autolith-$tag-x86_64-linux
+release_root=$temporary_root/$release_name
+packaged_source=$release_root/libexec/autolith
+archive=$output_directory/$release_name.tar.gz
+checksum=$archive.sha256
+temporary_archive=$temporary_root/$release_name.tar.gz
+temporary_checksum=$temporary_archive.sha256
+mkdir -p -- "$packaged_source" "$release_root/bin" "$release_root/lib"
+
+printf 'Collecting tracked source at %s.\n' "$commit"
+git -C "$source_root" archive --format=tar HEAD |
+  tar -xf - -C "$packaged_source"
+cp -a -- "$source_root/.qlot" "$packaged_source/.qlot"
+materialize_dependency_links "$packaged_source/.qlot"
+
+printf 'Collecting the pinned SBCL runtime and source.\n'
+cp -a -- "$runtime_installation" "$release_root/runtime"
+cp -a -- "$runtime_source" "$release_root/libexec/sbcl-source"
+cp -a -- "$fff_library" "$release_root/lib/libfff_c.so"
+cp -a -- "$sandbox_helper" "$release_root/libexec/cl-exec-sandbox-helper"
+cp -a -- "$source_root/bin/autolith-release" "$release_root/bin/autolith"
+chmod 755 "$release_root/bin/autolith" \
+  "$release_root/libexec/cl-exec-sandbox-helper"
+chmod 644 "$release_root/lib/libfff_c.so"
+printf 'version=%s\ntag=%s\ncommit=%s\n' "$version" "$tag" "$commit" \
+  > "$release_root/RELEASE"
+
+printf 'Creating the internal source identity.\n'
+git -C "$packaged_source" init --quiet --initial-branch=master
+git -C "$packaged_source" config user.name "Autolith release build"
+git -C "$packaged_source" config user.email "release-build@localhost"
+git -C "$packaged_source" add --force --all
+GIT_AUTHOR_DATE="@$commit_time" GIT_COMMITTER_DATE="@$commit_time" \
+  git -C "$packaged_source" commit --quiet \
+    --message "Autolith $tag source"
+
+actual_runtime_version=$(
+  env -u SBCL_HOME "$release_root/runtime/bin/sbcl" \
+    --noinform --no-userinit --no-sysinit --non-interactive \
+    --eval '(write-string (lisp-implementation-version))' 2>/dev/null
+)
+[[ $actual_runtime_version == "$runtime_version" ]] ||
+  fail "the copied SBCL runtime reports $actual_runtime_version."
+find "$release_root" -type d -exec chmod a-w {} +
+find "$release_root" -type f -exec chmod a-w {} +
+
+printf 'Writing %s.\n' "$archive"
+tar --sort=name --mtime="@$commit_time" --owner=0 --group=0 --numeric-owner \
+  -cf - -C "$temporary_root" "$release_name" |
+  gzip -9n > "$temporary_archive"
+(
+  cd -- "$temporary_root"
+  sha256sum "$(basename -- "$archive")" > "$(basename -- "$checksum")"
+)
+mv -f -- "$temporary_archive" "$archive"
+mv -f -- "$temporary_checksum" "$checksum"
+printf 'Built %s\n' "$archive"
+printf 'SHA-256: '
+cut -d ' ' -f 1 "$checksum"
