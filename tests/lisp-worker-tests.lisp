@@ -29,10 +29,10 @@
            (let ((image
                    (lisp-image-publish-manifest
                     configuration
-                    identifier
-                    +pristine-lisp-image-identifier+
-                    "Traces compiler type derivation for comparison."
-                    core
+                    :identifier identifier
+                    :parent-identifier +pristine-lisp-image-identifier+
+                    :note "Traces compiler type derivation for comparison."
+                    :core-pathname core
                     :source-commit "0123456789abcdef")))
              (test-assert (string= (lisp-image-identifier image) identifier)
                           "saved Lisp images retain their identifier")
@@ -58,10 +58,10 @@
                (progn
                  (lisp-image-publish-manifest
                   configuration
-                  identifier
-                  +pristine-lisp-image-identifier+
-                  "A duplicate image."
-                  core)
+                  :identifier identifier
+                  :parent-identifier +pristine-lisp-image-identifier+
+                  :note "A duplicate image."
+                  :core-pathname core)
                  (test-assert nil "saved image identifiers are immutable"))
              (lisp-image-error ()
                (test-assert t "saved image identifiers are immutable")))
@@ -338,7 +338,8 @@
                    (lisp-worker-save-image
                     configuration
                     source
-                    "diddled"
+                    :identifier "diddled"
+                    :note
                     "Carries a marker proving the modified SBCL heap was retained.")))
              (test-assert
               (and (string= (lisp-image-identifier image) "diddled")

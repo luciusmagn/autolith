@@ -455,9 +455,9 @@
   nil)
 
 (-> lisp-worker-save-image
-    (configuration lisp-worker string string)
+    (configuration lisp-worker &key (:identifier string) (:note string))
     lisp-image)
-(defun lisp-worker-save-image (configuration worker identifier note)
+(defun lisp-worker-save-image (configuration worker &key identifier note)
   "Save WORKER as immutable IDENTIFIER with durable NOTE and return its image."
   (lisp-image--validate-identifier identifier)
   (unless (and (non-empty-string-p note) (<= (length note) 4000))
@@ -747,8 +747,8 @@
            (lisp-worker-save-image
             (tool-context-configuration context)
             worker
-            identifier
-            note)))
+            :identifier identifier
+            :note note)))
     (tool-success
      (format nil "Saved Lisp REPL ~A as image ~A.~%Parent: ~A~%Note: ~A"
              (lisp-worker-name worker)

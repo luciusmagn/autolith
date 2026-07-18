@@ -122,10 +122,15 @@
        t))
 
 (-> lisp-image--manifest-form
-    (string string string pathname (option string) integer)
+    (&key (:identifier string)
+          (:parent-identifier string)
+          (:note string)
+          (:core-pathname pathname)
+          (:source-commit (option string))
+          (:created-at integer))
     list)
 (defun lisp-image--manifest-form
-    (identifier parent-identifier note core-pathname source-commit created-at)
+    (&key identifier parent-identifier note core-pathname source-commit created-at)
   "Return the complete portable manifest for one saved worker image."
   (list :lisp-image
         :version +lisp-image-manifest-version+
@@ -171,11 +176,16 @@
   pathname)
 
 (-> lisp-image-publish-manifest
-    (configuration string string string pathname &key (:source-commit (option string)))
+    (configuration
+     &key (:identifier string)
+          (:parent-identifier string)
+          (:note string)
+          (:core-pathname pathname)
+          (:source-commit (option string)))
     lisp-image)
 (defun lisp-image-publish-manifest
-    (configuration identifier parent-identifier note core-pathname
-     &key source-commit)
+    (configuration
+     &key identifier parent-identifier note core-pathname source-commit)
   "Validate CORE-PATHNAME and publish IDENTIFIER's immutable manifest."
   (setf identifier (lisp-image--validate-identifier identifier))
   (unless (and (or (string= parent-identifier
@@ -207,12 +217,13 @@
     (sb-posix:chmod (namestring expected-core) #o444)
     (lisp-image--write-manifest
      manifest
-     (lisp-image--manifest-form identifier
-                                parent-identifier
-                                note
-                                expected-core
-                                source-commit
-                                (get-universal-time)))
+     (lisp-image--manifest-form
+      :identifier identifier
+      :parent-identifier parent-identifier
+      :note note
+      :core-pathname expected-core
+      :source-commit source-commit
+      :created-at (get-universal-time)))
     (lisp-image-load configuration identifier)))
 
 (-> lisp-image--source-commit (configuration) (option string))
@@ -286,12 +297,13 @@
     (sb-posix:chmod (namestring staging-core) #o444)
     (lisp-image--write-manifest
      staging-manifest
-     (lisp-image--manifest-form identifier
-                                parent-identifier
-                                note
-                                published-core
-                                (lisp-image--source-commit configuration)
-                                (get-universal-time)))
+     (lisp-image--manifest-form
+      :identifier identifier
+      :parent-identifier parent-identifier
+      :note note
+      :core-pathname published-core
+      :source-commit (lisp-image--source-commit configuration)
+      :created-at (get-universal-time)))
     (handler-case
         (rename-file staging-directory directory)
       (error (condition)
