@@ -49,6 +49,7 @@
                              (:file "self-status")
                              (:file "self-discard")
                              (:file "self-exercise")
+                             (:file "default-tools")
                              (:file "agent")
                              (:file "terminal")
                              (:file "terminal-style")
