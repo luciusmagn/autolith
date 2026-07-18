@@ -1,0 +1,124 @@
+#+TITLE: Autolith Library Extraction Audit
+#+STARTUP: content
+#+OPTIONS: toc:2 num:nil
+
+* Purpose
+
+This audit identifies implementation that can become general-purpose Common
+Lisp libraries while leaving Autolith's product behavior and defining
+self-modification architecture easy to inspect.
+
+The audit covers roughly 25,100 implementation lines in =src/=, =recovery/=,
+and =server/=. Moving code does not reduce the total amount of maintained code.
+It is useful only when the resulting library has a narrower independent API,
+tests its own invariants, and leaves a small Autolith adapter.
+
+* Selected Extractions
+
+** =clifff=
+
+Natural home: =luciusmagn/clifff=.
+
+The fff CFFI binding, native index lifecycle, result decoding, content search,
+and restartable helper process are general-purpose facilities. Autolith should
+retain only tool schemas, workspace configuration, argument validation, and
+conversion into Autolith tool results and conditions.
+
+Current source boundary:
+
+- =src/search-tools.lisp=
+- =src/search-worker.lisp=
+- Native fff build and manifest support used by those files
+
+Expected net Autolith reduction: 850 to 1,050 source lines.
+
+** =sexp-store=
+
+Natural home: =luciusmagn/sexp-store=.
+
+The reusable storage layer should support atomic readable snapshots and
+append-only sequences of top-level S-expressions. Reads must bind
+=*read-eval*= to =nil=. Append logs must retain every complete preceding form,
+detect an incomplete final form, and repair that tail atomically before the
+next successful append.
+
+Autolith should retain record formats, domain validation, projections, and
+semantic repairs such as unmatched conversation tool-call handling.
+
+Current source boundary:
+
+- =src/readable-state.lisp=
+- Duplicate atomic and append-log mechanics in =src/conversation.lisp=
+- Duplicate atomic and append-log mechanics in =src/memories.lisp=
+
+Expected net Autolith reduction: 180 to 300 source lines.
+
+** =sbcl-workers=
+
+Natural home: =luciusmagn/sbcl-workers=.
+
+Named persistent SBCL subprocesses, the readable request protocol, evaluation
+and compilation operations, source lookup, working-directory changes, worker
+pool lifecycle, forked core saving, immutable image manifests, and runtime
+compatibility probes are useful independently of Autolith.
+
+The library must describe process isolation as a reliability boundary, not a
+security sandbox. Autolith should retain =lisp.*= tool definitions, tool
+argument handling, configuration adaptation, and prompt inventory rendering.
+
+Current source boundary:
+
+- =src/lisp-worker.lisp=
+- =src/lisp-images.lisp=
+
+Expected net Autolith reduction: 1,000 to 1,250 source lines.
+
+* Later Candidate
+
+Autolith still contains general terminal presentation code in =src/layout.lisp=,
+=src/terminal-style.lisp=, =src/markdown.lisp=, =src/terminal.lisp=,
+=src/stream-terminal.lisp=, and =src/terminal-ui.lisp=. This should move in
+coherent slices to Clinedi rather than create another terminal library. The
+likely slices are cell-aware layout and styled spans, optional terminal
+Markdown rendering, and a transcript plus live-editor session component.
+
+* Keep In Autolith
+
+The following code may contain reusable primitives but should remain visible in
+Autolith until another consumer proves a clean boundary:
+
+- The agent loop, provider projection, and conversation semantics.
+- Self-modification, mutation journals, image commits, generations, and
+  recovery.
+- Memories, agendas, deferred input, responsive input, and tool presentation.
+- The Autolith release builder and installer service.
+- OpenAI-specific authentication and device authorization behavior.
+
+Moving these areas would make this repository smaller without making the
+system simpler. In particular, the live mutation and recovery code is
+Autolith's defining architecture.
+
+* Extraction Requirements
+
+Each extraction must satisfy all of the following:
+
+1. The library has its own package, ASDF systems, documentation, and tests.
+2. The library API contains no Autolith configuration, tool, provider, or
+   conversation types.
+3. Autolith depends on a pinned source revision and keeps only a narrow adapter.
+4. Existing behavior and difficult failure paths remain covered after code is
+   moved.
+5. Distribution builds include the dependency without requiring it to be
+   installed globally.
+6. Autolith source inspection gains a way to inspect relevant ASDF dependency
+   source before moving code needed for live diagnosis or repair.
+
+* Recommended Sequence
+
+1. Implement =clifff= and replace Autolith's private binding and helper.
+2. Implement =sexp-store= and consolidate snapshot and append-log mechanics.
+3. Implement =sbcl-workers= and replace the in-tree worker runtime and image
+   machinery.
+4. Extend =self.source= to inspect pinned dependency source where required.
+5. Move the remaining general terminal presentation into Clinedi in separate
+   vertical changes.
