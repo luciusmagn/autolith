@@ -87,8 +87,9 @@
            (let ((script (merge-pathnames "implementation-replay.lisp" root)))
              (image-commit-write-script
               script
-              "implementation-replay"
-              "Replay implementation instrumentation"
+              :identifier "implementation-replay"
+              :title "Replay implementation instrumentation"
+              :entries
               (list (image-commit--record->entry implementation-record)))
              (self-call-with-package-unlocked
               implementation-package

@@ -110,9 +110,9 @@
           (file-length stream))
         0)))
 
-(-> image-commit--write-form-atomically (pathname list) pathname)
-(defun image-commit--write-form-atomically (pathname form)
-  "Atomically write portable FORM to PATHNAME."
+(-> image-commit--write-atomically (pathname function) pathname)
+(defun image-commit--write-atomically (pathname writer)
+  "Atomically publish PATHNAME using a stream WRITER, then make it read-only."
   (let ((temporary
           (make-pathname
            :name (format nil ".~A.~A"
@@ -128,43 +128,33 @@
                                    :if-exists :supersede
                                    :if-does-not-exist :create
                                    :external-format :utf-8)
-             (let ((*print-circle* t)
-                   (*print-readably* t)
-                   (*print-pretty* t))
-               (prin1 form stream)
-               (terpri stream)
-               (finish-output stream)))
-           (uiop:rename-file-overwriting-target temporary pathname)
-           (sb-posix:chmod (namestring pathname) #o444))
-      (when (probe-file temporary)
-        (delete-file temporary)))
-    pathname))
-
-(-> image-commit--write-string-atomically (pathname string) pathname)
-(defun image-commit--write-string-atomically (pathname content)
-  "Atomically write CONTENT to PATHNAME and make the result read-only."
-  (let ((temporary
-          (make-pathname
-           :name (format nil ".~A.~A"
-                         (pathname-name pathname)
-                         (make-identifier))
-           :type "tmp"
-           :defaults pathname)))
-    (ensure-directories-exist pathname)
-    (unwind-protect
-         (progn
-           (with-open-file (stream temporary
-                                   :direction :output
-                                   :if-exists :supersede
-                                   :if-does-not-exist :create
-                                   :external-format :utf-8)
-             (write-string content stream)
+             (funcall writer stream)
              (finish-output stream))
            (uiop:rename-file-overwriting-target temporary pathname)
            (sb-posix:chmod (namestring pathname) #o444))
       (when (probe-file temporary)
         (delete-file temporary)))
     pathname))
+
+(-> image-commit--write-form-atomically (pathname list) pathname)
+(defun image-commit--write-form-atomically (pathname form)
+  "Atomically write portable FORM to PATHNAME."
+  (image-commit--write-atomically
+   pathname
+   (lambda (stream)
+     (let ((*print-circle* t)
+           (*print-readably* t)
+           (*print-pretty* t))
+       (prin1 form stream)
+       (terpri stream)))))
+
+(-> image-commit--write-string-atomically (pathname string) pathname)
+(defun image-commit--write-string-atomically (pathname content)
+  "Atomically write CONTENT to PATHNAME and make the result read-only."
+  (image-commit--write-atomically
+   pathname
+   (lambda (stream)
+     (write-string content stream))))
 
 
 ;;;; -- Private Git History --
@@ -682,35 +672,19 @@
   (terpri stream)
   nil)
 
-(-> image-commit-write-script (pathname string string list) pathname)
-(defun image-commit-write-script (pathname identifier title entries)
+(-> image-commit-write-script
+    (pathname &key (:identifier string) (:title string) (:entries list))
+    pathname)
+(defun image-commit-write-script (pathname &key identifier title entries)
   "Atomically write ENTRIES as IDENTIFIER's complete reconstruction script."
-  (let ((temporary
-          (make-pathname
-           :name (format nil ".~A.~A"
-                         (pathname-name pathname)
-                         (make-identifier))
-           :type "tmp"
-           :defaults pathname)))
-    (ensure-directories-exist pathname)
-    (unwind-protect
-         (progn
-           (with-open-file (stream temporary
-                                   :direction :output
-                                   :if-exists :supersede
-                                   :if-does-not-exist :create
-                                   :external-format :utf-8)
-             (format stream ";;;; Autolith image reconstruction script~%")
-             (format stream ";;;; Commit ~A: ~A~2%" identifier title)
-             (format stream "(in-package #:autolith)~2%")
-             (dolist (entry entries)
-               (image-commit--write-entry stream entry))
-             (finish-output stream))
-           (uiop:rename-file-overwriting-target temporary pathname)
-           (sb-posix:chmod (namestring pathname) #o444))
-      (when (probe-file temporary)
-        (delete-file temporary)))
-    pathname))
+  (image-commit--write-atomically
+   pathname
+   (lambda (stream)
+     (format stream ";;;; Autolith image reconstruction script~%")
+     (format stream ";;;; Commit ~A: ~A~2%" identifier title)
+     (format stream "(in-package #:autolith)~2%")
+     (dolist (entry entries)
+       (image-commit--write-entry stream entry)))))
 
 
 ;;;; -- Clean Replay Probe --
@@ -846,10 +820,13 @@
              :stage ':publish))
     (handler-case
         (progn
-          (image-commit-write-script script-pathname identifier title entries)
+          (image-commit-write-script script-pathname
+                                     :identifier identifier
+                                     :title title
+                                     :entries entries)
           (image-commit--write-form-atomically
            manifest-pathname
-            (image-commit--manifest-form
+           (image-commit--manifest-form
             identifier
             (and parent (image-commit-identifier parent))
             title
@@ -1021,11 +998,11 @@
   "Write GENERATION-IDENTIFIER's complete base-image reconstruction script."
   (image-commit-write-script
    pathname
-   generation-identifier
-   "Retained generation reconstruction"
-   (if commit
-       (image-commit-entries commit)
-       (image-commit--legacy-entries configuration))))
+   :identifier generation-identifier
+   :title "Retained generation reconstruction"
+   :entries (if commit
+                (image-commit-entries commit)
+                (image-commit--legacy-entries configuration))))
 
 
 ;;;; -- Image Commit Tools --

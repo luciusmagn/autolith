@@ -58,9 +58,9 @@
   "Write GENERATION's deterministic test reconstruction script."
   (image-commit-write-script
    (generation-reconstruction-pathname generation)
-   (generation-identifier generation)
-   "Test generation reconstruction"
-   nil))
+   :identifier (generation-identifier generation)
+   :title "Test generation reconstruction"
+   :entries nil))
 
 (-> generation-tests--make-core-plausible (generation) pathname)
 (defun generation-tests--make-core-plausible (generation)
