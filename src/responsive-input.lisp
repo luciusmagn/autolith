@@ -117,13 +117,12 @@
                  (uiop:split-string input :separator '(#\Space #\Tab))))
          (command (string-downcase (or (first parts) "")))
          (argument (second parts)))
-    (or (string= command "/auth")
+    (or (not (null (member command '("/auth" "/model") :test #'string=)))
         (and (null argument)
              (not
               (null
                (member command
-                       '("/resume" "/model" "/effort" "/rollback"
-                         "/permissions")
+                       '("/resume" "/effort" "/rollback" "/permissions")
                        :test #'string=)))))))
 
 (-> application-input-controller--publish-counts

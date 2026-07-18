@@ -99,7 +99,8 @@
     (:name "/conversations" :argument nil :description "list saved conversations")
     (:name "/cwd"           :argument "PATH" :description "change the active workspace")
     (:name "/auth"          :argument nil :description "authenticate Autolith with ChatGPT")
-    (:name "/model"         :argument nil :description "pick the 5.6 model")
+    (:name "/model"         :argument nil
+     :description "pick the 5.6 model and reasoning effort")
     (:name "/effort"        :argument nil :description "pick the reasoning effort")
     (:name "/trace"         :argument "on|off" :description "show visible reasoning summaries")
     (:name "/permissions"   :argument nil :description "choose command access for this session")

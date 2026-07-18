@@ -1194,9 +1194,9 @@
                "argument-free picker commands take terminal ownership")
   (test-assert (application--command-needs-terminal-owner-p "/permissions")
                "the permission picker takes terminal ownership")
-  (test-assert (not (application--command-needs-terminal-owner-p
-                     "/model gpt-5.6-luna"))
-               "explicit picker arguments need no terminal ownership")
+  (test-assert (application--command-needs-terminal-owner-p
+                "/model gpt-5.6-luna")
+               "explicit model changes own the terminal for the effort picker")
   (test-assert (not (application--command-needs-terminal-owner-p "/compact"))
                "nonmodal model commands retain responsive input")
   (test-assert (application--command-needs-terminal-owner-p "/auth")
@@ -1578,6 +1578,8 @@
                                      :maximum-provider-steps 7
                                      :provider-step-warning 3
                                      :maximum-tool-calls 9))
+                (terminal (make-instance 'scripted-terminal :columns 60))
+                (ui (terminal-ui-create :terminal terminal))
                 (application
                   (make-instance 'application
                                  :configuration configuration
@@ -1586,10 +1588,7 @@
                                  :tool-registry registry
                                  :worker worker
                                  :agent agent
-                                 :ui (terminal-ui-create
-                                      :terminal (make-instance
-                                                 'recording-terminal
-                                                 :columns 60)))))
+                                 :ui ui)))
            (setf (provider-rate-limits provider) '(:primary (:used-percent 25)))
            (let ((items (application--effort-items application)))
              (test-assert (= (length items)
@@ -1670,6 +1669,37 @@
              (test-assert
               (string= (preference-state-reasoning-effort preferences) "low")
               "switching models preserves the global effort default"))
+           (setf (scripted-terminal-events terminal)
+                 (list :history-next :submit))
+           (with-terminal-ui (active-ui ui)
+             (declare (ignore active-ui))
+             (test-assert
+              (eq (application-command application "/model gpt-5.6-luna")
+                  ':continue)
+              "an explicit model change continues after choosing its effort"))
+           (test-assert
+            (and (string= (configuration-model
+                           (application-configuration application))
+                          "gpt-5.6-luna")
+                 (string= (configuration-reasoning-effort
+                           (application-configuration application))
+                          "medium"))
+            "model commands apply the prompted reasoning effort atomically")
+           (test-assert
+            (and (string= (conversation-model conversation) "gpt-5.6-luna")
+                 (string= (conversation-reasoning-effort conversation) "medium"))
+            "model commands persist both choices in the active conversation")
+           (let ((preferences (preferences-load configuration)))
+             (test-assert
+              (and (string= (preference-state-model preferences)
+                            "gpt-5.6-luna")
+                   (string= (preference-state-reasoning-effort preferences)
+                            "medium"))
+              "model commands persist both choices as global defaults"))
+           (test-assert
+            (search "The model is now gpt-5.6-luna with reasoning effort medium."
+                    (recording-terminal-output terminal))
+            "model commands report the complete selection")
            (test-assert (handler-case
                             (progn
                               (application-set-model application "gpt-4")
@@ -1706,10 +1736,10 @@
               "the reconnected provider uses the conversation model"))
            (let ((preferences (preferences-load configuration)))
              (test-assert
-              (string= (preference-state-model preferences) "gpt-5.6-terra")
+              (string= (preference-state-model preferences) "gpt-5.6-luna")
               "resuming does not replace the global model default")
              (test-assert
-              (string= (preference-state-reasoning-effort preferences) "low")
+              (string= (preference-state-reasoning-effort preferences) "medium")
               "resuming does not replace the global effort default")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

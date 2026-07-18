@@ -300,6 +300,17 @@
     (application--persist-model-selection application configuration)
     (application--install-configuration application configuration)))
 
+(-> application-set-model-selection (application string string) null)
+(defun application-set-model-selection (application model effort)
+  "Switch APPLICATION to MODEL and reasoning EFFORT, and persist both choices."
+  (let ((configuration
+          (configuration-with-reasoning-effort
+           (configuration-with-model (application-configuration application)
+                                     model)
+           effort)))
+    (application--persist-model-selection application configuration)
+    (application--install-configuration application configuration)))
+
 (-> application-set-reasoning-traces (application boolean) null)
 (defun application-set-reasoning-traces (application enabled-p)
   "Persist and apply whether future reasoning summaries are visible."
@@ -503,6 +514,16 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        :title title
        :items items
        :resize-callback #'application-pending-terminal-size))))
+
+(-> application--pick-reasoning-effort (application) (option string))
+(defun application--pick-reasoning-effort (application)
+  "Prompt for one supported reasoning effort and return the selected name."
+  (application--pick-identifier
+   application
+   :title "pick the reasoning effort"
+   :items (application--effort-items application)
+   :usage "Usage: /effort LEVEL"
+   :empty-notice "No supported reasoning efforts exist."))
 
 
 ;;;; -- Working Directory Command --
@@ -788,12 +809,7 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
       ((string= command "/effort")
        (let ((effort
                (or argument
-                   (application--pick-identifier
-                    application
-                    :title "pick the reasoning effort"
-                    :items (application--effort-items application)
-                    :usage "Usage: /effort LEVEL"
-                    :empty-notice "No supported reasoning efforts exist."))))
+                   (application--pick-reasoning-effort application))))
          (when effort
            (application-set-reasoning-effort application effort)
            (application-present
@@ -826,12 +842,18 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
                     :usage "Usage: /model NAME"
                     :empty-notice "No supported models exist."))))
          (when model
-           (application-set-model application model)
-           (application-present
-            application
-            (format nil "The model is now ~A."
-                    (configuration-model
-                     (application-configuration application))))))
+           (configuration-with-model (application-configuration application)
+                                     model)
+           (let ((effort (application--pick-reasoning-effort application)))
+             (when effort
+               (application-set-model-selection application model effort)
+               (application-present
+                application
+                (format nil "The model is now ~A with reasoning effort ~A."
+                        (configuration-model
+                         (application-configuration application))
+                        (configuration-reasoning-effort
+                         (application-configuration application))))))))
        :continue)
       ((string= command "/checkpoint")
        (application-checkpoint application)
