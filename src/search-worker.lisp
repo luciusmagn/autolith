@@ -49,9 +49,11 @@
        t))
 
 (-> search-worker--request-form
-    (integer keyword configuration list)
+    (configuration
+     &key (:request-id integer) (:operation keyword) (:arguments list))
     list)
-(defun search-worker--request-form (request-id operation configuration arguments)
+(defun search-worker--request-form
+    (configuration &key request-id operation arguments)
   "Return one complete helper request for OPERATION and ARGUMENTS."
   (list :search-request
         :version +search-worker-protocol-version+
@@ -205,16 +207,19 @@
   worker)
 
 (-> search-worker--exchange
-    (search-worker configuration keyword list)
+    (search-worker configuration &key (:operation keyword) (:arguments list))
     (values (option string) (option string)))
-(defun search-worker--exchange (worker configuration operation arguments)
+(defun search-worker--exchange (worker configuration &key operation arguments)
   "Exchange one request with WORKER, returning content or a remote error."
   (search-worker--ensure-unlocked worker configuration)
   (let ((request-id (search-worker-next-request-id worker)))
     (incf (search-worker-next-request-id worker))
     (search-worker--write-form
      (search-worker-input worker)
-     (search-worker--request-form request-id operation configuration arguments))
+     (search-worker--request-form configuration
+                                  :request-id request-id
+                                  :operation operation
+                                  :arguments arguments))
     (let ((response
             (search-worker--read-form
              (search-worker-output worker)
@@ -226,9 +231,9 @@
           (values nil (getf (rest response) :content))))))
 
 (-> search-worker-request
-    (search-worker configuration keyword list)
+    (search-worker configuration &key (:operation keyword) (:arguments list))
     string)
-(defun search-worker-request (worker configuration operation arguments)
+(defun search-worker-request (worker configuration &key operation arguments)
   "Run one read-only search, resetting fff caches before one process retry."
   (with-lock-held ((search-worker-lock worker))
     (loop for attempt from 1 to 2
@@ -236,8 +241,8 @@
                  (multiple-value-bind (content remote-error)
                      (search-worker--exchange worker
                                               configuration
-                                              operation
-                                              arguments)
+                                              :operation operation
+                                              :arguments arguments)
                    (when remote-error
                      (search--fail operation remote-error
                                    :pathname
@@ -395,14 +400,15 @@
                          (arguments hash-table))
   "Fuzzy-search workspace file paths with isolated fff."
   (let ((query (search-tool--string-argument tool arguments "query" :required t))
-        (page (search-tool--bounded-integer arguments "page" 0 0 1000000))
+        (page (search-tool--bounded-integer arguments "page"
+                                            :maximum 1000000))
         (maximum-results
           (search-tool--bounded-integer
            arguments
            "max-results"
-           +search-default-result-limit+
-           1
-           +search-maximum-result-limit+)))
+           :fallback +search-default-result-limit+
+           :minimum 1
+           :maximum +search-maximum-result-limit+)))
     (unless (non-empty-string-p query)
       (error 'tool-error
              :message "search.files requires a non-empty query."
@@ -411,10 +417,10 @@
      (search-worker-request
       (search-tool-engine tool)
       (tool-context-configuration context)
-      ':files
-      (list query
-            :page page
-            :maximum-results maximum-results)))))
+      :operation ':files
+      :arguments (list query
+                       :page page
+                       :maximum-results maximum-results)))))
 
 (defmethod tool-execute ((tool search-glob-tool)
                          (context tool-context)
@@ -422,14 +428,15 @@
   "Filter workspace file paths by one literal fff glob."
   (let ((pattern
           (search-tool--string-argument tool arguments "pattern" :required t))
-        (page (search-tool--bounded-integer arguments "page" 0 0 1000000))
+        (page (search-tool--bounded-integer arguments "page"
+                                            :maximum 1000000))
         (maximum-results
           (search-tool--bounded-integer
            arguments
            "max-results"
-           +search-default-result-limit+
-           1
-           +search-maximum-result-limit+)))
+           :fallback +search-default-result-limit+
+           :minimum 1
+           :maximum +search-maximum-result-limit+)))
     (unless (non-empty-string-p pattern)
       (error 'tool-error
              :message "search.glob requires a non-empty pattern."
@@ -438,11 +445,11 @@
      (search-worker-request
       (search-tool-engine tool)
       (tool-context-configuration context)
-      ':files
-      (list pattern
-            :glob-p t
-            :page page
-            :maximum-results maximum-results)))))
+      :operation ':files
+      :arguments (list pattern
+                       :glob-p t
+                       :page page
+                       :maximum-results maximum-results)))))
 
 (defmethod tool-execute ((tool search-content-tool)
                          (context tool-context)
@@ -460,9 +467,9 @@
      (search-worker-request
       (search-tool-engine tool)
       (tool-context-configuration context)
-      ':content
-      (append (list query :mode mode)
-              (search-tool--common-content-options arguments))))))
+      :operation ':content
+      :arguments (append (list query :mode mode)
+                         (search-tool--common-content-options arguments))))))
 
 (defmethod tool-execute ((tool search-multi-content-tool)
                          (context tool-context)
@@ -484,6 +491,6 @@
      (search-worker-request
       (search-tool-engine tool)
       (tool-context-configuration context)
-      ':multi-content
-      (append (list patterns constraints)
-              (search-tool--common-content-options arguments))))))
+      :operation ':multi-content
+      :arguments (append (list patterns constraints)
+                         (search-tool--common-content-options arguments))))))

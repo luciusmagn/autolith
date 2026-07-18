@@ -783,9 +783,11 @@
               :tool-name (tool-canonical-name tool))))))
 
 (-> search-tool--bounded-integer
-    (json-object string integer integer integer)
+    (json-object string
+     &key (:fallback integer) (:minimum integer) (:maximum integer))
     integer)
-(defun search-tool--bounded-integer (arguments name fallback minimum maximum)
+(defun search-tool--bounded-integer
+    (arguments name &key (fallback 0) (minimum 0) (maximum most-positive-fixnum))
   "Return integer argument NAME clamped between MINIMUM and MAXIMUM."
   (min maximum
        (max minimum
@@ -796,22 +798,26 @@
 (defun search-tool--common-content-options (arguments)
   "Return validated keyword options shared by content search tools."
   (list :file-offset
-        (search-tool--bounded-integer arguments "file-offset" 0 0 #xffffffff)
+        (search-tool--bounded-integer arguments "file-offset"
+                                      :maximum #xffffffff)
         :maximum-results
         (search-tool--bounded-integer
          arguments
          "max-results"
-         +search-default-result-limit+
-         1
-         +search-maximum-result-limit+)
+         :fallback +search-default-result-limit+
+         :minimum 1
+         :maximum +search-maximum-result-limit+)
         :maximum-matches-per-file
-        (search-tool--bounded-integer arguments "max-matches-per-file" 20 1 100)
+        (search-tool--bounded-integer arguments "max-matches-per-file"
+                                      :fallback 20
+                                      :minimum 1
+                                      :maximum 100)
         :time-budget-milliseconds
         (search-tool--bounded-integer
          arguments
          "time-budget-ms"
-         +search-default-time-budget-milliseconds+
-         1
-         +search-maximum-time-budget-milliseconds+)
+         :fallback +search-default-time-budget-milliseconds+
+         :minimum 1
+         :maximum +search-maximum-time-budget-milliseconds+)
         :context-lines
-        (search-tool--bounded-integer arguments "context" 0 0 10)))
+        (search-tool--bounded-integer arguments "context" :maximum 10)))
