@@ -25,15 +25,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes \
             bubblewrap build-essential cargo cmake libssl-dev libz-dev \
-            libzstd-dev pkg-config sbcl
+            libzstd-dev pkg-config
 
       - name: Build the pinned SBCL runtime
         shell: bash
         run: |
           bootstrap_version=2.4.0
-          bootstrap_sha256=83d8b74f08d2254c59b9790bc1f669e09099457b884720ececbf45f4b46d1776
-          bootstrap_archive="/tmp/sbcl-$bootstrap_version-source.tar.bz2"
-          bootstrap_source="/tmp/sbcl-$bootstrap_version"
+          bootstrap_sha256=50afb9765d6a2f937f609ac33ebe553326347aef23eddd49c46d76456a5b3095
+          bootstrap_archive="/tmp/sbcl-$bootstrap_version-x86-64-linux-binary.tar.bz2"
+          bootstrap_source="/tmp/sbcl-$bootstrap_version-x86-64-linux"
           bootstrap_installation="/tmp/sbcl-bootstrap-$bootstrap_version"
           runtime_version=$(tr -d '[:space:]' < sbcl.version)
           runtime_root="$HOME/.local/share/autolith/runtimes/$runtime_version"
@@ -43,14 +43,13 @@ jobs:
           curl --fail --location --show-error --retry 3 \
             --proto '=https' --tlsv1.2 \
             --output "$bootstrap_archive" \
-            "https://downloads.sourceforge.net/project/sbcl/sbcl/$bootstrap_version/sbcl-$bootstrap_version-source.tar.bz2"
+            "https://downloads.sourceforge.net/project/sbcl/sbcl/$bootstrap_version/sbcl-$bootstrap_version-x86-64-linux-binary.tar.bz2"
           printf '%s  %s\n' "$bootstrap_sha256" "$bootstrap_archive" |
             sha256sum --check --status
           tar -xjf "$bootstrap_archive" -C /tmp
           cd "$bootstrap_source"
-          sh make.sh --prefix="$bootstrap_installation"
           env -u SBCL_HOME sh install.sh --prefix="$bootstrap_installation"
-          test "$("$bootstrap_installation/bin/sbcl" \
+          test "$(env -u SBCL_HOME "$bootstrap_installation/bin/sbcl" \
             --noinform --no-userinit --no-sysinit --non-interactive \
             --eval '(write-string (lisp-implementation-version))')" = \
             "$bootstrap_version"
@@ -78,7 +77,7 @@ jobs:
             --proto '=https' --tlsv1.2 \
             --output /tmp/quicklisp.lisp \
             https://beta.quicklisp.org/quicklisp.lisp
-          sbcl --noinform --non-interactive \
+          "$AUTOLITH_SBCL" --noinform --non-interactive \
             --load /tmp/quicklisp.lisp \
             --eval '(quicklisp-quickstart:install)'
 
