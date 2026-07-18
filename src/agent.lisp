@@ -390,10 +390,11 @@
   nil)
 
 (-> agent--validate-tool-call-identifiers
-    (agent list hash-table integer)
+    (agent list
+     &key (:seen-call-identifiers hash-table) (:request-number integer))
     null)
 (defun agent--validate-tool-call-identifiers
-    (agent calls seen-call-identifiers request-number)
+    (agent calls &key seen-call-identifiers request-number)
   "Validate CALLS and reserve their unique call identifiers for this user turn."
   (let ((round-identifiers (make-hash-table :test #'equal))
         (conversation (agent-conversation agent)))
@@ -424,9 +425,9 @@
   nil)
 
 (-> agent--execute-tool-calls
-    (agent list agent-observer integer)
+    (agent list &key (:observer agent-observer) (:tool-round integer))
     null)
-(defun agent--execute-tool-calls (agent calls observer tool-round)
+(defun agent--execute-tool-calls (agent calls &key observer tool-round)
   "Execute CALLS sequentially and append one correlated result for every call."
   (let ((context
           (make-instance 'tool-context
@@ -545,10 +546,14 @@
        :normal))))
 
 (-> agent--signal-budget-exhausted
-    (agent integer integer keyword string)
+    (agent
+     &key (:provider-step integer)
+          (:tool-calls integer)
+          (:reason keyword)
+          (:message string))
     null)
 (defun agent--signal-budget-exhausted
-    (agent provider-step tool-calls reason message)
+    (agent &key provider-step tool-calls reason message)
   "Signal deterministic turn-budget REASON for AGENT with a visible MESSAGE."
   (error 'agent-turn-budget-exhausted
          :message message
@@ -638,7 +643,10 @@ persisted as history, only the durable summary record is."
                   :goal-context goal-context))
                (calls (provider-result-tool-calls result)))
           (agent--validate-tool-call-identifiers
-           agent calls seen-call-identifiers request-number)
+           agent
+           calls
+           :seen-call-identifiers seen-call-identifiers
+           :request-number request-number)
           (agent--persist-provider-result agent result request-number)
           (setf (conversation-turn-state conversation)
                 (provider-result-turn-state result))
@@ -662,9 +670,10 @@ persisted as history, only the durable summary record is."
                  :message message)
                 (agent--signal-budget-exhausted
                  agent
-                 request-number
-                 tool-calls
-                 :tools-requested-during-finalization
+                 :provider-step request-number
+                 :tool-calls tool-calls
+                 :reason ':tools-requested-during-finalization
+                 :message
                  "The model requested tools during the text-only final turn step.")))
             (agent-observer-status
              observer
@@ -703,14 +712,16 @@ persisted as history, only the durable summary record is."
                 :message message)
                (agent--signal-budget-exhausted
                 agent
-                request-number
-                tool-calls
-                :tool-call-limit
-                (format nil
-                        "The turn reached its ~:D-call tool budget."
-                        (agent-maximum-tool-calls agent)))))
+                :provider-step request-number
+                :tool-calls tool-calls
+                :reason ':tool-call-limit
+                :message (format nil
+                                 "The turn reached its ~:D-call tool budget."
+                                 (agent-maximum-tool-calls agent)))))
             (t
              (incf tool-rounds)
              (incf tool-calls (length calls))
-             (agent--execute-tool-calls agent calls observer tool-rounds)
+             (agent--execute-tool-calls agent calls
+                                        :observer observer
+                                        :tool-round tool-rounds)
              (agent--apply-steering-input agent observer request-number))))))))
