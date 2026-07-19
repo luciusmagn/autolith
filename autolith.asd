@@ -11,6 +11,7 @@
                #:closer-mop
                #:dexador
                #:bordeaux-threads
+               #:opticl
                #:quri
                #:serapeum
                #:sb-posix
@@ -24,6 +25,7 @@
                              (:file "conditions")
                              (:file "json")
                              (:file "configuration")
+                             (:file "image-input")
                              (:file "readable-state")
                              (:file "preferences")
                              (:file "permissions")

@@ -169,6 +169,25 @@
     :documentation "The underlying native or Lisp failure, when available."))
   (:documentation "The private fff search library could not complete an operation."))
 
+(define-condition image-input-error (autolith-error)
+  ((pathname
+    :initarg :pathname
+    :reader image-input-error-pathname
+    :type pathname
+    :documentation "The local image pathname involved in the failure.")
+   (stage
+    :initarg :stage
+    :reader image-input-error-stage
+    :type keyword
+    :documentation "The recognition, decoding, resizing, persistence, or loading stage.")
+   (cause
+    :initarg :cause
+    :initform nil
+    :reader image-input-error-cause
+    :type t
+    :documentation "The underlying image or filesystem failure, when available."))
+  (:documentation "A local image could not become provider-visible user input."))
+
 (define-condition preferences-error (autolith-error)
   ((pathname
     :initarg :pathname

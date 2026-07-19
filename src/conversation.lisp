@@ -171,29 +171,95 @@
         (nconc (conversation-input-items conversation) (list item)))
   item)
 
-(-> user-message-item (string) json-object)
-(defun user-message-item (content)
-  "Return a Responses API user message containing CONTENT."
+(-> conversation-image-artifact-root (conversation) pathname)
+(defun conversation-image-artifact-root (conversation)
+  "Return CONVERSATION's private binary image artifact directory."
+  (let* ((conversation-root
+           (uiop:pathname-directory-pathname
+            (conversation-pathname conversation)))
+         (data-root (uiop:pathname-parent-directory-pathname conversation-root)))
+    (merge-pathnames
+     (format nil "conversation-images/~A/"
+             (conversation-identifier conversation))
+     data-root)))
+
+(-> user-message-item (string &optional list) json-object)
+(defun user-message-item (content &optional attachments)
+  "Return a Responses API user message containing CONTENT and ATTACHMENTS."
   (json-object
    "type" "message"
    "role" "user"
-   "content" (json-array
-              (json-object
-               "type" "input_text"
-               "text" content))))
+   "content"
+   (coerce
+    (append
+     (loop for attachment in attachments
+           for label-number from 1
+           append (image-input-content-items attachment label-number))
+     (when (non-empty-string-p content)
+       (list (json-object
+              "type" "input_text"
+              "text" content))))
+    'vector)))
 
-(-> conversation-append-user-message (conversation string) json-object)
-(defun conversation-append-user-message (conversation content)
-  "Persist user CONTENT before adding its provider item to CONVERSATION."
-  (let ((item (user-message-item content)))
-    (conversation-append-record
-     conversation
-     (list :message
-           :role :user
-           :content content
-           :wire-json (json-encode item)))
-    (setf (conversation-turn-state conversation) nil)
-    (conversation--append-input-item conversation item)))
+(-> conversation--prepare-images (conversation list) list)
+(defun conversation--prepare-images (conversation image-pathnames)
+  "Prepare IMAGE-PATHNAMES transactionally for CONVERSATION."
+  (let ((attachments nil))
+    (handler-case
+        (progn
+          (dolist (pathname image-pathnames)
+            (push (image-input-prepare
+                   pathname
+                   (conversation-image-artifact-root conversation))
+                  attachments))
+          (nreverse attachments))
+      (error (condition)
+        (dolist (attachment attachments)
+          (when (probe-file (image-attachment-pathname attachment))
+            (delete-file (image-attachment-pathname attachment))))
+        (error condition)))))
+
+(-> conversation--delete-image-attachments (list) null)
+(defun conversation--delete-image-attachments (attachments)
+  "Delete newly prepared ATTACHMENTS after a failed durable append."
+  (dolist (attachment attachments)
+    (when (probe-file (image-attachment-pathname attachment))
+      (delete-file (image-attachment-pathname attachment))))
+  nil)
+
+(-> conversation-append-user-message
+    (conversation (or string user-message-input))
+    json-object)
+(defun conversation-append-user-message (conversation input)
+  "Persist user INPUT and its image descriptors before projecting it."
+  (let* ((submission
+           (etypecase input
+             (string (user-message-input-create :text input))
+             (user-message-input input)))
+         (content (user-message-input-text submission))
+         (attachments
+           (conversation--prepare-images
+            conversation
+            (user-message-input-image-pathnames submission)))
+         (item (user-message-item content attachments))
+         (durable-p nil))
+    (unwind-protect
+         (progn
+           (conversation-append-record
+            conversation
+            (append
+             (list :message
+                   :role :user
+                   :content content)
+             (when attachments
+               (list :images (mapcar #'image-attachment-record attachments)))
+             (unless attachments
+               (list :wire-json (json-encode item)))))
+           (setf durable-p t
+                 (conversation-turn-state conversation) nil)
+           (conversation--append-input-item conversation item))
+      (unless durable-p
+        (conversation--delete-image-attachments attachments)))))
 
 (-> conversation-append-provider-item (conversation json-object) json-object)
 (defun conversation-append-provider-item (conversation item)
@@ -490,9 +556,28 @@ it described the uncompacted context."
     (when (integerp sequence)
       (setf (conversation-next-sequence conversation)
             (max (conversation-next-sequence conversation) (1+ sequence))))
+    (when (and (eq (first record) :message)
+               (getf (rest record) :images))
+      (let* ((content (getf (rest record) :content))
+             (attachments
+               (mapcar
+                (lambda (descriptor)
+                  (image-attachment-from-record
+                   descriptor
+                   (conversation-image-artifact-root conversation)))
+                (getf (rest record) :images))))
+        (unless (stringp content)
+          (error 'conversation-invariant-error
+                 :message "A persisted image message has invalid text content."
+                 :pathname (conversation-pathname conversation)
+                 :sequence sequence))
+        (conversation--append-input-item
+         conversation
+         (user-message-item content attachments))))
     (when (and (member (first record)
                        '(:message :provider-item :tool-result))
-               (stringp wire-json))
+               (stringp wire-json)
+               (not (getf (rest record) :images)))
       (let ((item (json-decode wire-json)))
         (unless (json-object-p item)
           (error 'conversation-invariant-error

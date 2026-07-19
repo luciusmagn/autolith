@@ -4,6 +4,7 @@ ql cl-base64 2026-01-01
 ql cffi 2026-01-01
 ql closer-mop 2026-01-01
 ql dexador 2026-01-01
+ql opticl 2022-02-20
 ql quri 2026-01-01
 ql serapeum 2026-01-01
 ql yason 2026-01-01

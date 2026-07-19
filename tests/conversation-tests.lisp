@@ -2,6 +2,98 @@
 
 ;;;; -- Subsystem Tests --
 
+(define-constant +test-conversation-tiny-png+
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+  :test #'string=
+  :documentation "A one-pixel PNG used to exercise durable image input.")
+
+(-> test-conversation--write-tiny-png (pathname) pathname)
+(defun test-conversation--write-tiny-png (pathname)
+  "Write the valid one-pixel test PNG to PATHNAME."
+  (ensure-directories-exist pathname)
+  (with-open-file (stream pathname
+                          :direction :output
+                          :if-exists :supersede
+                          :element-type '(unsigned-byte 8))
+    (write-sequence
+     (base64-string-to-usb8-array +test-conversation-tiny-png+)
+     stream))
+  pathname)
+
+(-> test-conversation-image-input () null)
+(defun test-conversation-image-input ()
+  "Test image validation, durable artifacts, projection, and replay."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (source (merge-pathnames "source image.png" root)))
+    (unwind-protect
+         (progn
+           (test-conversation--write-tiny-png source)
+           (test-assert
+            (equal (image-input-recognize-pasted-path
+                    (format nil "'~A'" (namestring source)))
+                   (truename source))
+            "quoted pasted image paths are recognized by file content")
+           (let* ((conversation
+                    (conversation-create configuration :identifier "images"))
+                  (input
+                    (user-message-input-create
+                     :text "Describe [Image #1]."
+                     :image-pathnames (list (truename source))))
+                  (item (conversation-append-user-message conversation input))
+                  (content (json-get item "content"))
+                  (records
+                    (conversation--read-records
+                     (conversation-pathname conversation)))
+                  (record (second records))
+                  (descriptor (first (getf (rest record) :images)))
+                  (artifact
+                    (merge-pathnames
+                     (getf descriptor :artifact)
+                     (conversation-image-artifact-root conversation))))
+             (test-assert (= (length content) 4)
+                          "one image contributes tags, image data, and user text")
+             (test-assert
+              (and (string= (json-get (aref content 0) "type") "input_text")
+                   (search "<image name=[Image #1]"
+                           (json-get (aref content 0) "text"))
+                   (string= (json-get (aref content 1) "type") "input_image")
+                   (uiop:string-prefix-p
+                    "data:image/png;base64,"
+                    (json-get (aref content 1) "image_url"))
+                   (string= (json-get (aref content 1) "detail") "high")
+                   (string= (json-get (aref content 2) "text") "</image>")
+                   (string= (json-get (aref content 3) "text")
+                            "Describe [Image #1]."))
+              "image messages use the current Codex Responses wire shape")
+             (test-assert (probe-file artifact)
+                          "conversation images are copied into private artifacts")
+             (test-assert
+              (not (search "data:image"
+                           (with-output-to-string (stream)
+                             (prin1 records stream))))
+              "conversation records never inline image bytes")
+             (let* ((loaded
+                      (conversation-load-by-id configuration "images"))
+                    (loaded-content
+                      (json-get (first (conversation-input-items loaded))
+                                "content")))
+               (test-assert
+                (string= (json-get (aref loaded-content 1) "image_url")
+                         (json-get (aref content 1) "image_url"))
+                "conversation replay reconstructs the exact provider image"))
+             (delete-file artifact)
+             (test-assert
+              (handler-case
+                  (progn
+                    (conversation-load-by-id configuration "images")
+                    nil)
+                (image-input-error (condition)
+                  (eq (image-input-error-stage condition) ':loading)))
+              "conversation replay rejects a missing image artifact")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-conversation-compaction () null)
 (defun test-conversation-compaction ()
   "Test summary records, projection replacement, and usage tracking."
@@ -203,6 +295,7 @@
 (-> test-conversation-persistence () null)
 (defun test-conversation-persistence ()
   "Test append-only conversation projection and incomplete-tail recovery."
+  (test-conversation-image-input)
   (test-conversation-interrupted-tool-call)
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration)))

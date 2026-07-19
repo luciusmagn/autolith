@@ -124,6 +124,7 @@ let
       cffi
       closer-mop
       dexador
+      opticl
       quri
       serapeum
       yason

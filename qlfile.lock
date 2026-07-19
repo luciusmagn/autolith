@@ -26,6 +26,10 @@
  (:class qlot/source/ql:source-ql
   :initargs (:%version "2026-01-01")
   :version "ql-2026-01-01"))
+("opticl" .
+ (:class qlot/source/ql:source-ql
+  :initargs (:%version "2022-02-20")
+  :version "ql-2022-02-20"))
 ("quri" .
  (:class qlot/source/ql:source-ql
   :initargs (:%version "2026-01-01")

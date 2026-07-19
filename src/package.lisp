@@ -3,7 +3,9 @@
   (:import-from #:alexandria
                 #:define-constant)
   (:import-from #:cl-base64
-                #:base64-string-to-string)
+                #:base64-string-to-usb8-array
+                #:base64-string-to-string
+                #:usb8-array-to-base64-string)
   (:import-from #:cl-exec-sandbox
                 #:external-sandbox-policy
                 #:run-sandboxed
@@ -77,7 +79,21 @@
                 #:response-body
                 #:response-headers
                 #:response-status)
+  (:import-from #:opticl
+                #:8-bit-gray-alpha-image
+                #:8-bit-gray-image
+                #:8-bit-rgb-image
+                #:8-bit-rgba-image
+                #:coerce-image
+                #:gray-alpha-image
+                #:gray-image
+                #:read-image-stream
+                #:resize-image
+                #:rgb-image
+                #:rgba-image
+                #:write-png-file)
   (:import-from #:quri
+                #:url-decode
                 #:url-encode-params)
   (:import-from #:serapeum
                 #:->)
