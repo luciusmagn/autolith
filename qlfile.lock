@@ -44,8 +44,8 @@
   :version "ql-2025-06-22"))
 ("clinedi" .
  (:class qlot/source/git:source-git
-  :initargs (:remote-url "https://github.com/luciusmagn/clinedi.git" :ref "760cf8ac47b72dee36dc121bc09f8fb5ffa5dc2b")
-  :version "git-760cf8ac47b72dee36dc121bc09f8fb5ffa5dc2b"))
+  :initargs (:remote-url "https://github.com/luciusmagn/clinedi.git" :ref "e6f115e5bf2f225f985cf7314ffcadbd938fcbaf")
+  :version "git-e6f115e5bf2f225f985cf7314ffcadbd938fcbaf"))
 ("cl-exec-sandbox" .
  (:class qlot/source/git:source-git
   :initargs (:remote-url "https://github.com/luciusmagn/cl-exec-sandbox.git" :ref "8c47a1dadb64eba1629742ef6b43789ed7d73b36")

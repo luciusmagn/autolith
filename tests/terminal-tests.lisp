@@ -422,6 +422,7 @@
                         (string escape)
                         (string #\Return)
                         (format nil "~C[13;2u" escape)
+                        (format nil "~C[13;5u" escape)
                         (string (code-char 8))
                         (format nil "~C[127;5u" escape)
                         (format nil "~C[1;5D" escape)
@@ -448,6 +449,8 @@
                  "legacy Alt-Enter inserts a newline")
     (test-assert (eq (terminal-read-event terminal) :insert-newline)
                  "enhanced Shift-Enter inserts a newline")
+    (test-assert (eq (terminal-read-event terminal) :insert-newline)
+                 "enhanced Ctrl-Enter inserts a newline")
     (test-assert (eq (terminal-read-event terminal) :kill-word)
                  "raw Ctrl-Backspace requests word deletion")
     (test-assert (eq (terminal-read-event terminal) :kill-word)
@@ -456,6 +459,26 @@
                  "Ctrl-Left requests backward word movement")
     (test-assert (eq (terminal-read-event terminal) :word-right)
                  "Ctrl-Right requests forward word movement"))
+  (let* ((output (make-string-output-stream))
+         (terminal
+           (make-instance 'stream-terminal
+                          :input-stream (make-string-input-stream "")
+                          :output-stream output
+                          :input-file-descriptor 0)))
+    (terminal--enable-input-protocols terminal)
+    (terminal--disable-input-protocols terminal)
+    (let ((controls (get-output-stream-string output)))
+      (test-assert (and (search (format nil "~C[>1u"
+                                        +terminal-escape-character+)
+                                controls)
+                        (search (format nil "~C[>4;2m"
+                                        +terminal-escape-character+)
+                                controls))
+                   "terminal startup requests distinguishable modified keys")
+      (test-assert (search (format nil "~C[<u"
+                                   +terminal-escape-character+)
+                           controls)
+                   "terminal shutdown restores ordinary keyboard reporting")))
   nil)
 
 (-> test-terminal-live-region-layout () null)

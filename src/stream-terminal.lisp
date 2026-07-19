@@ -32,6 +32,24 @@
   (finish-output (stream-terminal-output-stream terminal))
   nil)
 
+(-> terminal--enable-input-protocols (stream-terminal) null)
+(defun terminal--enable-input-protocols (terminal)
+  "Enable distinguishable modified keys and bracketed paste on TERMINAL."
+  (enable-keyboard-enhancement
+   :stream (stream-terminal-output-stream terminal))
+  (terminal--write terminal +terminal-bracketed-paste-enable+)
+  (terminal-flush terminal)
+  nil)
+
+(-> terminal--disable-input-protocols (stream-terminal) null)
+(defun terminal--disable-input-protocols (terminal)
+  "Restore ordinary keyboard reporting and paste handling on TERMINAL."
+  (terminal--write terminal +terminal-bracketed-paste-disable+)
+  (disable-keyboard-enhancement
+   :stream (stream-terminal-output-stream terminal))
+  (terminal-flush terminal)
+  nil)
+
 (defmethod terminal-input-ready-p ((terminal stream-terminal))
   "Return true when TERMINAL input can be consumed without blocking."
   (or (not (terminal-interactive-p terminal))
@@ -88,8 +106,7 @@
                     (terminal-interactive-p terminal) t
                     (terminal-styled-p terminal) (terminal-environment-styling-p)
                     (terminal-started-p terminal) t)
-              (terminal--write terminal +terminal-bracketed-paste-enable+)
-              (terminal-flush terminal))
+              (terminal--enable-input-protocols terminal))
           (error (condition)
             (ignore-errors
               (sb-posix:tcsetattr
@@ -114,8 +131,7 @@
     (when (terminal-interactive-p terminal)
       (handler-case
           (progn
-            (terminal--write terminal +terminal-bracketed-paste-disable+)
-            (terminal-flush terminal))
+            (terminal--disable-input-protocols terminal))
         (error (condition)
           (setf failure condition)))
       (when saved-mode

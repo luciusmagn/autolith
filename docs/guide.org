@@ -176,10 +176,11 @@ Tool details, Markdown tables, and interactive picker descriptions use the same
 terminal-cell-aware column allocator. Long labels and values shrink or wrap
 within the current width instead of relying on tabs or fixed character columns.
 
-Enter submits the complete input. Alt-Enter inserts a newline. Shift-Enter also
-inserts a newline when the terminal reports modified keys with CSI-u or
-modifyOtherKeys sequences. Up and Down preserve the preferred terminal cell
-column across explicit and wrapped input rows, falling back to history only at
+Enter submits the complete input. Shift-Enter, Ctrl-Enter, and Alt-Enter insert
+a newline. Autolith enables CSI-u and modifyOtherKeys reporting while it owns the
+terminal and restores ordinary keyboard reporting on exit. Up and Down preserve
+the preferred terminal cell column across explicit and wrapped input rows,
+falling back to history only at
 the first or last visual row.
 
 Paste or drag one or more local PNG, JPEG, GIF, or WebP pathnames into the
