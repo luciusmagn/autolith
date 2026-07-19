@@ -118,6 +118,16 @@
                       (pathname (string-trim '(#\Newline #\Return) output)))))
           (and pathname (probe-file pathname))))))
 
+
+(-> release-archive--colorlisp-library () pathname)
+(defun release-archive--colorlisp-library ()
+  "Return the configured or materialized ColorLisp native library."
+  (let ((configured (uiop:getenv "AUTOLITH_RELEASE_COLORLISP_LIBRARY")))
+    (pathname
+     (if (and configured (plusp (length configured)))
+         configured
+         (native-library-path)))))
+
 (-> release-archive--copy (pathname pathname) null)
 (defun release-archive--copy (source target)
   "Copy SOURCE recursively and without dereferencing it to TARGET."
@@ -218,7 +228,7 @@
   "Build a deterministic release archive and checksum from SOURCE-ROOT.
 
 Return the published archive and checksum pathnames. Environment overrides name
-the managed runtime, matching SBCL source, fff library, and sandbox helper."
+the managed runtime, matching SBCL source, native libraries, and sandbox helper."
   (handler-case
       (let* ((source-root
                (uiop:ensure-directory-pathname
@@ -250,6 +260,7 @@ the managed runtime, matching SBCL source, fff library, and sandbox helper."
                (release-archive--environment-pathname
                 "AUTOLITH_RELEASE_FFF_LIBRARY"
                 (merge-pathnames "autolith/native/fff/libfff_c.so" data-home)))
+             (colorlisp-library (release-archive--colorlisp-library))
              (sandbox-helper (release-archive--sandbox-helper source-root))
              (version (release-builder--source-version source-root))
              (tag (format nil "v~A" version))
@@ -281,6 +292,10 @@ the managed runtime, matching SBCL source, fff library, and sandbox helper."
           (error 'release-archive-error
                  :stage ':prerequisites
                  :cause "The private fff library is absent; run ./script/bootstrap."))
+        (unless (probe-file colorlisp-library)
+          (error 'release-archive-error
+                 :stage ':prerequisites
+                 :cause "The private ColorLisp library is absent; run ./script/bootstrap."))
         (unless sandbox-helper
           (error 'release-archive-error
                  :stage ':prerequisites
@@ -358,6 +373,10 @@ the managed runtime, matching SBCL source, fff library, and sandbox helper."
                  (release-archive--copy
                   fff-library (merge-pathnames "lib/libfff_c.so" release-root))
                  (release-archive--copy
+                  colorlisp-library
+                  (merge-pathnames "lib/libcolorlisp-tree-sitter.so"
+                                   release-root))
+                 (release-archive--copy
                   sandbox-helper
                   (merge-pathnames "libexec/cl-exec-sandbox-helper" release-root))
                  (release-archive--copy
@@ -372,7 +391,10 @@ the managed runtime, matching SBCL source, fff library, and sandbox helper."
                  (release-archive--run
                   (list "chmod" "644"
                         (namestring
-                         (merge-pathnames "lib/libfff_c.so" release-root))))
+                         (merge-pathnames "lib/libfff_c.so" release-root))
+                        (namestring
+                         (merge-pathnames "lib/libcolorlisp-tree-sitter.so"
+                                          release-root))))
                  (release-archive--write-record
                   (merge-pathnames "RELEASE" release-root)
                   :version version :tag tag :commit commit)

@@ -14,6 +14,7 @@ runtime_source_root=$release_root/libexec/sbcl-source
 sbcl_command=$runtime_root/bin/sbcl
 sandbox_helper=$release_root/libexec/cl-exec-sandbox-helper
 fff_library=$release_root/lib/libfff_c.so
+colorlisp_library=$release_root/lib/libcolorlisp-tree-sitter.so
 home=${HOME:-}
 data_home=${XDG_DATA_HOME:-$home/.local/share}
 state_home=${XDG_STATE_HOME:-$home/.local/state}
@@ -194,12 +195,14 @@ semantic_version_valid_p "$release_version" || fail "RELEASE has an invalid vers
   fail "the bundled Autolith source or dependencies are missing."
 [[ -x $sandbox_helper ]] || fail "the private sandbox helper is missing."
 [[ -f $fff_library ]] || fail "the private search library is missing."
+[[ -f $colorlisp_library ]] || fail "the private syntax library is missing."
 command -v git >/dev/null 2>&1 || fail "Git is required."
 command -v bwrap >/dev/null 2>&1 || fail "Bubblewrap is required."
 
 export AUTOLITH_SBCL=$sbcl_command
 export AUTOLITH_SBCL_SOURCE_ROOT=$runtime_source_root
 export AUTOLITH_FFF_LIBRARY=$fff_library
+export COLORLISP_NATIVE_LIBRARY=$colorlisp_library
 export AUTOLITH_ACTIVE_CORE=$active_core
 export AUTOLITH_RECOVERY_CORE=$recovery_core
 export CL_EXEC_SANDBOX_BWRAP

@@ -91,6 +91,7 @@
                       "libexec/autolith/autolith.asd"
                       "libexec/sbcl-source/version.lisp-expr"
                       "lib/libfff_c.so"
+                      "lib/libcolorlisp-tree-sitter.so"
                       "runtime/bin/sbcl"
                       "libexec/cl-exec-sandbox-helper"))
     (release-script-tests--write-file
@@ -302,6 +303,19 @@ printf '(:ACTIVE-IMAGE :VERSION 1\\n)\\n' > \"$active/manifest.sexp\"
                                               :separator '(#\Newline #\Return))
                            :test #'string=)
                      (format nil "release probe reports ~A" line))))
+    (let ((library
+            (merge-pathnames "lib/libcolorlisp-tree-sitter.so" release-root)))
+      (delete-file library)
+      (multiple-value-bind (output error-output status)
+          (release-script-tests--run
+           (list (namestring launcher) "--autolith-release-probe")
+           :environment environment
+           :ignore-error-status t
+           :output nil)
+        (declare (ignore output error-output))
+        (test-assert (not (eql status 0))
+                     "the release launcher requires its private syntax library"))
+      (release-script-tests--write-file library ""))
     (release-script-tests--record
      (merge-pathnames "RELEASE" release-root)
      "v0.12.0")

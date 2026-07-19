@@ -67,6 +67,7 @@
                 #:colorlisp-error
                 #:highlight-segments
                 #:language-detect
+                #:native-library-path
                 #:segment-category
                 #:segment-text)
   (:import-from #:bordeaux-threads

@@ -44,6 +44,10 @@
         (format t "~&Building the private fff search library.~%")
         (finish-output)
         (load (merge-pathnames "script/build-fff.lisp" source-root))
+        (format t "~&Building the private ColorLisp syntax library.~%")
+        (finish-output)
+        (asdf:load-system :colorlisp)
+        (uiop:symbol-call '#:colorlisp '#:native-library-path)
         (format t "~&Building the pristine recovery image.~%")
         (finish-output)
         (uiop:run-program
@@ -64,4 +68,4 @@
          :input :interactive
          :output :interactive
          :error-output :interactive)
-        (format t "~&Autolith dependencies, private search library, recovery image, and fast startup image are installed.~%")))))
+        (format t "~&Autolith dependencies, private native libraries, recovery image, and fast startup image are installed.~%")))))
