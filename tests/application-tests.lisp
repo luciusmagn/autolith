@@ -1344,6 +1344,38 @@
                "command-line help documents deliberate source startup")
   (test-assert (not (search "--resume" (main-usage)))
                "command-line help omits the removed --resume option")
+  (test-assert (search "--image" (main-usage))
+               "command-line help documents initial local images")
+  (test-assert
+   (equal (main--image-values
+           '("-i" "one.png,two.png" "--image=three.png"
+             "--image" "four.png"))
+          '("one.png" "two.png" "three.png" "four.png"))
+   "repeatable image options preserve comma-delimited command-line order")
+  (test-assert
+   (handler-case
+       (progn
+         (main--image-values '("--image"))
+         nil)
+     (configuration-error ()
+       t))
+   "a command-line image option requires its pathname")
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (image (merge-pathnames "initial.png" root)))
+    (unwind-protect
+         (progn
+           (test-conversation--write-tiny-png image)
+           (let ((input
+                   (main--initial-image-input
+                    (list "--image" (namestring image)))))
+             (test-assert
+              (and (typep input 'user-message-input)
+                   (string= (user-message-input-text input) "[Image #1]")
+                   (equal (user-message-input-image-pathnames input)
+                          (list (truename image))))
+              "command-line images preload a labelled composer draft")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration)))
     (unwind-protect

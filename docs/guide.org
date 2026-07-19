@@ -182,6 +182,17 @@ modifyOtherKeys sequences. Up and Down preserve the preferred terminal cell
 column across explicit and wrapped input rows, falling back to history only at
 the first or last visual row.
 
+Paste or drag one or more local PNG, JPEG, GIF, or WebP pathnames into the
+composer to attach images. Autolith replaces each pathname with =[Image #N]=,
+keeps the attachment through multiline editing, history, queuing, and steering,
+and removes it if its label is deleted. Surviving labels are renumbered before
+submission. Start with repeatable =-i FILE= or =--image FILE= options to preload
+images into the composer; comma-separated values are also accepted. Images are
+validated and resized in Common Lisp to the current Codex high-detail limits.
+Conversation logs retain only portable descriptors, while private binary
+artifacts live under the Autolith data root and provider requests reconstruct
+their base64 data URLs.
+
 The prompt remains editable while Autolith streams a response or runs tools.
 Enter steers the active turn at its next tool boundary. Tab queues the draft as
 a later follow-up; the live region shows bounded previews of steering and queued

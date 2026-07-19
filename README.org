@@ -33,6 +33,7 @@ and the user can grant commands full access for a session.
 - A responsive primary-screen terminal interface with ordinary scrollback.
 - Multiline editing and reusable completion widgets provided by Clinedi.
 - Input remains editable while model responses and tools are running.
+- Local PNG, JPEG, GIF, and WebP input with numbered composer labels.
 - Persistent, opt-in provider-visible reasoning summaries with =/trace on=.
 - Append-only portable conversation files with exact resume commands.
 - Workspace and global persistent memories with ranked request-local recall.

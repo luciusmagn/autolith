@@ -155,6 +155,14 @@ Autolith owns:
 Provider-specific authentication and transport behavior are isolated
 behind a replaceable interface.
 
+Local image input follows the provider's Codex-compatible content shape. The
+terminal composer represents attachments with numbered =[Image #N]= labels and
+submits each image before the accompanying text. Supported local PNG, JPEG,
+GIF, and WebP data is validated and reduced to the provider's high-detail image
+limits before use. Portable conversation records contain image descriptors,
+not inline binary or base64 data. Immutable private artifacts remain under the
+data root and are reconstructed into request-local data URLs during replay.
+
 Credentials are stored outside:
 
 - Saved Lisp cores.

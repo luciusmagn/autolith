@@ -552,15 +552,36 @@
   "Return the supported image named by pasted TEXT, or NIL."
   (handler-case
       (let ((pathname (image-input-normalize-pasted-path text)))
-        (when pathname
-          (multiple-value-bind (format width height bytes)
-              (image-input--inspect pathname)
-            (declare (ignore format bytes))
-            (and (plusp width) (plusp height) pathname))))
+        (and pathname (image-input-validate-pathname pathname)))
     (image-input-error ()
       nil)
     (error ()
       nil)))
+
+(-> image-input-validate-pathname ((or string pathname)) pathname)
+(defun image-input-validate-pathname (location)
+  "Return LOCATION as an absolute supported image pathname, or signal."
+  (let ((pathname
+          (handler-case
+              (uiop:ensure-pathname location
+                                    :defaults (uiop:getcwd)
+                                    :ensure-absolute t
+                                    :want-non-wild t)
+            (error (condition)
+              (image-input--error
+               (pathname location)
+               ':recognition
+               (format nil "Image location ~A is not a valid local pathname."
+                       location)
+               condition)))))
+    (multiple-value-bind (format width height bytes)
+        (image-input--inspect pathname)
+      (declare (ignore format bytes))
+      (if (and (plusp width) (plusp height))
+          (truename pathname)
+          (image-input--error
+           pathname ':recognition
+           (format nil "Image ~A has no valid pixel dimensions." pathname))))))
 
 
 ;;;; -- Durable Projection --

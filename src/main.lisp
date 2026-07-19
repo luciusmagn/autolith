@@ -213,9 +213,10 @@
         nil)))
 
 (-> application-run
-    (application &key (:initial-command (option string)))
+    (application &key (:initial-command (option string))
+                      (:initial-input (option user-message-input)))
     null)
-(defun application-run (application &key initial-command)
+(defun application-run (application &key initial-command initial-input)
   "Run APPLICATION with responsive input, always restoring terminal and workers."
   (let ((ui (application-ui application))
         (worker (application-worker application))
@@ -240,6 +241,8 @@
                              (namestring (first failure))
                              (rest failure)))))
            (application-render-records application)
+           (when initial-input
+             (terminal-ui-set-input ui initial-input))
            (setf input-controller
                  (application-input-controller-create application))
            (when initial-command
@@ -299,6 +302,7 @@
 (defun main-usage ()
   "Return the command-line usage text."
   "Usage: autolith [--from-source] [--immutable]
+       autolith [--from-source] [--immutable] [-i FILE | --image FILE]...
        autolith [--from-source] [--immutable] resume [ID]
        autolith --auth
        autolith --version
@@ -328,6 +332,53 @@
                        (not (uiop:string-prefix-p "-" candidate))
                        candidate)))
         (values nil nil))))
+
+(-> main--image-values (list) list)
+(defun main--image-values (arguments)
+  "Return image value strings carried by repeatable -i and --image options."
+  (let ((values nil)
+        (remaining arguments))
+    (loop while remaining
+          for argument = (pop remaining)
+          do (cond
+               ((or (string= argument "-i")
+                    (string= argument "--image"))
+                (unless remaining
+                  (error 'configuration-error
+                         :message (format nil "~A requires an image pathname."
+                                          argument)))
+                (let ((value (pop remaining)))
+                  (when (uiop:string-prefix-p "-" value)
+                    (error 'configuration-error
+                           :message (format nil
+                                            "~A requires an image pathname."
+                                            argument)))
+                  (setf values
+                        (nconc values
+                               (uiop:split-string value :separator '(#\,))))))
+               ((uiop:string-prefix-p "--image=" argument)
+                (setf values
+                      (nconc values
+                             (uiop:split-string
+                              (subseq argument (length "--image="))
+                              :separator '(#\,)))))))
+    (when (some (lambda (value) (not (non-empty-string-p value))) values)
+      (error 'configuration-error
+             :message "Every --image value must name a local image."))
+    values))
+
+(-> main--initial-image-input (list) (option user-message-input))
+(defun main--initial-image-input (arguments)
+  "Return a labelled initial composer draft for ARGUMENTS' local images."
+  (let ((pathnames
+          (mapcar #'image-input-validate-pathname
+                  (main--image-values arguments))))
+    (when pathnames
+      (user-message-input-create
+       :text (format nil "~{~A~^ ~}"
+                     (loop for number from 1 to (length pathnames)
+                           collect (terminal-ui--image-label number)))
+       :image-pathnames pathnames))))
 
 (-> main-dispatch (list) null)
 (defun main-dispatch (arguments)
@@ -378,7 +429,8 @@
                *active-application*
                :initial-command (and resume-requested-p
                                      (null resume-id)
-                                     "/resume"))
+                                     "/resume")
+               :initial-input (main--initial-image-input arguments))
             (rollback-requested (condition)
               (format *error-output*
                       "Autolith is rolling back to retained generation ~A.~%"
