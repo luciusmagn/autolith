@@ -63,6 +63,11 @@
      "configuration clones preserve immutable mode")
     (test-assert (string= (configuration-wire-effort configuration) "max")
                  "ultra maps to the provider max effort")
+    (test-assert
+     (string= (configuration-wire-effort
+               (configuration-with-reasoning-effort configuration "none"))
+              "none")
+     "none is passed through as a provider reasoning effort")
     (test-assert (= (json-get (json-object "answer" 42) "answer") 42)
                  "JSON object access preserves values")
     (test-assert (vectorp (json-decode "[1,2,3]"))

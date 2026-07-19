@@ -178,6 +178,27 @@
            (test-assert
             (string= (json-get (json-get request "reasoning") "effort") "max")
             "the provider request maps Ultra reasoning to Max")
+           (dolist (model +supported-models+)
+             (dolist (effort +supported-reasoning-efforts+)
+               (let* ((selected
+                        (configuration-with-reasoning-effort
+                         (configuration-with-model configuration model)
+                         effort))
+                      (selected-provider (provider-create selected))
+                      (selected-request
+                        (provider-request-object
+                         selected-provider conversation schemas))
+                      (wire-effort (if (string= effort "ultra")
+                                       "max"
+                                       effort)))
+                 (test-assert
+                  (and (string= (json-get selected-request "model") model)
+                       (string= (json-get
+                                 (json-get selected-request "reasoning")
+                                 "effort")
+                                wire-effort))
+                  (format nil "~A at ~A has the correct request identity"
+                          model effort)))))
            (multiple-value-bind (value present-p)
                (gethash "summary" (json-get request "reasoning"))
              (declare (ignore value))

@@ -1678,7 +1678,7 @@
               (string= (preference-state-reasoning-effort preferences) "low")
               "switching models preserves the global effort default"))
            (setf (scripted-terminal-events terminal)
-                 (list :history-next :submit))
+                 (list :history-next :history-next :submit))
            (with-terminal-ui (active-ui ui)
              (declare (ignore active-ui))
              (test-assert

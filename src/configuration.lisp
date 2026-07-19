@@ -29,7 +29,7 @@
   :documentation "The public OAuth client identifier used by Codex-compatible clients.")
 
 (defparameter +supported-reasoning-efforts+
-  '("low" "medium" "high" "xhigh" "max" "ultra")
+  '("none" "low" "medium" "high" "xhigh" "max" "ultra")
   "Reasoning effort names accepted by Autolith configuration.")
 
 (defparameter +supported-web-search-modes+
