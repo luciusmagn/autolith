@@ -29,33 +29,39 @@
                (symbol-value library-directories)
                :test #'equal)))
   (uiop:symbol-call '#:ql '#:quickload :qlot :silent t)
-  (uiop:chdir source-root)
-  (format t "~&Materializing locked Lisp dependencies.~%")
-  (finish-output)
-  (uiop:symbol-call '#:qlot '#:install)
-  (load (merge-pathnames ".qlot/setup.lisp" source-root))
-  (format t "~&Building the private command sandbox helper.~%")
-  (finish-output)
-  (load (merge-pathnames "script/build-sandbox.lisp" source-root))
-  (format t "~&Building the private fff search library.~%")
-  (finish-output)
-  (load (merge-pathnames "script/build-fff.lisp" source-root))
-  (format t "~&Building the pristine recovery image.~%")
-  (finish-output)
-  (uiop:run-program (list sbcl-command
-                          "--script"
-                          (namestring (merge-pathnames "script/build-recovery.lisp"
-                                                       source-root)))
-                    :input :interactive
-                    :output :interactive
-                    :error-output :interactive)
-  (format t "~&Building the fast startup image.~%")
-  (finish-output)
-  (uiop:run-program (list sbcl-command
-                          "--script"
-                          (namestring (merge-pathnames "script/build-active.lisp"
-                                                       source-root)))
-                    :input :interactive
-                    :output :interactive
-                    :error-output :interactive)
-  (format t "~&Autolith dependencies, private search library, recovery image, and fast startup image are installed.~%"))
+  (let ((qlot-project-root (find-symbol "*PROJECT-ROOT*" "QLOT")))
+    (unless qlot-project-root
+      (error "The loaded Qlot does not expose its project root."))
+    (progv (list qlot-project-root) (list source-root)
+      (uiop:with-current-directory (source-root)
+        (format t "~&Materializing locked Lisp dependencies.~%")
+        (finish-output)
+        (uiop:symbol-call '#:qlot '#:install)
+        (load (merge-pathnames ".qlot/setup.lisp" source-root))
+        (format t "~&Building the private command sandbox helper.~%")
+        (finish-output)
+        (load (merge-pathnames "script/build-sandbox.lisp" source-root))
+        (format t "~&Building the private fff search library.~%")
+        (finish-output)
+        (load (merge-pathnames "script/build-fff.lisp" source-root))
+        (format t "~&Building the pristine recovery image.~%")
+        (finish-output)
+        (uiop:run-program
+         (list sbcl-command
+               "--script"
+               (namestring (merge-pathnames "script/build-recovery.lisp"
+                                            source-root)))
+         :input :interactive
+         :output :interactive
+         :error-output :interactive)
+        (format t "~&Building the fast startup image.~%")
+        (finish-output)
+        (uiop:run-program
+         (list sbcl-command
+               "--script"
+               (namestring (merge-pathnames "script/build-active.lisp"
+                                            source-root)))
+         :input :interactive
+         :output :interactive
+         :error-output :interactive)
+        (format t "~&Autolith dependencies, private search library, recovery image, and fast startup image are installed.~%")))))
