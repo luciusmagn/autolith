@@ -99,6 +99,15 @@ recall evidence and deeper read tools, but its single-agent runtime does not
 need a job database, background extraction model calls, Git-backed consolidation
 workspace, or generated Markdown hierarchy.
 
+** =agendas.lisp= and =agenda-tools.lisp=
+
+Own the atomic versioned workspace agenda file, legacy migration, stable item
+identifiers, memory attachments, repository transport, and the =agenda.*= tool
+surface. An item stores only stable memory identifiers, so replacing the
+append-only memory record changes the value behind every attachment without
+rewriting agenda state. Transport preserves attachments and unions them when
+otherwise duplicate items merge.
+
 ** =provider.lisp=
 
 Owns the replaceable model-provider protocol, Responses Lite request encoding,

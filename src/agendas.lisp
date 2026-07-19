@@ -2,14 +2,23 @@
 
 ;;;; -- Workspace Agendas --
 
-(define-constant +agenda-version+ 1
+(define-constant +agenda-version+ 2
   :documentation "The readable workspace-agenda state format version.")
+
+(define-constant +agenda-legacy-version+ 1
+  :documentation "The agenda format version without persistent-memory links.")
 
 (define-constant +agenda-maximum-items+ 32
   :documentation "The maximum number of items retained in one workspace agenda.")
 
 (define-constant +agenda-item-text-limit+ 500
   :documentation "The maximum character count of one agenda item.")
+
+(define-constant +agenda-item-memory-limit+ 16
+  :documentation "The maximum memory identifiers linked to one agenda item.")
+
+(define-constant +agenda-memory-identifier-limit+ 128
+  :documentation "The maximum characters in one linked memory identifier.")
 
 (deftype agenda-status ()
   "The lifecycle or informational role of one agenda item."
@@ -40,7 +49,13 @@
     :initarg :updated-at
     :reader agenda-item-updated-at
     :type timestamp
-    :documentation "The universal time at which this item last changed."))
+    :documentation "The universal time at which this item last changed.")
+   (memory-identifiers
+    :initarg :memory-identifiers
+    :initform nil
+    :reader agenda-item-memory-identifiers
+    :type list
+    :documentation "Stable persistent-memory identifiers attached to this item."))
   (:documentation "One stable task, thought, or note in a workspace agenda."))
 
 (defclass workspace-agenda ()
@@ -66,14 +81,32 @@
     :documentation "Every known workspace agenda, ordered by directory key."))
   (:documentation "Validated user-specific agendas for all known workspaces."))
 
-(-> agenda--item-form-p (t) boolean)
-(defun agenda--item-form-p (form)
-  "Return true when FORM is one complete portable agenda item."
+(-> agenda--memory-identifiers-p (t) boolean)
+(defun agenda--memory-identifiers-p (identifiers)
+  "Return true when IDENTIFIERS is a bounded unique memory-id list."
+  (handler-case
+      (let ((length (list-length identifiers)))
+        (and (integerp length)
+             (<= length +agenda-item-memory-limit+)
+             (every (lambda (identifier)
+                      (and (non-empty-string-p identifier)
+                           (<= (length identifier)
+                               +agenda-memory-identifier-limit+)))
+                    identifiers)
+             (= length
+                (length (remove-duplicates identifiers :test #'string=)))))
+    (type-error ()
+      nil)))
+
+(-> agenda--item-form-p (t integer) boolean)
+(defun agenda--item-form-p (form version)
+  "Return true when FORM is one complete portable agenda item for VERSION."
   (handler-case
       (and (consp form)
            (eq (first form) ':item)
            (let ((properties (rest form)))
-             (and (= (length properties) 10)
+             (and (= (length properties)
+                     (if (= version +agenda-legacy-version+) 10 12))
                   (every (lambda (property)
                            (readable-state-property-present-p properties
                                                               property))
@@ -84,13 +117,18 @@
                          (<= (length text) +agenda-item-text-limit+)))
                   (typep (getf properties :status) 'agenda-status)
                   (typep (getf properties :created-at) 'timestamp)
-                  (typep (getf properties :updated-at) 'timestamp))))
+                  (typep (getf properties :updated-at) 'timestamp)
+                  (or (= version +agenda-legacy-version+)
+                      (and (readable-state-property-present-p
+                            properties :memory-ids)
+                           (agenda--memory-identifiers-p
+                            (getf properties :memory-ids)))))))
     (error ()
       nil)))
 
-(-> agenda--record-form-p (t) boolean)
-(defun agenda--record-form-p (form)
-  "Return true when FORM is one complete portable workspace agenda."
+(-> agenda--record-form-p (t integer) boolean)
+(defun agenda--record-form-p (form version)
+  "Return true when FORM is one complete portable workspace agenda for VERSION."
   (handler-case
       (and (consp form)
            (eq (first form) ':agenda)
@@ -102,7 +140,9 @@
                   (non-empty-string-p (getf properties :directory))
                   (listp items)
                   (<= (length items) +agenda-maximum-items+)
-                  (every #'agenda--item-form-p items)
+                  (every (lambda (item)
+                           (agenda--item-form-p item version))
+                         items)
                   (= (length (remove-duplicates
                               (mapcar (lambda (item)
                                         (getf (rest item) :id))
@@ -116,41 +156,48 @@
 (defun agenda--form-p (form)
   "Return true when FORM is one supported workspace-agenda state."
   (handler-case
-      (and (listp form)
-           (= (length form) 5)
-           (eq (first form) ':agendas)
-           (eq (second form) ':version)
-           (= (third form) +agenda-version+)
-           (eq (fourth form) ':records)
-           (listp (fifth form))
-           (every #'agenda--record-form-p (fifth form))
-           (= (length (remove-duplicates
-                       (mapcar (lambda (record)
-                                 (getf (rest record) :directory))
-                               (fifth form))
-                       :test #'string=))
-              (length (fifth form))))
+      (let ((version (and (listp form) (third form))))
+        (and (= (length form) 5)
+             (eq (first form) ':agendas)
+             (eq (second form) ':version)
+             (member version (list +agenda-legacy-version+ +agenda-version+))
+             (eq (fourth form) ':records)
+             (listp (fifth form))
+             (every (lambda (record)
+                      (agenda--record-form-p record version))
+                    (fifth form))
+             (= (length (remove-duplicates
+                         (mapcar (lambda (record)
+                                   (getf (rest record) :directory))
+                                 (fifth form))
+                         :test #'string=))
+                (length (fifth form)))))
     (error ()
       nil)))
 
-(-> agenda--item-form->item (list) agenda-item)
-(defun agenda--item-form->item (form)
-  "Return the agenda item represented by validated FORM."
+(-> agenda--item-form->item (list integer) agenda-item)
+(defun agenda--item-form->item (form version)
+  "Return the agenda item represented by validated FORM and VERSION."
   (let ((properties (rest form)))
     (make-instance 'agenda-item
                    :identifier (copy-seq (getf properties :id))
                    :text (copy-seq (getf properties :text))
                    :status (getf properties :status)
                    :created-at (getf properties :created-at)
-                   :updated-at (getf properties :updated-at))))
+                   :updated-at (getf properties :updated-at)
+                   :memory-identifiers
+                   (if (= version +agenda-legacy-version+)
+                       nil
+                       (copy-list (getf properties :memory-ids))))))
 
-(-> agenda--record-form->record (list) workspace-agenda)
-(defun agenda--record-form->record (form)
-  "Return the workspace agenda represented by validated FORM."
+(-> agenda--record-form->record (list integer) workspace-agenda)
+(defun agenda--record-form->record (form version)
+  "Return the workspace agenda represented by validated FORM and VERSION."
   (let ((properties (rest form)))
     (make-instance 'workspace-agenda
                    :directory (copy-seq (getf properties :directory))
-                   :items (mapcar #'agenda--item-form->item
+                   :items (mapcar (lambda (item)
+                                    (agenda--item-form->item item version))
                                   (getf properties :items)))))
 
 (-> agenda--sort-records (list) list)
@@ -180,7 +227,9 @@
              'agenda-state
              :records
              (agenda--sort-records
-              (mapcar #'agenda--record-form->record (fifth form)))))
+              (mapcar (lambda (record)
+                        (agenda--record-form->record record (third form)))
+                      (fifth form)))))
         (agenda-error (condition)
           (error condition))
         (error (cause)
@@ -210,7 +259,8 @@
         :text (agenda-item-text item)
         :status (agenda-item-status item)
         :created-at (agenda-item-created-at item)
-        :updated-at (agenda-item-updated-at item)))
+        :updated-at (agenda-item-updated-at item)
+        :memory-ids (agenda-item-memory-identifiers item)))
 
 (-> agenda--record->form (workspace-agenda) list)
 (defun agenda--record->form (record)
@@ -312,10 +362,15 @@ when REQUIRE-EXISTING-P is false, but it must still name an absolute path."
                  instruction.~2%~{~A~^~%~}"
                 (mapcar
                  (lambda (item)
-                   (format nil "- [~(~A~)] ~A  ~A"
+                   (format nil "- [~(~A~)] ~A  ~A~@[  memory_ids: ~A~]"
                            (agenda-item-status item)
                            (agenda-item-identifier item)
-                           (json-encode (agenda-item-text item))))
+                           (json-encode (agenda-item-text item))
+                           (and (agenda-item-memory-identifiers item)
+                                (json-encode
+                                 (coerce
+                                  (agenda-item-memory-identifiers item)
+                                  'vector)))))
                  items))
         "Current workspace agenda: empty.")))
 
@@ -348,12 +403,45 @@ when REQUIRE-EXISTING-P is false, but it must still name an absolute path."
            :cause nil))
   (copy-seq text))
 
+(-> agenda--validate-memory-identifiers (configuration t) list)
+(defun agenda--validate-memory-identifiers (configuration identifiers)
+  "Return copied active memory IDENTIFIERS or signal an agenda failure."
+  (unless (agenda--memory-identifiers-p identifiers)
+    (error 'agenda-error
+           :message (format nil
+                            "Agenda memory-ids must be a unique list of at most ~D bounded strings."
+                            +agenda-item-memory-limit+)
+           :pathname (configuration-agenda-path configuration)
+           :operation ':validate-item
+           :cause nil))
+  (dolist (identifier identifiers)
+    (handler-case
+        (unless (memory-find configuration identifier)
+          (error 'agenda-error
+                 :message (format nil "Memory ~A does not exist." identifier)
+                 :pathname (configuration-agenda-path configuration)
+                 :operation ':validate-item
+                 :cause nil))
+      (agenda-error (condition)
+        (error condition))
+      (memory-error (cause)
+        (error 'agenda-error
+               :message (format nil "Cannot validate linked memory ~A: ~A"
+                                identifier
+                                (autolith-error-message cause))
+               :pathname (configuration-agenda-path configuration)
+               :operation ':validate-item
+               :cause cause))))
+  (copy-list identifiers))
+
 (-> agenda-add
     (&key (:configuration configuration) (:state agenda-state)
-          (:text string) (:status agenda-status) (:now timestamp))
+          (:text string) (:status agenda-status)
+          (:memory-identifiers list) (:now timestamp))
     agenda-item)
 (defun agenda-add
-    (&key configuration state text (status ':todo) (now (get-universal-time)))
+    (&key configuration state text (status ':todo) memory-identifiers
+          (now (get-universal-time)))
   "Add a new agenda item to CONFIGURATION's current workspace."
   (unless (typep status 'agenda-status)
     (error 'agenda-error
@@ -381,7 +469,10 @@ when REQUIRE-EXISTING-P is false, but it must still name an absolute path."
                             :text (agenda--validate-text configuration text)
                             :status status
                             :created-at now
-                            :updated-at now))
+                            :updated-at now
+                            :memory-identifiers
+                            (agenda--validate-memory-identifiers
+                             configuration memory-identifiers)))
            (replacement
              (make-instance 'workspace-agenda
                             :directory directory
@@ -396,10 +487,12 @@ when REQUIRE-EXISTING-P is false, but it must still name an absolute path."
 (-> agenda-update
     (configuration agenda-state string
      &key (:text (option string)) (:status (option agenda-status))
-          (:now timestamp))
+          (:memory-identifiers list) (:now timestamp))
     agenda-item)
 (defun agenda-update
-    (configuration state identifier &key text status (now (get-universal-time)))
+    (configuration state identifier
+     &key text status (memory-identifiers nil memory-identifiers-supplied-p)
+       (now (get-universal-time)))
   "Update IDENTIFIER in the current workspace and return its replacement."
   (when (and status (not (typep status 'agenda-status)))
     (error 'agenda-error
@@ -407,9 +500,9 @@ when REQUIRE-EXISTING-P is false, but it must still name an absolute path."
            :pathname (configuration-agenda-path configuration)
            :operation ':validate-item
            :cause nil))
-  (unless (or text status)
+  (unless (or text status memory-identifiers-supplied-p)
     (error 'agenda-error
-           :message "agenda.update requires text or status."
+           :message "agenda.update requires text, status, or memory-ids."
            :pathname (configuration-agenda-path configuration)
            :operation ':update
            :cause nil))
@@ -434,7 +527,13 @@ when REQUIRE-EXISTING-P is false, but it must still name an absolute path."
                                       (copy-seq (agenda-item-text item)))
                             :status (or status (agenda-item-status item))
                             :created-at (agenda-item-created-at item)
-                            :updated-at now))
+                            :updated-at now
+                            :memory-identifiers
+                            (if memory-identifiers-supplied-p
+                                (agenda--validate-memory-identifiers
+                                 configuration memory-identifiers)
+                                (copy-list
+                                 (agenda-item-memory-identifiers item)))))
            (replacement-record
              (make-instance
               'workspace-agenda
@@ -477,42 +576,81 @@ when REQUIRE-EXISTING-P is false, but it must still name an absolute path."
           (setf (agenda-state-records state) records)
           t))))
 
-(-> agenda--copy-item (agenda-item &key (:identifier (option string))) agenda-item)
-(defun agenda--copy-item (item &key identifier)
-  "Return a detached copy of ITEM, optionally replacing its IDENTIFIER."
+(-> agenda--copy-item
+    (agenda-item &key (:identifier (option string)) (:memory-identifiers list))
+    agenda-item)
+(defun agenda--copy-item
+    (item &key identifier
+          (memory-identifiers nil memory-identifiers-supplied-p))
+  "Return a detached copy of ITEM with optional identifier and memory links."
   (make-instance 'agenda-item
                  :identifier (or identifier
                                  (copy-seq (agenda-item-identifier item)))
                  :text (copy-seq (agenda-item-text item))
                  :status (agenda-item-status item)
                  :created-at (agenda-item-created-at item)
-                 :updated-at (agenda-item-updated-at item)))
+                 :updated-at (agenda-item-updated-at item)
+                 :memory-identifiers
+                 (copy-list
+                  (if memory-identifiers-supplied-p
+                      memory-identifiers
+                      (agenda-item-memory-identifiers item)))))
+
+(-> agenda--merge-memory-identifiers (configuration list list) list)
+(defun agenda--merge-memory-identifiers (configuration target source)
+  "Return stable union of TARGET and SOURCE memory identifiers."
+  (let ((merged (remove-duplicates (append target source)
+                                   :test #'string=
+                                   :from-end t)))
+    (when (> (length merged) +agenda-item-memory-limit+)
+      (error 'agenda-error
+             :message (format nil
+                              "Transport would attach more than ~D memories to one agenda item."
+                              +agenda-item-memory-limit+)
+             :pathname (configuration-agenda-path configuration)
+             :operation ':transport
+             :cause nil))
+    merged))
 
 (-> agenda--merge-items (configuration list list) list)
 (defun agenda--merge-items (configuration target-items source-items)
   "Return TARGET-ITEMS followed by non-duplicate copies from SOURCE-ITEMS."
   (let ((result (copy-list target-items)))
     (dolist (source source-items)
-      (unless (find-if
+      (let ((duplicate
+              (find-if
                (lambda (target)
                  (and (string= (agenda-item-text source)
                                (agenda-item-text target))
                       (eq (agenda-item-status source)
                           (agenda-item-status target))))
-               result)
-        (let ((identifier (agenda-item-identifier source)))
-          (setf result
-                (append
-                 result
-                 (list
-                  (agenda--copy-item
-                   source
-                   :identifier
-                   (if (find identifier result
-                             :key #'agenda-item-identifier
-                             :test #'string=)
-                       (make-identifier)
-                       (copy-seq identifier)))))))))
+               result)))
+        (if duplicate
+            (setf result
+                  (substitute
+                   (agenda--copy-item
+                    duplicate
+                    :memory-identifiers
+                    (agenda--merge-memory-identifiers
+                     configuration
+                     (agenda-item-memory-identifiers duplicate)
+                     (agenda-item-memory-identifiers source)))
+                   duplicate
+                   result
+                   :test #'eq))
+            (let ((identifier (agenda-item-identifier source)))
+              (setf result
+                    (append
+                     result
+                     (list
+                      (agenda--copy-item
+                       source
+                       :identifier
+                       (if (find identifier result
+                                 :key #'agenda-item-identifier
+                                 :test #'string=)
+                           (make-identifier)
+                           (copy-seq identifier))))))))))
     (when (> (length result) +agenda-maximum-items+)
       (error 'agenda-error
              :message (format nil

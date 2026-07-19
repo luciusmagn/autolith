@@ -18,11 +18,19 @@
            (let* ((source-configuration
                     (configuration-with-working-directory configuration source))
                   (state (agenda-load source-configuration))
+                  (memory
+                    (memory-remember
+                     source-configuration
+                     :title "Release procedure"
+                     :content "Publish the verified release artifacts."
+                     :tags '("release")))
                   (item
                     (agenda-add :configuration source-configuration
                                 :state state
                                 :text "ship the release"
                                 :status ':todo
+                                :memory-identifiers
+                                (list (memory-identifier memory))
                                 :now 10))
                   (note
                     (agenda-add :configuration source-configuration
@@ -45,21 +53,45 @@
                                 (agenda-current source-configuration loaded)))
                        '(:doing :note))
                 "agenda items retain order and updated status across reload")
+               (let ((loaded-item
+                       (first
+                        (workspace-agenda-items
+                         (agenda-current source-configuration loaded)))))
+                 (test-assert
+                  (equal (agenda-item-memory-identifiers loaded-item)
+                         (list (memory-identifier memory)))
+                  "agenda items retain stable memory links across reload")
+                 (memory-remember
+                  source-configuration
+                  :identifier (memory-identifier memory)
+                  :title "Release procedure"
+                  :content "Publish only signed verified release artifacts."
+                  :tags '("release"))
+                 (test-assert
+                  (string= (memory-content
+                            (memory-find
+                             source-configuration
+                             (first
+                              (agenda-item-memory-identifiers loaded-item))))
+                           "Publish only signed verified release artifacts.")
+                  "replacing a memory preserves agenda links through its stable id"))
                (agenda-transport :configuration source-configuration
                                  :state loaded
                                  :source-directory source-name
                                  :target-directory copy-target)
-               (test-assert
-                (and (agenda-find loaded source-name)
-                     (= (length
-                         (workspace-agenda-items
-                          (agenda-find
-                           loaded
-                           (agenda-directory-name
-                            source-configuration copy-target
-                            :require-existing-p t))))
-                        2))
-                "copying an agenda preserves its source and all target items")
+               (let ((copied
+                       (agenda-find
+                        loaded
+                        (agenda-directory-name
+                         source-configuration copy-target
+                         :require-existing-p t))))
+                 (test-assert
+                  (and (agenda-find loaded source-name)
+                       (= (length (workspace-agenda-items copied)) 2)
+                       (equal (agenda-item-memory-identifiers
+                               (first (workspace-agenda-items copied)))
+                              (list (memory-identifier memory))))
+                  "copying an agenda preserves its source, items, and memory links"))
                (uiop:delete-directory-tree source
                                            :validate t
                                            :if-does-not-exist :ignore)
@@ -88,6 +120,57 @@
                                      #o777)
                              #o600)
                           "agenda state is private to the current user")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-agenda-version-one-migration () null)
+(defun test-agenda-version-one-migration ()
+  "Test that legacy agendas load and upgrade on their next successful write."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (directory
+           (namestring (configuration-working-directory configuration)))
+         (pathname (configuration-agenda-path configuration))
+         (identifier "legacy-agenda-item"))
+    (unwind-protect
+         (progn
+           (snapshot-write
+            pathname
+            (list :agendas
+                  :version 1
+                  :records
+                  (list
+                   (list :agenda
+                         :directory directory
+                         :items
+                         (list
+                          (list :item
+                                :id identifier
+                                :text "migrate this agenda"
+                                :status ':todo
+                                :created-at 10
+                                :updated-at 10))))))
+           (let* ((state (agenda-load configuration))
+                  (item
+                    (first
+                     (workspace-agenda-items
+                      (agenda-current configuration state)))))
+             (test-assert (null (agenda-item-memory-identifiers item))
+                          "version-one items load with no memory links")
+             (agenda-update configuration state identifier
+                            :status ':doing
+                            :now 20))
+           (multiple-value-bind (form sole-form-p)
+               (snapshot-read pathname)
+             (test-assert
+              (and sole-form-p
+                   (= (third form) +agenda-version+)
+                   (readable-state-property-present-p
+                    (rest
+                     (first
+                      (getf (rest (first (fifth form))) :items)))
+                    :memory-ids))
+              "the next agenda write upgrades legacy state to version two")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -124,7 +207,12 @@
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (target (merge-pathnames "transport-target/" root))
-         (registry (make-default-tool-registry)))
+         (registry (make-default-tool-registry))
+         (memory
+           (memory-remember configuration
+                            :title "Agenda integration"
+                            :content "Keep the agenda integration durable."
+                            :tags '("agenda"))))
     (unwind-protect
          (progn
            (ensure-directories-exist (merge-pathnames "marker" target))
@@ -146,7 +234,9 @@
                (test-assert
                 (tool-result-success-p
                  (run "add" "text" "finish agenda integration"
-                            "status" "doing"))
+                            "status" "doing"
+                            "memory-ids"
+                            (json-array (memory-identifier memory))))
                 "agenda.add creates a current-workspace item")
                (let* ((state (agenda-load configuration))
                       (item (first (workspace-agenda-items
@@ -156,16 +246,36 @@
                  (test-assert
                   (and (search identifier prompt)
                        (search "finish agenda integration" prompt)
-                       (search "[doing]" prompt))
-                  "the system prompt carries the complete current agenda")
+                       (search "[doing]" prompt)
+                       (search (memory-identifier memory) prompt))
+                  "the system prompt carries the complete agenda and memory links")
                  (test-assert
                   (tool-result-success-p
                    (run "update" "id" identifier "status" "blocked"))
                   "agenda.update changes an item by stable id")
                  (test-assert
-                  (search "[blocked]"
+                 (search "[blocked]"
                           (tool-result-content (run "list")))
                   "agenda.list returns complete updated item data")
+                 (test-assert
+                  (search (memory-identifier memory)
+                          (tool-result-content (run "list")))
+                  "agenda.update preserves attached memories when omitted")
+                 (test-assert
+                  (not (tool-result-success-p
+                        (run "update"
+                             "id" identifier
+                             "memory-ids" (json-array "missing-memory"))))
+                  "agenda.update rejects unknown memory identifiers")
+                 (test-assert
+                  (tool-result-success-p
+                   (run "update" "id" identifier
+                                 "memory-ids" (json-array)))
+                  "agenda.update accepts an empty array to detach memories")
+                 (test-assert
+                  (not (search (memory-identifier memory)
+                               (tool-result-content (run "list"))))
+                  "detaching removes the memory id from agenda output")
                  (test-assert
                   (tool-result-success-p
                    (run "transport"

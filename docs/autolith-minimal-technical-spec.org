@@ -291,11 +291,13 @@ directory. Initial operations include:
 - =agenda.transport=
 
 Each item has a stable identifier, bounded complete text, lifecycle or note
-status, and creation and update times. Every model request receives the current
-workspace agenda in full as quoted untrusted data. Transport enumerates and
-inspects other workspace agendas, copies them into existing target directories,
-and moves them to new directory keys even when the old source directory no
-longer exists. Copy and move merge without discarding existing target items.
+status, creation and update times, and an optional bounded list of stable memory
+identifiers. Replacing a memory preserves every agenda attachment because its
+identifier remains stable. Every model request receives the current workspace
+agenda in full as quoted untrusted data. Transport enumerates and inspects other
+workspace agendas, copies them into existing target directories, and moves them
+to new directory keys even when the old source directory no longer exists. Copy
+and move merge without discarding existing target items or memory attachments.
 
 ** 5.5 Workspace Commands
 
@@ -609,16 +611,19 @@ oversized item text, and overfull agendas.
 
 One workspace agenda contains at most 32 ordered items. Each record carries the
 canonical directory key and each item carries a stable identifier, complete
-text of at most 500 characters, status, creation time, and update time. Removing
-the final item removes the empty workspace record. A malformed file degrades to
-an empty agenda with a structured warning instead of preventing unrelated model
-work.
+text of at most 500 characters, status, creation time, update time, and at most
+16 unique persistent-memory identifiers. The current version-two writer reads
+version-one items as having no attachments and upgrades the complete file on
+the next successful mutation. Removing the final item removes the empty
+workspace record. A malformed file degrades to an empty agenda with a structured
+warning instead of preventing unrelated model work.
 
 Transport accepts an absolute missing source key so an already-moved repository
 can be recovered. Its target must be an existing directory. Copy retains the
-source key; move removes it. Both merge with existing target items, skip exact
-text-and-status duplicates, resolve identifier collisions without replacing
-target items, and reject a result beyond the item limit.
+source key; move removes it. Both merge with existing target items, combine
+memory attachments on exact text-and-status duplicates, resolve identifier
+collisions without replacing target items, and reject a result beyond either
+the item or per-item attachment limit.
 
 * 9. Generations and Checkpoints
 

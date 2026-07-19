@@ -403,13 +403,20 @@ atomically with mode 0600.
 
 The current workspace agenda is included in full as quoted untrusted data on
 every provider request. =agenda.list= reads it, =agenda.add= creates an item,
-=agenda.update= changes text or status by ID, and =agenda.remove= deletes an
-item. =agenda.transport= lists all known workspace keys, views another agenda,
-copies one agenda into an existing target workspace, or moves it by merging into
-the target and removing the old key. The source path may already be absent, so
-a repository that moved before transport remains recoverable. Copy and move
-preserve target items, skip exact text-and-status duplicates, and give copied
-items fresh IDs only when an ID collides.
+=agenda.update= changes text, status, or attached memory IDs by item ID, and
+=agenda.remove= deletes an item. Each item may attach at most 16 active
+persistent memories by stable ID. Replacing a memory keeps every attachment
+pointing at its newest value. Supplying an empty =memory-ids= array detaches all
+memories from an item. Existing version-one agenda files load with no attachments
+and upgrade atomically on their next mutation.
+
+=agenda.transport= lists all known workspace keys, views another agenda, copies
+one agenda into an existing target workspace, or moves it by merging into the
+target and removing the old key. The source path may already be absent, so a
+repository that moved before transport remains recoverable. Copy and move
+preserve target items and memory attachments, combine attachments on exact
+text-and-status duplicates, and give copied items fresh IDs only when an ID
+collides.
 
 * Workspace, search, memory, agenda, Lisp, and self tools
 

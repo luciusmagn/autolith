@@ -43,7 +43,8 @@
                  "the system prompt introduces Autolith's short name")
     (test-assert
      (and (search "short durable workspace plan" prompt)
-          (search "do not mirror every tool call" prompt))
+          (search "do not mirror every tool call" prompt)
+          (search "Attach relevant persistent memories by ID" prompt))
      "the system prompt reserves agenda for durable workspace state")
     (test-assert
      (and (search "started with --immutable" immutable-prompt)

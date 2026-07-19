@@ -74,16 +74,35 @@
              :tool-name tool-name))
     value))
 
+(-> agenda-tool--memory-identifiers
+    (json-object string)
+    (values list boolean))
+(defun agenda-tool--memory-identifiers (arguments tool-name)
+  "Return TOOL-NAME's memory-ids array and whether it was supplied."
+  (multiple-value-bind (value present-p)
+      (gethash "memory-ids" arguments)
+    (cond
+      ((not present-p)
+       (values nil nil))
+      ((and (vectorp value)
+            (every #'non-empty-string-p value))
+       (values (coerce value 'list) t))
+      (t
+       (error 'tool-error
+              :message "memory-ids must be an array of non-empty strings."
+              :tool-name tool-name)))))
+
 
 ;;;; -- Presentation --
 
 (-> agenda-tool--render-item (agenda-item) string)
 (defun agenda-tool--render-item (item)
   "Return complete model-visible data for agenda ITEM."
-  (format nil "~A  [~(~A~)]  ~A"
+  (format nil "~A  [~(~A~)]  ~A~@[  memories: ~{~A~^, ~}~]"
           (agenda-item-identifier item)
           (agenda-item-status item)
-          (agenda-item-text item)))
+          (agenda-item-text item)
+          (agenda-item-memory-identifiers item)))
 
 (-> agenda-tool--render-record ((option workspace-agenda)) string)
 (defun agenda-tool--render-record (record)
@@ -130,13 +149,17 @@
          (state (agenda-load configuration))
          (text (agenda-tool--string-argument
                 arguments "text" "agenda.add" :required t))
-         (status (or (agenda-tool--status arguments) ':todo))
-         (item (agenda-add :configuration configuration
-                           :state state
-                           :text text
-                           :status status)))
-    (tool-success
-     (format nil "Added ~A." (agenda-tool--render-item item)))))
+         (status (or (agenda-tool--status arguments) ':todo)))
+    (multiple-value-bind (memory-identifiers memory-identifiers-supplied-p)
+        (agenda-tool--memory-identifiers arguments "agenda.add")
+      (declare (ignore memory-identifiers-supplied-p))
+      (let ((item (agenda-add :configuration configuration
+                              :state state
+                              :text text
+                              :status status
+                              :memory-identifiers memory-identifiers)))
+        (tool-success
+         (format nil "Added ~A." (agenda-tool--render-item item)))))))
 
 (defmethod tool-execute ((tool agenda-update-tool)
                          (context tool-context)
@@ -150,15 +173,22 @@
          (text (agenda-tool--string-argument
                 arguments "text" "agenda.update"))
          (status (agenda-tool--status arguments)))
-    (unless (or text status)
-      (error 'tool-error
-             :message "agenda.update requires text or status."
-             :tool-name "agenda.update"))
-    (let ((item (agenda-update configuration state identifier
-                               :text text
-                               :status status)))
-      (tool-success
-       (format nil "Updated ~A." (agenda-tool--render-item item))))))
+    (multiple-value-bind (memory-identifiers memory-identifiers-supplied-p)
+        (agenda-tool--memory-identifiers arguments "agenda.update")
+      (unless (or text status memory-identifiers-supplied-p)
+        (error 'tool-error
+               :message "agenda.update requires text, status, or memory-ids."
+               :tool-name "agenda.update"))
+      (let ((item
+              (apply #'agenda-update
+                     configuration state identifier
+                     (append (and text (list :text text))
+                             (and status (list :status status))
+                             (and memory-identifiers-supplied-p
+                                  (list :memory-identifiers
+                                        memory-identifiers))))))
+        (tool-success
+         (format nil "Updated ~A." (agenda-tool--render-item item)))))))
 
 (defmethod tool-execute ((tool agenda-remove-tool)
                          (context tool-context)

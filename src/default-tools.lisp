@@ -290,7 +290,9 @@
              "status" (json-object
                        "type" "string"
                        "enum" #("todo" "doing" "blocked" "done" "note")
-                       "description" "The item status; defaults to todo."))
+                       "description" "The item status; defaults to todo.")
+             "memory-ids" (tool-string-array-property
+                           "Optional active persistent-memory ids to attach."))
             '("text")))
           (list
            'agenda-update-tool
@@ -304,7 +306,9 @@
              "status" (json-object
                        "type" "string"
                        "enum" #("todo" "doing" "blocked" "done" "note")
-                       "description" "Optional replacement item status."))
+                       "description" "Optional replacement item status.")
+             "memory-ids" (tool-string-array-property
+                           "Optional complete replacement memory-id list; an empty array detaches all memories."))
             '("id")))
           (list
            'agenda-remove-tool
