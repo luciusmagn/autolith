@@ -2,16 +2,15 @@
 
 ;;;; -- User Initialization --
 
-(defvar *user-init-loading-p* nil
-  "True only while Autolith loads the user's executable configuration.")
-
 (-> user-init-load (configuration) (option pathname))
 (defun user-init-load (configuration)
   "Load CONFIGURATION's user initialization file and return its pathname.
 
 The file is read in the AUTOLITH package after tracked and privately committed
 definitions have loaded. It executes with the user's full privileges."
-  (let ((pathname (configuration-user-init-path configuration)))
+  (let ((pathname (configuration-user-init-path configuration))
+        (registrations (context--registry-snapshot)))
+    (context--remove-registration-source ':user)
     (when (uiop:file-exists-p pathname)
       (handler-case
           (let ((*package* (find-package '#:autolith))
@@ -19,6 +18,7 @@ definitions have loaded. It executes with the user's full privileges."
             (load pathname :verbose nil :print nil)
             pathname)
         (serious-condition (cause)
+          (context--registry-restore registrations)
           (error 'user-init-error
                  :message (format nil "Could not load user initialization at ~A: ~A"
                                   pathname cause)

@@ -141,8 +141,21 @@
   (:import-from #:yason
                 #:false)
   (:export #:main
+           #:context-contributor-registrations
+           #:context-status
+           #:define-context-contributor
+           #:make-context-contribution
+           #:register-context-contributor
+           #:request-context-compaction-p
+           #:request-context-configuration
+           #:request-context-conversation
+           #:request-context-goal-context
+           #:request-context-latest-user-text
+           #:request-context-tool-namespaces
+           #:request-context-turn-budget-state
            #:release-server-main
            #:run-tests
+           #:unregister-context-contributor
            #:worker-main))
 
 (in-package #:autolith)

@@ -162,6 +162,37 @@ Credentials are stored outside:
 An API-key provider may exist as an optional fallback, but is not the
 primary access path.
 
+** 4.1 Request-Local Context
+
+Autolith assembles ephemeral context contributions immediately before each
+normal provider request. A contribution has a stable identifier, trusted
+instruction, optional untrusted evidence, source, lifetime, priority, and
+optional deduplication, supersession, or conflict metadata. Contributors
+receive a read-only request snapshot and may return any number of compatible
+contributions.
+
+Compatible contributions stack. Priority controls rendering order and decides
+which advice survives the bounded request budget; it is not a winner-takes-all
+selection rule. Equivalent contributions collapse by explicit deduplication
+key, specific advice may explicitly supersede generic advice, and only an
+explicit conflict group selects one strongest value. Mandatory contributions
+do not compete for the advisory budget.
+
+Rendered contributions are provider-request input only. They are never appended
+to conversation files, incorporated into compaction summaries, offered to
+memory creation, or restored as conversation history. A next-request
+contribution is consumed only after a completed provider response. State-bound
+contributors recompute their output for every request. Non-model diagnostics
+retain contributor identifiers, selection, omission, and bounded failure
+reports so the mechanism remains observable.
+
+The same registration API is available to tracked code, private
+self-modifications, and the user initialization file. A failing contributor is
+reported and omitted without preventing unrelated provider work.
+=define-context-contributor= is a complete supported self-modification defining
+form: exploratory installation registers it, discard restores both its function
+binding and prior registration, and private commit replay reconstructs both.
+
 * 5. Tool Model
 
 Tools are registered internally. MCP-compatible exposure may be added,

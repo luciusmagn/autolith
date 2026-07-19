@@ -316,6 +316,36 @@ This entry point is distinct from =overlays/*.lisp=, which exist only to migrate
 old self-modifications. User configuration is never built into the pristine
 recovery image.
 
+The request-local context registry is available from this file. A contributor
+receives a read-only request snapshot and returns no contribution, one
+contribution, or a list. For example:
+
+#+BEGIN_SRC lisp
+(define-context-contributor my-context-advice (request)
+  "Return local advice when the newest user message requests a release."
+  (let ((input (request-context-latest-user-text request)))
+    (when (and input (search "release" input :test #'char-equal))
+      (make-context-contribution
+       :identifier "release-check"
+       :instruction "Verify the release artifacts before publishing."
+       :lifetime ':turn
+       :priority 40))))
+#+END_SRC
+
+Contributions stack unless they declare deduplication, supersession, or a
+conflict group. Priority controls ordering and admission to the bounded advice
+budget rather than selecting one global winner. The rendered block exists only
+in its provider request and never becomes conversation or memory content.
+=/context= lists registrations, the last active and omitted contributions, and
+bounded contributor failures.
+
+=define-context-contributor= is a defining form understood by =self.redefine=,
+=self.discard=, and private mutation replay. Autolith and =init.lisp= can
+therefore use the same definition and registration mechanism. The lowercased
+function name is its stable registry identifier. The lower-level
+=register-context-contributor= function remains available when registration
+must be managed separately.
+
 Conversations are append-only readable forms under
 =${XDG_DATA_HOME:-~/.local/share}/autolith/conversations/=. A truncated final form is
 ignored after a crash; malformed complete records are rejected. If a crash

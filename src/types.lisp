@@ -26,6 +26,14 @@
   "The subset of persistent memories selected for one operation."
   '(member :relevant :global :workspace :all))
 
+(deftype context-contribution-lifetime ()
+  "The request lifetime declared by one ephemeral context contribution."
+  '(member :next-request :turn :while-relevant :until-success))
+
+(deftype context-contribution-class ()
+  "Whether a context contribution competes for the advice budget."
+  '(member :advice :mandatory))
+
 (-> non-empty-string-p (t) boolean)
 (defun non-empty-string-p (value)
   "Return true when VALUE is a string containing a non-whitespace character."

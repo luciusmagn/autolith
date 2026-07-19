@@ -85,6 +85,7 @@
     (test-later-malformed-state)
     (test-later-reset-selection)
     (test-system-prompt-context)
+    (test-request-local-context)
     (test-conversation-persistence)
     (test-conversation-origin-directory)
     (test-conversation-model-selection)

@@ -323,17 +323,18 @@ at reference commit 5c19155c."
      &key (:turn-budget-state turn-budget-state)
           (:goal-context (option string))
           (:compaction-p boolean))
-    json-object)
+    (values json-object (option context-delivery)))
 (defun provider-request-object
     (provider conversation tool-namespaces
      &key (turn-budget-state :normal) goal-context compaction-p)
   "Build the complete stateless Sol Responses Lite request for CONVERSATION.
 
 The request never carries a service_tier, keeping Autolith on the standard path.
-GOAL-CONTEXT rides as one transient developer message that is never persisted
-in the durable conversation, mirroring the budget reminders. COMPACTION-P
-builds a tool-free summarization request whose trailing developer message
-asks for a context checkpoint handoff."
+GOAL-CONTEXT and resolved context contributions ride as transient developer
+messages that are never persisted in the durable conversation. COMPACTION-P
+builds a tool-free summarization request whose trailing developer message asks
+for a context checkpoint handoff. The second value is the context delivery that
+the transport consumes only after a completed response."
   (let* ((configuration (provider-configuration provider))
          (finalization-p (eq turn-budget-state :finalization))
          (web-search-tool (and (not finalization-p)
@@ -365,8 +366,22 @@ asks for a context checkpoint handoff."
                     (list (responses-lite-developer-message goal-context)))
                   (when budget-message
                     (list budget-message))))
+         (delivery
+           (unless compaction-p
+             (context-resolve-request
+              configuration
+              conversation
+              effective-tools
+              :turn-budget-state turn-budget-state
+              :goal-context goal-context)))
+         (context-message
+           (and delivery
+                (context-delivery-rendered delivery)
+                (responses-lite-developer-message
+                 (context-delivery-rendered delivery))))
          (input (coerce (append prefix
                                 (conversation-input-items conversation)
+                                (when context-message (list context-message))
                                 (when compaction-p
                                   (list (responses-lite-developer-message
                                         +compaction-instructions+))))
@@ -374,17 +389,19 @@ asks for a context checkpoint handoff."
     (when (and (provider-reasoning-summaries-p provider)
                (not compaction-p))
       (setf (gethash "summary" reasoning) "auto"))
-    (json-object
-     "model" (configuration-model configuration)
-     "input" input
-     "tool_choice" "auto"
-     "parallel_tool_calls" false
-     "reasoning" reasoning
-     "store" false
-     "stream" t
-     "include" (json-array "reasoning.encrypted_content")
-     "prompt_cache_key" (conversation-identifier conversation)
-     "text" (json-object "verbosity" "low"))))
+    (values
+     (json-object
+      "model" (configuration-model configuration)
+      "input" input
+      "tool_choice" "auto"
+      "parallel_tool_calls" false
+      "reasoning" reasoning
+      "store" false
+      "stream" t
+      "include" (json-array "reasoning.encrypted_content")
+      "prompt_cache_key" (conversation-identifier conversation)
+      "text" (json-object "verbosity" "low"))
+     delivery)))
 
 (-> provider-user-agent () string)
 (defun provider-user-agent ()
@@ -792,37 +809,42 @@ asks for a context checkpoint handoff."
   (handler-case
       (with-credentials (credentials (provider-credential-manager provider)
                                      :force-refresh force-refresh)
-        (multiple-value-bind (stream status headers)
-            (provider-open-response-stream
+        (multiple-value-bind (request delivery)
+            (provider-request-object
              provider
-             (provider-request-object
-              provider
-              conversation
-              tool-namespaces
-              :turn-budget-state turn-budget-state
-              :goal-context goal-context
-              :compaction-p compaction-p)
-             :credentials credentials
-             :conversation conversation)
-          (provider-record-rate-limits provider headers)
-          (unless (= status 200)
-            (let ((body (provider--drain-error-body stream)))
-              (if (= status 401)
-                  (error 'provider-unauthorized
-                         :message "The provider rejected the current ChatGPT credentials."
-                         :status status
-                         :request-id (response-header headers "x-request-id")
-                         :response nil)
-                  (error 'provider-error
-                         :message (provider--http-error-message status body)
-                         :status status
-                         :request-id (response-header headers "x-request-id")
-                         :response (and body
-                                        (bounded-string body :limit 2000))))))
-          (unwind-protect
-               (provider--consume-stream stream headers event-callback)
-            (when (open-stream-p stream)
-              (close stream)))))
+             conversation
+             tool-namespaces
+             :turn-budget-state turn-budget-state
+             :goal-context goal-context
+             :compaction-p compaction-p)
+          (multiple-value-bind (stream status headers)
+              (provider-open-response-stream
+               provider
+               request
+               :credentials credentials
+               :conversation conversation)
+            (provider-record-rate-limits provider headers)
+            (unless (= status 200)
+              (let ((body (provider--drain-error-body stream)))
+                (if (= status 401)
+                    (error 'provider-unauthorized
+                           :message "The provider rejected the current ChatGPT credentials."
+                           :status status
+                           :request-id (response-header headers "x-request-id")
+                           :response nil)
+                    (error 'provider-error
+                           :message (provider--http-error-message status body)
+                           :status status
+                           :request-id (response-header headers "x-request-id")
+                           :response (and body
+                                          (bounded-string body :limit 2000))))))
+            (let ((result
+                    (unwind-protect
+                         (provider--consume-stream stream headers event-callback)
+                      (when (open-stream-p stream)
+                        (close stream)))))
+              (context-delivery-complete delivery)
+              result))))
     (dexador.error:http-request-unauthorized (condition)
       (provider-signal-http-failure provider condition))
     (http-request-failed (condition)

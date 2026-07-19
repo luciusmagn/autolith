@@ -302,7 +302,8 @@ protocol."
 
 (defparameter +definition-operators+
   '(defun defgeneric defmethod defmacro defclass defstruct define-condition
-    deftype define-compiler-macro defvar defparameter define-constant)
+    deftype define-compiler-macro defvar defparameter define-constant
+    define-context-contributor)
   "Top-level defining operators accepted by self.redefine and source persistence.")
 
 (-> definition-name-p (t) boolean)
@@ -478,6 +479,14 @@ protocol."
              (binding (and (fboundp name) (fdefinition name))))
          (lambda ()
            (self--restore-function-binding name bound-p binding))))
+      (define-context-contributor
+       (let* ((identifier (context--definition-identifier name))
+              (registration (context--registration-snapshot identifier))
+              (bound-p (not (null (fboundp name))))
+              (binding (and bound-p (fdefinition name))))
+         (lambda ()
+           (self--restore-function-binding name bound-p binding)
+           (context--registration-restore identifier registration))))
       (define-compiler-macro
        (let ((binding (compiler-macro-function name)))
          (lambda ()

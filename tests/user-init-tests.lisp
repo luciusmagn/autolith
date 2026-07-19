@@ -10,7 +10,8 @@
   "Test user initialization discovery, package binding, and typed failure."
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
-         (pathname (configuration-user-init-path configuration)))
+         (pathname (configuration-user-init-path configuration))
+         (registrations (context--registry-snapshot)))
     (unwind-protect
          (progn
            (configuration-ensure-directories configuration)
@@ -22,7 +23,7 @@
                                    :if-does-not-exist :create
                                    :external-format :utf-8)
              (write-string
-              "(setf *user-init-test-value* (list *user-init-loading-p* *package*))"
+              "(progn (setf *user-init-test-value* (list *user-init-loading-p* *package*)) (register-context-contributor \"user-init-test\" 'context-tests--next-request))"
               stream))
            (setf *user-init-test-value* nil)
            (test-assert (equal (user-init-load configuration) pathname)
@@ -32,6 +33,15 @@
                  (eq (second *user-init-test-value*)
                      (find-package '#:autolith)))
             "user init executes in the Autolith package and marked dynamic extent")
+           (test-assert
+            (eq (getf (find "user-init-test"
+                            (context-contributor-registrations)
+                            :test #'string=
+                            :key (lambda (registration)
+                                   (getf registration :identifier)))
+                      :source)
+                ':user)
+            "contributors registered by user init retain their source")
            (with-open-file (stream pathname
                                    :direction :output
                                    :if-exists :supersede
@@ -46,7 +56,21 @@
                 (and (equal (user-init-error-pathname condition) pathname)
                      (typep (user-init-error-cause condition)
                             'serious-condition))))
-            "a broken user init signals a structured startup condition"))
+            "a broken user init signals a structured startup condition")
+           (test-assert
+            (find "user-init-test" (context-contributor-registrations)
+                  :test #'string=
+                  :key (lambda (registration)
+                         (getf registration :identifier)))
+            "a failed reload restores the previous contributor registry")
+           (delete-file pathname)
+           (user-init-load configuration)
+           (test-assert
+            (null (find ':user (context-contributor-registrations)
+                        :key (lambda (registration)
+                               (getf registration :source))))
+            "removing init.lisp removes its stale contributor registrations"))
       (setf *user-init-test-value* nil)
+      (context--registry-restore registrations)
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

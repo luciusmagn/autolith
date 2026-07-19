@@ -1,0 +1,780 @@
+(in-package #:autolith)
+
+;;;; -- Request-Local Context --
+
+(define-constant +context-contribution-identifier-limit+ 128
+  :documentation "The maximum characters in a context contribution identifier.")
+
+(define-constant +context-contribution-instruction-limit+ 4000
+  :documentation "The maximum characters in one request-local instruction.")
+
+(define-constant +context-contribution-evidence-limit+ 2000
+  :documentation "The maximum characters in one untrusted evidence value.")
+
+(define-constant +context-contribution-reference-limit+ 32
+  :documentation "The maximum supersession references on one contribution.")
+
+(defparameter *context-advice-token-budget* 1500
+  "The approximate request-token budget shared by advisory contributions.")
+
+(defvar *user-init-loading-p* nil
+  "True only while Autolith loads the user's executable configuration.")
+
+(defvar *context-contributors* nil
+  "Portable contributor registrations in deterministic registration order.")
+
+(defvar *context-next-request-delivered* (make-hash-table :test #'equal)
+  "Contribution keys delivered while their next-request trigger remains active.")
+
+(defvar *context-last-delivery* nil
+  "The most recently assembled normal provider-request context.")
+
+(defvar *context-lock* (make-lock "Autolith request-local context")
+  "The lock protecting registrations, delivery state, and diagnostics.")
+
+
+;;;; -- Request and Contribution Values --
+
+(defclass request-context ()
+  ((configuration
+    :initarg :configuration
+    :reader request-context-configuration
+    :type configuration
+    :documentation "The immutable configuration for this request.")
+   (conversation
+    :initarg :conversation
+    :reader request-context-conversation
+    :type conversation
+    :documentation "The durable conversation projected by this request.")
+   (tool-namespaces
+    :initarg :tool-namespaces
+    :reader request-context-tool-namespaces
+    :type vector
+    :documentation "The provider-visible local tool namespaces.")
+   (turn-budget-state
+    :initarg :turn-budget-state
+    :reader request-context-turn-budget-state
+    :type turn-budget-state
+    :documentation "The current provider-step budget phase.")
+   (goal-context
+    :initarg :goal-context
+    :initform nil
+    :reader request-context-goal-context
+    :type (option string)
+    :documentation "The active request-local goal context, when present.")
+   (compaction-p
+    :initarg :compaction-p
+    :initform nil
+    :reader request-context-compaction-p
+    :type boolean
+    :documentation "Whether the request is a side-channel compaction."))
+  (:documentation "A read-only snapshot supplied to context contributors."))
+
+(defclass context-contribution ()
+  ((identifier
+    :initarg :identifier
+    :reader context-contribution-identifier
+    :type non-empty-string
+    :documentation "The stable identity used for inspection and supersession.")
+   (instruction
+    :initarg :instruction
+    :reader context-contribution-instruction
+    :type non-empty-string
+    :documentation "Trusted advice rendered only into the current request.")
+   (evidence
+    :initarg :evidence
+    :initform nil
+    :reader context-contribution-evidence
+    :type (option string)
+    :documentation "Optional untrusted data supporting the instruction.")
+   (priority
+    :initarg :priority
+    :initform 0
+    :reader context-contribution-priority
+    :type integer
+    :documentation "The budget and rendering priority; larger values matter more.")
+   (lifetime
+    :initarg :lifetime
+    :initform ':while-relevant
+    :reader context-contribution-lifetime
+    :type context-contribution-lifetime
+    :documentation "The declared period for which the advice remains relevant.")
+   (class
+    :initarg :class
+    :initform ':advice
+    :reader context-contribution-class
+    :type context-contribution-class
+    :documentation "Whether the contribution competes for the advice budget.")
+   (deduplication-key
+    :initarg :deduplication-key
+    :initform nil
+    :reader context-contribution-deduplication-key
+    :type (option string)
+    :documentation "The optional semantic identity shared by equivalent advice.")
+   (supersedes
+    :initarg :supersedes
+    :initform nil
+    :reader context-contribution-supersedes
+    :type list
+    :documentation "Contribution identifiers or deduplication keys replaced by this one.")
+   (conflict-group
+    :initarg :conflict-group
+    :initform nil
+    :reader context-contribution-conflict-group
+    :type (option string)
+    :documentation "The optional group in which only the strongest advice applies.")
+   (contributor
+    :initarg :contributor
+    :initform "unknown"
+    :reader context-contribution-contributor
+    :type non-empty-string
+    :documentation "The registration that produced this contribution.")
+   (source
+    :initarg :source
+    :initform ':runtime
+    :reader context-contribution-source
+    :type keyword
+    :documentation "The built-in, user, or runtime origin of the contributor."))
+  (:documentation "One structured instruction that never enters conversation history."))
+
+(defclass context-delivery ()
+  ((conversation-identifier
+    :initarg :conversation-identifier
+    :reader context-delivery-conversation-identifier
+    :type non-empty-string
+    :documentation "The conversation for which this delivery was assembled.")
+   (created-at
+    :initarg :created-at
+    :reader context-delivery-created-at
+    :type timestamp
+    :documentation "The assembly time as Common Lisp universal time.")
+   (contributions
+    :initarg :contributions
+    :reader context-delivery-contributions
+    :type list
+    :documentation "The contributions selected for the provider request.")
+   (omitted
+    :initarg :omitted
+    :reader context-delivery-omitted
+    :type list
+    :documentation "Advisory contributions omitted by the token budget.")
+   (failures
+    :initarg :failures
+    :reader context-delivery-failures
+    :type list
+    :documentation "Contributor identifiers paired with bounded failure reports.")
+   (rendered
+    :initarg :rendered
+    :reader context-delivery-rendered
+    :type (option string)
+    :documentation "The complete request-local developer message, when nonempty."))
+  (:documentation "Non-conversation diagnostics for one ephemeral context assembly."))
+
+
+;;;; -- Construction and Registration --
+
+(-> context--validate-identifier (t string) string)
+(defun context--validate-identifier (value field)
+  "Return non-empty string VALUE after validating bounded FIELD identity."
+  (unless (and (non-empty-string-p value)
+               (<= (length value) +context-contribution-identifier-limit+))
+    (error 'configuration-error
+           :message (format nil "~A must contain 1 to ~D characters."
+                            field
+                            +context-contribution-identifier-limit+)))
+  value)
+
+(-> context--validate-references (t) list)
+(defun context--validate-references (references)
+  "Return a copied, unique list of bounded contribution REFERENCES."
+  (unless (handler-case
+              (let ((length (list-length references)))
+                (and (integerp length)
+                     (<= length +context-contribution-reference-limit+)
+                     (every (lambda (reference)
+                              (and (non-empty-string-p reference)
+                                   (<= (length reference)
+                                       +context-contribution-identifier-limit+)))
+                            references)))
+            (type-error ()
+              nil))
+    (error 'configuration-error
+           :message "Context supersession references must be a bounded list of strings."))
+  (remove-duplicates (copy-list references) :test #'string= :from-end t))
+
+(-> make-context-contribution
+    (&key (:identifier string) (:instruction string)
+          (:evidence (option string)) (:priority integer)
+          (:lifetime context-contribution-lifetime)
+          (:class context-contribution-class)
+          (:deduplication-key (option string)) (:supersedes list)
+          (:conflict-group (option string)))
+    context-contribution)
+(defun make-context-contribution
+    (&key identifier instruction evidence (priority 0)
+      (lifetime ':while-relevant) (class ':advice) deduplication-key
+      supersedes conflict-group)
+  "Return one validated request-local context contribution."
+  (context--validate-identifier identifier "Context contribution identifier")
+  (unless (and (non-empty-string-p instruction)
+               (<= (length instruction)
+                   +context-contribution-instruction-limit+))
+    (error 'configuration-error
+           :message (format nil "Context instruction must contain 1 to ~D characters."
+                            +context-contribution-instruction-limit+)))
+  (unless (or (null evidence)
+              (and (stringp evidence)
+                   (<= (length evidence)
+                       +context-contribution-evidence-limit+)))
+    (error 'configuration-error
+           :message (format nil "Context evidence must contain at most ~D characters."
+                            +context-contribution-evidence-limit+)))
+  (unless (typep lifetime 'context-contribution-lifetime)
+    (error 'configuration-error
+           :message (format nil "Unsupported context lifetime ~S." lifetime)))
+  (unless (typep class 'context-contribution-class)
+    (error 'configuration-error
+           :message (format nil "Unsupported context class ~S." class)))
+  (when deduplication-key
+    (context--validate-identifier deduplication-key
+                                  "Context deduplication key"))
+  (when conflict-group
+    (context--validate-identifier conflict-group "Context conflict group"))
+  (make-instance 'context-contribution
+                 :identifier identifier
+                 :instruction instruction
+                 :evidence evidence
+                 :priority priority
+                 :lifetime lifetime
+                 :class class
+                 :deduplication-key deduplication-key
+                 :supersedes (context--validate-references supersedes)
+                 :conflict-group conflict-group))
+
+(-> context--function-designator-p (t) boolean)
+(defun context--function-designator-p (value)
+  "Return true when VALUE names or is an invocable contributor function."
+  (and (or (functionp value)
+           (and (symbolp value) (fboundp value)))
+       t))
+
+(-> register-context-contributor
+    (string t &key (:source keyword))
+    string)
+(defun register-context-contributor
+    (identifier function-designator
+     &key (source (if *user-init-loading-p* ':user ':runtime)))
+  "Register FUNCTION-DESIGNATOR under stable IDENTIFIER and return IDENTIFIER.
+
+The function receives one REQUEST-CONTEXT and returns NIL, one contribution,
+or a proper list of contributions. Registering the same identifier replaces
+its previous definition without changing unrelated contributors."
+  (context--validate-identifier identifier "Context contributor identifier")
+  (unless (context--function-designator-p function-designator)
+    (error 'configuration-error
+           :message (format nil "Context contributor ~A is not callable."
+                            identifier)))
+  (unless (keywordp source)
+    (error 'configuration-error
+           :message "A context contributor source must be a keyword."))
+  (with-lock-held (*context-lock*)
+    (let* ((registration (list :identifier identifier
+                               :function function-designator
+                               :source source))
+           (existing
+             (find identifier *context-contributors*
+                   :test #'string=
+                   :key (lambda (candidate)
+                          (getf candidate :identifier)))))
+      (setf *context-contributors*
+            (if existing
+                (substitute registration existing *context-contributors*)
+                (append *context-contributors* (list registration))))))
+  identifier)
+
+(-> unregister-context-contributor (string) boolean)
+(defun unregister-context-contributor (identifier)
+  "Remove context contributor IDENTIFIER and report whether it existed."
+  (with-lock-held (*context-lock*)
+    (let ((remaining
+            (remove identifier *context-contributors*
+                    :test #'string=
+                    :key (lambda (registration)
+                           (getf registration :identifier)))))
+      (prog1 (< (length remaining) (length *context-contributors*))
+        (setf *context-contributors* remaining)))))
+
+(-> context--definition-identifier (symbol) string)
+(defun context--definition-identifier (name)
+  "Return the stable registry identifier for contributor definition NAME."
+  (string-downcase (symbol-name name)))
+
+(defmacro define-context-contributor (name lambda-list &body body)
+  "Define and register a durable request-context contributor named NAME.
+
+The expansion defines NAME as an ordinary function and registers its symbol
+when the containing form is loaded or evaluated. Registration uses NAME's
+lowercase symbol name as its stable identifier. BODY and LAMBDA-LIST have the
+same evaluation behavior as DEFUN."
+  (unless (symbolp name)
+    (error "A context contributor definition name must be a symbol."))
+  `(progn
+     (defun ,name ,lambda-list
+       ,@body)
+     (eval-when (:load-toplevel :execute)
+       (register-context-contributor
+        ,(context--definition-identifier name)
+        ',name))))
+
+(-> context-contributor-registrations () list)
+(defun context-contributor-registrations ()
+  "Return a detached, ordered description of registered contributors."
+  (with-lock-held (*context-lock*)
+    (copy-tree *context-contributors*)))
+
+(-> context--registry-snapshot () list)
+(defun context--registry-snapshot ()
+  "Return a private snapshot suitable for restoring registration state."
+  (context-contributor-registrations))
+
+(-> context--registry-restore (list) null)
+(defun context--registry-restore (snapshot)
+  "Replace contributor registrations with detached SNAPSHOT."
+  (with-lock-held (*context-lock*)
+    (setf *context-contributors* (copy-tree snapshot)))
+  nil)
+
+(-> context--registration-find (string) (option list))
+(defun context--registration-find (identifier)
+  "Return a detached registration for IDENTIFIER, when one exists."
+  (find identifier (context-contributor-registrations)
+        :test #'string=
+        :key (lambda (registration)
+               (getf registration :identifier))))
+
+(-> context--registration-snapshot (string) (option list))
+(defun context--registration-snapshot (identifier)
+  "Return IDENTIFIER's detached registration and exact position, when present."
+  (let ((registrations (context-contributor-registrations)))
+    (loop for registration in registrations
+          for position from 0
+          when (string= identifier (getf registration :identifier))
+            return (list :position position
+                         :registration registration))))
+
+(-> context--registration-restore (string (option list)) null)
+(defun context--registration-restore (identifier snapshot)
+  "Restore IDENTIFIER to exact SNAPSHOT position or remove it when absent."
+  (with-lock-held (*context-lock*)
+    (let ((remaining
+            (remove identifier *context-contributors*
+                    :test #'string=
+                    :key (lambda (candidate)
+                           (getf candidate :identifier)))))
+      (setf *context-contributors*
+            (if snapshot
+                (let* ((position (min (getf snapshot :position)
+                                      (length remaining)))
+                       (registration
+                         (copy-tree (getf snapshot :registration))))
+                  (append (subseq remaining 0 position)
+                          (list registration)
+                          (nthcdr position remaining)))
+                remaining))))
+  nil)
+
+(-> context--remove-registration-source (keyword) null)
+(defun context--remove-registration-source (source)
+  "Remove every context contributor registered from SOURCE."
+  (with-lock-held (*context-lock*)
+    (setf *context-contributors*
+          (remove source *context-contributors*
+                  :test #'eq
+                  :key (lambda (registration)
+                         (getf registration :source)))))
+  nil)
+
+
+;;;; -- Request Inspection --
+
+(-> context--message-text (json-object) (option string))
+(defun context--message-text (item)
+  "Return concatenated textual content from one provider message ITEM."
+  (let ((content (json-get item "content")))
+    (when (vectorp content)
+      (let ((parts
+              (loop for part across content
+                    when (and (json-object-p part)
+                              (member (json-get part "type")
+                                      '("input_text" "output_text")
+                                      :test #'string=)
+                              (stringp (json-get part "text")))
+                      collect (json-get part "text"))))
+        (when parts
+          (format nil "~{~A~}" parts))))))
+
+(-> request-context-latest-user-text (request-context) (option string))
+(defun request-context-latest-user-text (context)
+  "Return the newest durable user message text in CONTEXT, when present."
+  (loop for item in (reverse
+                     (conversation-input-items
+                      (request-context-conversation context)))
+        when (and (json-object-p item)
+                  (string= (or (json-get item "role") "") "user"))
+          do (return (context--message-text item))))
+
+
+;;;; -- Resolution --
+
+(-> context--copy-contribution
+    (context-contribution string keyword)
+    context-contribution)
+(defun context--copy-contribution (contribution contributor source)
+  "Return CONTRIBUTION with immutable registration provenance attached."
+  (make-instance
+   'context-contribution
+   :identifier (context-contribution-identifier contribution)
+   :instruction (context-contribution-instruction contribution)
+   :evidence (context-contribution-evidence contribution)
+   :priority (context-contribution-priority contribution)
+   :lifetime (context-contribution-lifetime contribution)
+   :class (context-contribution-class contribution)
+   :deduplication-key (context-contribution-deduplication-key contribution)
+   :supersedes (copy-list (context-contribution-supersedes contribution))
+   :conflict-group (context-contribution-conflict-group contribution)
+   :contributor contributor
+   :source source))
+
+(-> context--normalize-result (t string keyword) list)
+(defun context--normalize-result (result contributor source)
+  "Return RESULT as a validated contribution list with registration provenance."
+  (let ((contributions
+          (cond
+            ((null result) nil)
+            ((typep result 'context-contribution) (list result))
+            ((handler-case
+                 (let ((length (list-length result)))
+                   (and (integerp length)
+                        (every (lambda (value)
+                                 (typep value 'context-contribution))
+                               result)))
+               (type-error ()
+                 nil))
+             result)
+            (t
+             (error "Contributor returned neither context contributions nor NIL.")))))
+    (mapcar (lambda (contribution)
+              (context--copy-contribution contribution contributor source))
+            contributions)))
+
+(-> context--contribution-key (context-contribution) string)
+(defun context--contribution-key (contribution)
+  "Return CONTRIBUTION's semantic deduplication identity."
+  (or (context-contribution-deduplication-key contribution)
+      (context-contribution-identifier contribution)))
+
+(-> context--importance-greater-p
+    (context-contribution context-contribution)
+    boolean)
+(defun context--importance-greater-p (left right)
+  "Return true when LEFT should survive a conflict before RIGHT."
+  (or (and (eq (context-contribution-class left) ':mandatory)
+           (not (eq (context-contribution-class right) ':mandatory)))
+      (and (eq (context-contribution-class left)
+               (context-contribution-class right))
+           (> (context-contribution-priority left)
+              (context-contribution-priority right)))))
+
+(-> context--deduplicate (list) list)
+(defun context--deduplicate (contributions)
+  "Return CONTRIBUTIONS with the strongest value retained for each semantic key."
+  (let ((selected nil))
+    (dolist (contribution contributions)
+      (let* ((key (context--contribution-key contribution))
+             (existing (find key selected
+                             :test #'string=
+                             :key #'context--contribution-key)))
+        (cond
+          ((null existing)
+           (setf selected (append selected (list contribution))))
+          ((context--importance-greater-p contribution existing)
+           (setf selected (substitute contribution existing selected))))))
+    selected))
+
+(-> context--apply-supersession (list) list)
+(defun context--apply-supersession (contributions)
+  "Remove advisory contributions explicitly superseded by another contribution."
+  (let ((superseded
+          (remove-duplicates
+           (mapcan (lambda (contribution)
+                     (copy-list
+                      (context-contribution-supersedes contribution)))
+                   contributions)
+           :test #'string=)))
+    (remove-if
+     (lambda (contribution)
+       (and (eq (context-contribution-class contribution) ':advice)
+            (or (member (context-contribution-identifier contribution)
+                        superseded :test #'string=)
+                (member (context--contribution-key contribution)
+                        superseded :test #'string=))))
+     contributions)))
+
+(-> context--resolve-conflicts (list) list)
+(defun context--resolve-conflicts (contributions)
+  "Keep the strongest contribution only within explicit conflict groups."
+  (let ((selected nil))
+    (dolist (contribution contributions)
+      (let* ((group (context-contribution-conflict-group contribution))
+             (existing (and group
+                            (find-if
+                             (lambda (candidate)
+                               (let ((candidate-group
+                                       (context-contribution-conflict-group
+                                        candidate)))
+                                 (and candidate-group
+                                      (string= group candidate-group))))
+                             selected))))
+        (cond
+          ((null existing)
+           (setf selected (append selected (list contribution))))
+          ((context--importance-greater-p contribution existing)
+           (setf selected (substitute contribution existing selected))))))
+    selected))
+
+(-> context--token-estimate (context-contribution) integer)
+(defun context--token-estimate (contribution)
+  "Return a conservative character-based token estimate for CONTRIBUTION."
+  (ceiling (+ 24
+              (length (context-contribution-instruction contribution))
+              (length (or (context-contribution-evidence contribution) "")))
+           4))
+
+(-> context--next-request-key (string context-contribution) list)
+(defun context--next-request-key (conversation-identifier contribution)
+  "Return the conversation-scoped delivery key for CONTRIBUTION."
+  (list conversation-identifier (context--contribution-key contribution)))
+
+(-> context--active-next-request-keys (string list) list)
+(defun context--active-next-request-keys
+    (conversation-identifier contributions)
+  "Return semantic keys for active next-request CONTRIBUTIONS."
+  (mapcar (lambda (contribution)
+            (context--next-request-key conversation-identifier contribution))
+          (remove-if-not
+           (lambda (contribution)
+             (eq (context-contribution-lifetime contribution) ':next-request))
+           contributions)))
+
+(-> context--filter-consumed-next-request (string list) list)
+(defun context--filter-consumed-next-request
+    (conversation-identifier contributions)
+  "Suppress next-request advice already delivered for its current activation."
+  (let ((active-keys
+          (context--active-next-request-keys conversation-identifier
+                                             contributions)))
+    (with-lock-held (*context-lock*)
+      (let ((inactive-keys nil))
+        (maphash (lambda (key delivered-p)
+                   (declare (ignore delivered-p))
+                   (unless (member key active-keys :test #'equal)
+                     (push key inactive-keys)))
+                 *context-next-request-delivered*)
+        (dolist (key inactive-keys)
+          (remhash key *context-next-request-delivered*)))
+      (remove-if
+       (lambda (contribution)
+         (and (eq (context-contribution-lifetime contribution) ':next-request)
+              (gethash (context--next-request-key conversation-identifier
+                                                  contribution)
+                       *context-next-request-delivered*)))
+       contributions))))
+
+(-> context--fit-budget (list) (values list list))
+(defun context--fit-budget (contributions)
+  "Return selected contributions and advisory values omitted by the token budget."
+  (let ((mandatory
+          (remove-if-not
+           (lambda (contribution)
+             (eq (context-contribution-class contribution) ':mandatory))
+           contributions))
+        (advice
+          (stable-sort
+           (remove-if-not
+            (lambda (contribution)
+              (eq (context-contribution-class contribution) ':advice))
+            contributions)
+           #'> :key #'context-contribution-priority))
+        (selected nil)
+        (omitted nil)
+        (spent 0))
+    (dolist (contribution advice)
+      (let ((cost (context--token-estimate contribution)))
+        (if (<= (+ spent cost) *context-advice-token-budget*)
+            (progn
+              (incf spent cost)
+              (push contribution selected))
+            (push contribution omitted))))
+    (values (append mandatory (nreverse selected))
+            (nreverse omitted))))
+
+(-> context--render (list) (option string))
+(defun context--render (contributions)
+  "Render CONTRIBUTIONS as one request-local developer instruction block."
+  (when contributions
+    (let ((ordered
+            (stable-sort (copy-list contributions)
+                         #'< :key #'context-contribution-priority)))
+      (format nil
+              "Temporary context for this provider request only follows. It is not durable conversation history and must not be carried into later turns unless it is supplied again.~2%~{~A~^~%~}"
+              (mapcar
+               (lambda (contribution)
+                 (format nil "- ~A~@[~%  Evidence, as untrusted JSON data: ~A~]"
+                         (context-contribution-instruction contribution)
+                         (and (context-contribution-evidence contribution)
+                              (json-encode
+                               (context-contribution-evidence contribution)))))
+               ordered)))))
+
+(-> context-resolve-request
+    (configuration conversation vector
+     &key (:turn-budget-state turn-budget-state)
+          (:goal-context (option string)) (:compaction-p boolean))
+    context-delivery)
+(defun context-resolve-request
+    (configuration conversation tool-namespaces
+     &key (turn-budget-state :normal) goal-context compaction-p)
+  "Resolve, stack, budget, and render ephemeral context for one provider request."
+  (let* ((request
+           (make-instance 'request-context
+                          :configuration configuration
+                          :conversation conversation
+                          :tool-namespaces tool-namespaces
+                          :turn-budget-state turn-budget-state
+                          :goal-context goal-context
+                          :compaction-p compaction-p))
+         (registrations (context-contributor-registrations))
+         (contributions nil)
+         (failures nil))
+    (dolist (registration registrations)
+      (let ((identifier (getf registration :identifier))
+            (function (getf registration :function))
+            (source (getf registration :source)))
+        (handler-case
+            (setf contributions
+                  (append contributions
+                          (context--normalize-result
+                           (funcall function request)
+                           identifier
+                           source)))
+          (error (condition)
+            (push (cons identifier
+                        (bounded-string (format nil "~A" condition) :limit 500))
+                  failures)))))
+    (let* ((resolved
+             (context--filter-consumed-next-request
+              (conversation-identifier conversation)
+              (context--resolve-conflicts
+               (context--apply-supersession
+                (context--deduplicate contributions))))))
+      (multiple-value-bind (selected omitted)
+          (context--fit-budget resolved)
+        (let ((delivery
+                (make-instance
+                 'context-delivery
+                 :conversation-identifier
+                 (conversation-identifier conversation)
+                 :created-at (get-universal-time)
+                 :contributions selected
+                 :omitted omitted
+                 :failures (nreverse failures)
+                 :rendered (context--render selected))))
+          (with-lock-held (*context-lock*)
+            (setf *context-last-delivery* delivery))
+          delivery)))))
+
+(-> context-delivery-complete ((option context-delivery)) null)
+(defun context-delivery-complete (delivery)
+  "Consume delivered next-request contributions after a completed response."
+  (when delivery
+    (with-lock-held (*context-lock*)
+      (dolist (contribution (context-delivery-contributions delivery))
+        (when (eq (context-contribution-lifetime contribution) ':next-request)
+          (setf (gethash
+                 (context--next-request-key
+                  (context-delivery-conversation-identifier delivery)
+                  contribution)
+                         *context-next-request-delivered*)
+                t)))))
+  nil)
+
+(-> context-runtime-reset () null)
+(defun context-runtime-reset ()
+  "Discard delivery receipts and one-shot state without changing registrations."
+  (with-lock-held (*context-lock*)
+    (clrhash *context-next-request-delivered*)
+    (setf *context-last-delivery* nil))
+  nil)
+
+
+;;;; -- Diagnostics --
+
+(-> context--function-label (t) string)
+(defun context--function-label (designator)
+  "Return a concise printable label for contributor function DESIGNATOR."
+  (if (symbolp designator)
+      (format nil "~S" designator)
+      "<function>"))
+
+(-> context--contribution-status-line (context-contribution) string)
+(defun context--contribution-status-line (contribution)
+  "Return one inspectable summary line for CONTRIBUTION."
+  (format nil "~A  [~(~A~), ~(~A~), priority ~D, ~D token~:P]  ~A"
+          (context-contribution-identifier contribution)
+          (context-contribution-source contribution)
+          (context-contribution-lifetime contribution)
+          (context-contribution-priority contribution)
+          (context--token-estimate contribution)
+          (context-contribution-instruction contribution)))
+
+(-> context-status () string)
+(defun context-status ()
+  "Return registered contributors and the last request's ephemeral context receipt."
+  (let ((registrations (context-contributor-registrations))
+        (delivery (with-lock-held (*context-lock*) *context-last-delivery*)))
+    (format nil
+            "Registered context contributors:~%~A~2%Last request-local context:~%~A"
+            (if registrations
+                (format nil "~{~A~^~%~}"
+                        (mapcar
+                         (lambda (registration)
+                           (format nil "~A  [~(~A~)]  ~A"
+                                   (getf registration :identifier)
+                                   (getf registration :source)
+                                   (context--function-label
+                                    (getf registration :function))))
+                         registrations))
+                "none")
+            (cond
+              ((null delivery)
+               "none assembled")
+              ((and (null (context-delivery-contributions delivery))
+                    (null (context-delivery-omitted delivery))
+                    (null (context-delivery-failures delivery)))
+               "none active")
+              (t
+               (format nil
+                       "conversation ~A~%~@[active:~%~{~A~^~%~}~%~]~@[omitted by budget:~%~{~A~^~%~}~%~]~@[contributor failures:~%~{~A~^~%~}~]"
+                       (context-delivery-conversation-identifier delivery)
+                       (and (context-delivery-contributions delivery)
+                            (mapcar #'context--contribution-status-line
+                                    (context-delivery-contributions delivery)))
+                       (and (context-delivery-omitted delivery)
+                            (mapcar #'context--contribution-status-line
+                                    (context-delivery-omitted delivery)))
+                       (and (context-delivery-failures delivery)
+                            (mapcar (lambda (failure)
+                                      (format nil "~A: ~A"
+                                              (first failure)
+                                              (rest failure)))
+                                    (context-delivery-failures delivery)))))))))

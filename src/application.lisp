@@ -110,6 +110,7 @@
     (:name "/generations"   :argument nil :description "list retained generations")
     (:name "/rollback"      :argument nil :description "pick a generation for recovery")
     (:name "/status"        :argument nil :description "show usage and rate limits")
+    (:name "/context"       :argument nil :description "inspect request-local context")
     (:name "/compact"       :argument nil :description "summarize earlier context now")
     (:name "/quit"          :argument nil :description "leave Autolith"))
   :test #'equal
@@ -203,6 +204,7 @@
   "Create a connected application, loading CONVERSATION-ID when supplied."
   (let ((preferred-configuration
           (preferences-apply-model-selection configuration)))
+    (context-runtime-reset)
     (configuration-ensure-directories preferred-configuration)
     (durable-mutations-load preferred-configuration)
     (let* ((overlay-failures (image-state-load preferred-configuration))
@@ -255,6 +257,7 @@
                    (immutable-p nil immutable-p-supplied-p))
   "Reconnect retained APPLICATION resources, optionally selecting CONVERSATION-ID."
   (image-state-reconnect)
+  (context-runtime-reset)
   (let* ((previous (application-configuration application))
          (effective-immutable-p
            (if immutable-p-supplied-p
@@ -339,6 +342,7 @@
 
 (defmethod checkpoint-detach-state ((application application))
   "Detach APPLICATION's ephemeral object graph in a checkpoint saver child."
+  (context-runtime-reset)
   (tool-registry-detach-search-state
    (application-tool-registry application))
   (setf (application-provider application) nil
