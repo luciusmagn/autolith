@@ -2,6 +2,48 @@
 
 ;;;; -- Workspace Agenda Tests --
 
+(-> test-agenda-command () null)
+(defun test-agenda-command ()
+  "Test /agenda presents current entries, statuses, identifiers, and links."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (state (agenda-load configuration))
+         (memory
+           (memory-remember configuration
+                            :title "Command-linked memory"
+                            :content "Visible through its stable identifier."
+                            :tags '("agenda")))
+         (item
+           (agenda-add :configuration configuration
+                       :state state
+                       :text "inspect the current agenda"
+                       :status ':doing
+                       :memory-identifiers (list (memory-identifier memory))))
+         (terminal (make-instance 'recording-terminal :columns 80))
+         (ui (terminal-ui-create :terminal terminal))
+         (application (make-instance 'application
+                                     :configuration configuration
+                                     :ui ui)))
+    (unwind-protect
+         (progn
+           (terminal-ui-start ui)
+           (test-assert (eq (application-command application "/agenda")
+                            ':continue)
+                        "/agenda remains inside the interactive application")
+           (let ((output (recording-terminal-output terminal)))
+             (test-assert
+              (and (search "agenda" output)
+                   (search "[doing]" output)
+                   (search "inspect the current agenda" output)
+                   (search (agenda-item-identifier item) output)
+                   (search (memory-identifier memory) output))
+              "/agenda shows complete current-workspace entry information"))
+           (test-assert (search "/agenda" (application-help))
+                        "interactive help includes /agenda"))
+      (ignore-errors (terminal-ui-stop ui))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-agenda-persistence-and-transport () null)
 (defun test-agenda-persistence-and-transport ()
   "Test agenda mutation, reload, copy, and moved-repository rekeying."

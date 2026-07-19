@@ -106,6 +106,7 @@
     (:name "/permissions"   :argument nil :description "choose command access for this session")
     (:name "/later"         :argument "INPUT" :description "run input after rate limits reset")
     (:name "/goal"          :argument "OBJECTIVE" :description "set or view the session goal")
+    (:name "/agenda"        :argument nil :description "show workspace agenda entries")
     (:name "/checkpoint"    :argument nil :description "save a retained live generation")
     (:name "/generations"   :argument nil :description "list retained generations")
     (:name "/rollback"      :argument nil :description "pick a generation for recovery")

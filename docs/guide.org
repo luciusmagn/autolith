@@ -239,6 +239,7 @@ prefix from before selection. The commands are:
 /permissions    choose command access for this session
 /later INPUT    run input after rate limits reset
 /goal OBJECTIVE set or view the session goal
+/agenda         show workspace agenda entries
 /checkpoint     save a retained live generation
 /generations    list retained generations
 /rollback       start a retained generation through recovery
