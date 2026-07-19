@@ -11,9 +11,50 @@ let
     src = pkgs.fetchFromGitHub {
       owner = "luciusmagn";
       repo = "clinedi";
-      rev = "04a383c12b975c759746cae1abe7a08b57e0b066";
-      hash = "sha256-5aF7VjbhsmeAwteC3Yjqs6uC8dXKArlvnC1unCs00Cg=";
+      rev = "760cf8ac47b72dee36dc121bc09f8fb5ffa5dc2b";
+      hash = "sha256-+B5DX2IaXEFfuUCaoIGbn2H4z2m2qx8CnwVMhjeMvlY=";
     };
+  };
+
+  clifff = pkgs.sbcl.buildASDFSystem {
+    pname = "clifff";
+    version = "0.1.0";
+    src = pkgs.fetchFromGitHub {
+      owner = "luciusmagn";
+      repo = "clifff";
+      rev = "a57058ba3ffd222af57513e412a1d01508b4d1b3";
+      hash = "sha256-kDpXHkNfuDPN16kEuLSHEY57N8q7BD/4Cja+rSAkTUM=";
+    };
+    lispLibs = with pkgs.sbclPackages; [
+      bordeaux-threads
+      cffi
+    ];
+  };
+
+  sexpStore = pkgs.sbcl.buildASDFSystem {
+    pname = "sexp-store";
+    version = "0.1.0";
+    src = pkgs.fetchFromGitHub {
+      owner = "luciusmagn";
+      repo = "sexp-store";
+      rev = "92a2ad458e92ecf4526ccb9bb387f89283c4dcc3";
+      hash = "sha256-aGo0wuhpk2w4Qk1oGRwdtKSZqwRDPp6og8r/XwZJgHA=";
+    };
+  };
+
+  sbclWorkers = pkgs.sbcl.buildASDFSystem {
+    pname = "sbcl-workers";
+    version = "0.1.0";
+    src = pkgs.fetchFromGitHub {
+      owner = "luciusmagn";
+      repo = "sbcl-workers";
+      rev = "fff2bc4bbeb8eec93a963c5ad1f7af85bbf7a6a3";
+      hash = "sha256-lfL8HsQI7ZOMo5nqEghYZyVVEtCmSy8UPzyzBRS7Wd8=";
+    };
+    lispLibs = with pkgs.sbclPackages; [
+      bordeaux-threads
+      sexpStore
+    ];
   };
 
   clExecSandboxSource = pkgs.fetchFromGitHub {
@@ -88,6 +129,9 @@ let
       yason
       clinedi
       clExecSandbox
+      clifff
+      sbclWorkers
+      sexpStore
     ];
     nativeBuildInputs = [ pkgs.git ];
 
@@ -218,6 +262,7 @@ pkgs.writeShellApplication {
   };
 
   passthru = {
-    inherit autolithSystem clExecSandbox fffLibrary runtime sandboxHelper sbclSource;
+    inherit autolithSystem clExecSandbox clifff clinedi fffLibrary runtime
+      sandboxHelper sbclSource sbclWorkers sexpStore;
   };
 }
