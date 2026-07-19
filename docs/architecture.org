@@ -209,9 +209,10 @@ policy. Kernel TTY rows and columns take precedence over environment hints.
 Long drafts use a cursor-following viewport capped below the terminal height,
 and each replacement is emitted as one hidden-cursor update.
 The startup identity uses a
-capability-checked xterm-256 green gradient with bold basic-green fallback;
-one leading blank row and a divider separate its identity from model and
-workspace metadata. Internal conversation identifiers are omitted. Other
+capability-checked xterm-256 green gradient with bold basic-green fallback,
+while a process started by recovery uses a red gradient with bold basic-red
+fallback. One leading blank row and a divider separate its identity from model
+and workspace metadata. Internal conversation identifiers are omitted. Other
 semantic styles resolve to basic terminal palette colors and emphasis. Untrusted
 text is sanitized before trusted styling controls are added around it. Ctrl-C at
 an empty prompt exits and leaves a paste-ready resume command in scrollback only

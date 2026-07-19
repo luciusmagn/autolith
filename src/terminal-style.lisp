@@ -7,6 +7,8 @@
   '(member :plain :brand
            :brand-gradient-1 :brand-gradient-2 :brand-gradient-3
            :brand-gradient-4 :brand-gradient-5 :brand-gradient-6
+           :recovery-gradient-1 :recovery-gradient-2 :recovery-gradient-3
+           :recovery-gradient-4 :recovery-gradient-5 :recovery-gradient-6
            :user :tool :success :failure :notice :dim :hint :selected
            :strong :emphasis :code))
 
@@ -38,6 +40,16 @@
   :test #'equal
   :documentation "Light-green xterm-256 colors for successive startup-mark rows.")
 
+(define-constant +terminal-recovery-gradient-table+
+  '((:recovery-gradient-1 . 224)
+    (:recovery-gradient-2 . 217)
+    (:recovery-gradient-3 . 210)
+    (:recovery-gradient-4 . 203)
+    (:recovery-gradient-5 . 197)
+    (:recovery-gradient-6 . 196))
+  :test #'equal
+  :documentation "Light-red xterm-256 colors for recovered startup-mark rows.")
+
 (define-constant +terminal-style-reset+
   (format nil "~C[0m" +terminal-escape-character+)
   :test #'string=
@@ -67,14 +79,19 @@
 (defun terminal-style-sequence
     (style &optional (indexed-color-p (terminal-environment-indexed-color-p)))
   "Return STYLE's trusted control, using INDEXED-COLOR-P for brand gradients."
-  (let* ((indexed-color
+  (let* ((brand-color
            (rest (assoc style +terminal-brand-gradient-table+)))
+         (recovery-color
+           (rest (assoc style +terminal-recovery-gradient-table+)))
+         (indexed-color (or brand-color recovery-color))
          (parameters
            (cond
              ((and indexed-color indexed-color-p)
               (format nil "1;38;5;~D" indexed-color))
-             (indexed-color
+             (brand-color
               "1;32")
+             (recovery-color
+              "1;31")
              (t
               (rest (assoc style +terminal-style-table+))))))
     (and parameters

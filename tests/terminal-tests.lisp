@@ -958,6 +958,22 @@
    (string= (terminal-style-sequence :brand-gradient-1 nil)
             (format nil "~C[1;32m" +terminal-escape-character+))
    "the brand gradient falls back to solid bold green")
+  (let ((indexed-sequences
+          (loop for style in '(:recovery-gradient-1 :recovery-gradient-2
+                               :recovery-gradient-3 :recovery-gradient-4
+                               :recovery-gradient-5 :recovery-gradient-6)
+                collect (terminal-style-sequence style t))))
+    (test-assert
+     (= (length (remove-duplicates indexed-sequences :test #'string=)) 6)
+     "every recovery-gradient row has a distinct indexed color")
+    (test-assert
+     (string= (first indexed-sequences)
+              (format nil "~C[1;38;5;224m" +terminal-escape-character+))
+     "the recovery gradient begins with its lightest red"))
+  (test-assert
+   (string= (terminal-style-sequence :recovery-gradient-1 nil)
+            (format nil "~C[1;31m" +terminal-escape-character+))
+   "the recovery gradient falls back to solid bold red")
   (test-assert
    (and (terminal-indexed-color-environment-p "xterm-256color" nil)
         (terminal-indexed-color-environment-p "xterm" "truecolor")

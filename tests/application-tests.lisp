@@ -197,11 +197,13 @@
          (root (test-configuration-root configuration))
          (conversation (conversation-create configuration :identifier "banner"))
          (terminal (make-instance 'recording-terminal :columns 80))
+         (previous-recovered (uiop:getenv "AUTOLITH_RECOVERED"))
          (application (make-instance 'application
                                      :configuration configuration
                                      :conversation conversation
                                      :ui (terminal-ui-create
                                           :terminal terminal))))
+    (sb-posix:unsetenv "AUTOLITH_RECOVERED")
     (unwind-protect
          (let* ((spans (application-banner application))
                 (text (format nil "~{~A~}"
@@ -220,6 +222,26 @@
                    '(:brand-gradient-1 :brand-gradient-2 :brand-gradient-3
                      :brand-gradient-4 :brand-gradient-5 :brand-gradient-6))
            "the Cosmic AL mark assigns one gradient style to each row")
+           (let ((previous-recovered (uiop:getenv "AUTOLITH_RECOVERED")))
+             (unwind-protect
+                  (progn
+                    (sb-posix:setenv "AUTOLITH_RECOVERED" "1" 1)
+                    (let* ((recovered-spans (application-banner application))
+                           (recovered-styles
+                             (loop for span in recovered-spans
+                                   for style = (terminal-span-style span)
+                                   when (member
+                                         style
+                                         +application-recovery-gradient-styles+)
+                                     collect style)))
+                      (test-assert
+                       (equal recovered-styles
+                              +application-recovery-gradient-styles+)
+                       "a recovered process renders every AL row in red")))
+               (if previous-recovered
+                   (sb-posix:setenv "AUTOLITH_RECOVERED"
+                                   previous-recovered 1)
+                   (sb-posix:unsetenv "AUTOLITH_RECOVERED"))))
            (test-assert (string= (first lines) "")
                         "the banner begins with one empty row")
            (test-assert (and (search "  :::.      :::" (second lines))
@@ -267,6 +289,9 @@
                                metadata-start
                                (< logo-end metadata-start))
                           "narrow banners stack metadata below the AL mark")))
+      (if previous-recovered
+          (sb-posix:setenv "AUTOLITH_RECOVERED" previous-recovered 1)
+          (sb-posix:unsetenv "AUTOLITH_RECOVERED"))
       (uiop:delete-directory-tree root
                                   :validate t
                                   :if-does-not-exist :ignore)))

@@ -13,6 +13,12 @@
   :documentation
   "The AL mark generated with FIGlet's Cosmic font, paired with row styles.")
 
+(define-constant +application-recovery-gradient-styles+
+  '(:recovery-gradient-1 :recovery-gradient-2 :recovery-gradient-3
+    :recovery-gradient-4 :recovery-gradient-5 :recovery-gradient-6)
+  :test #'equal
+  :documentation "The distinct row styles used after recovery starts Autolith.")
+
 (define-constant +application-banner-gap+ "   "
   :test #'string=
   :documentation "Horizontal space between the startup mark and session data.")
@@ -20,10 +26,20 @@
 (define-constant +application-banner-minimum-metadata-width+ 32
   :documentation "The minimum useful width for metadata beside the startup mark.")
 
+(-> application--banner-logo-lines () list)
+(defun application--banner-logo-lines ()
+  "Return startup-mark rows colored for an ordinary or recovered process."
+  (if (non-empty-string-p (uiop:getenv "AUTOLITH_RECOVERED"))
+      (mapcar (lambda (entry style)
+                (cons style (rest entry)))
+              +application-banner-logo-lines+
+              +application-recovery-gradient-styles+)
+      +application-banner-logo-lines+))
+
 (-> application--banner-logo-width () (integer 1))
 (defun application--banner-logo-width ()
   "Return the widest row of the embedded startup mark in terminal cells."
-  (loop for entry in +application-banner-logo-lines+
+  (loop for entry in (application--banner-logo-lines)
         maximize (text-cell-width (rest entry))))
 
 (-> application--banner-columns (application) (integer 1))
@@ -88,7 +104,7 @@
          (metadata-width (- columns
                             logo-width
                             (text-cell-width +application-banner-gap+))))
-    (loop for logo-entry in +application-banner-logo-lines+
+    (loop for logo-entry in (application--banner-logo-lines)
           for index from 0
           for metadata-row = (nth index metadata-rows)
           append
@@ -109,7 +125,7 @@
 (defun application--banner-stacked-spans (metadata-rows columns)
   "Return the startup mark above clipped METADATA-ROWS within COLUMNS."
   (append
-   (loop for logo-entry in +application-banner-logo-lines+
+   (loop for logo-entry in (application--banner-logo-lines)
          append (application--banner-terminate-row
                  (list (terminal-span (first logo-entry)
                                       (rest logo-entry)))))
