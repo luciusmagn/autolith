@@ -184,6 +184,25 @@
                  character)))
          text)))
 
+(serapeum:-> recovery-print-introduction () null)
+(defun recovery-print-introduction ()
+  "Explain the pristine recovery image before it inspects or boots state."
+  (let ((styled-p
+          (and (interactive-stream-p *error-output*)
+               (null (uiop:getenv "NO_COLOR")))))
+    (when styled-p
+      (format *error-output* "~C[1;31m" #\Escape))
+    (write-line "RECOVERY IMAGE" *error-output*)
+    (when styled-p
+      (format *error-output* "~C[0m" #\Escape))
+    (format *error-output*
+            "This pristine image starts after active Autolith fails or when ~
+             recovery is requested.~%It inspects the failure and boots a ~
+             compatible retained generation or clean source fallback without ~
+             loading the damaged active core.~2%")
+    (finish-output *error-output*))
+  nil)
+
 (serapeum:-> recovery-read-form (pathname) t)
 (defun recovery-read-form (pathname)
   "Read exactly one portable form from PATHNAME with reader evaluation disabled."
@@ -961,25 +980,27 @@
                 (progn
                   (recovery-print-generations context)
                   0)
-                (let ((reported-capsule
-                        (recovery-report-crash
-                         context
-                         :status status
-                         :capsule capsule
-                         :original-arguments original-arguments)))
-                  (let ((selected
-                          (if generation
-                              (recovery-load-generation
-                               context
-                               (recovery-manifest-pathname context generation)
-                               :expected-identifier generation)
-                              (recovery-selected-generation-or-fallback
-                               context))))
-                    (recovery-boot-with-source-fallback
-                     context
-                     selected
-                     forwarded
-                     :capsule reported-capsule)))))))))
+                (progn
+                  (recovery-print-introduction)
+                  (let ((reported-capsule
+                          (recovery-report-crash
+                           context
+                           :status status
+                           :capsule capsule
+                           :original-arguments original-arguments)))
+                    (let ((selected
+                            (if generation
+                                (recovery-load-generation
+                                 context
+                                 (recovery-manifest-pathname context generation)
+                                 :expected-identifier generation)
+                                (recovery-selected-generation-or-fallback
+                                 context))))
+                      (recovery-boot-with-source-fallback
+                       context
+                       selected
+                       forwarded
+                       :capsule reported-capsule))))))))))
 
 (serapeum:-> recovery-main () null)
 (defun recovery-main ()

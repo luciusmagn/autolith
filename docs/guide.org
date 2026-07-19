@@ -626,6 +626,8 @@ compatible retained generations newest first, restoring terminal state and
 refreshing crash context between attempts. If no compatible retained generation
 exists or all of them fail, recovery creates a private clean checkout of the
 current committed source and boots it with the locked dependency setup.
+Before inspection begins, the pristine core prints a red =RECOVERY IMAGE= label
+and explains that it exists to avoid loading the damaged active core.
 
 Worker images are never candidates for active startup, rollback, or recovery.
 Saving or loading an instrumented worker core does not replace the pinned SBCL
