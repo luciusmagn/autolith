@@ -304,7 +304,7 @@
                  :maximum-tool-calls maximum-tool-calls))
 
 (-> agent-run-user-turn
-    (agent string &key (:observer agent-observer)
+    (agent (or string user-message-input) &key (:observer agent-observer)
            (:goal-context (option string)))
     provider-result)
 (defgeneric agent-run-user-turn (agent content &key observer goal-context)
@@ -314,10 +314,20 @@
 (defmethod agent-run-user-turn
     ((agent agent) (content string)
      &key (observer (make-instance 'agent-observer)) goal-context)
+  "Normalize a textual user turn before running it through AGENT."
+  (agent-run-user-turn agent
+                       (user-message-input-create :text content)
+                       :observer observer
+                       :goal-context goal-context))
+
+(defmethod agent-run-user-turn
+    ((agent agent) (content user-message-input)
+     &key (observer (make-instance 'agent-observer)) goal-context)
   "Run one serialized user turn through AGENT while presenting events to OBSERVER."
-  (unless (non-empty-string-p content)
+  (unless (or (non-empty-string-p (user-message-input-text content))
+              (user-message-input-image-pathnames content))
     (error 'agent-loop-error
-           :message "A user turn requires non-empty content."
+           :message "A user turn requires text or an image."
            :conversation-id (conversation-identifier (agent-conversation agent))
            :request-number nil))
   (with-lock-held ((agent-turn-lock agent))
@@ -492,7 +502,11 @@
              :conversation-id (conversation-identifier conversation)
              :request-number request-number))
     (dolist (message messages)
-      (unless (non-empty-string-p message)
+      (unless (or (and (stringp message) (non-empty-string-p message))
+                  (and (typep message 'user-message-input)
+                       (or (non-empty-string-p
+                            (user-message-input-text message))
+                           (user-message-input-image-pathnames message))))
         (error 'agent-loop-error
                :message "The agent observer returned an empty steering message."
                :conversation-id (conversation-identifier conversation)

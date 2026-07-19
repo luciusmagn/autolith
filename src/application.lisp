@@ -1072,14 +1072,18 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
   nil)
 
 (-> application--run-turn
-    (application string
+    (application (or string user-message-input)
      &key (:continuation-p boolean)
           (:steering-function (option function)))
     null)
 (defun application--run-turn
     (application content &key continuation-p steering-function)
   "Persist and run one model turn for CONTENT while retaining editable input."
-  (let* ((conversation (application-conversation application))
+  (let* ((submission
+           (etypecase content
+             (string (user-message-input-create :text content))
+             (user-message-input content)))
+         (conversation (application-conversation application))
          (ui (application-ui application))
          (sequence (conversation-next-sequence conversation))
          (identifier (list :conversation
@@ -1095,14 +1099,16 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
                 (application--transcript-entry application
                                                :style ':user
                                                :header "❯ you"
-                                               :body content)))
+                                               :body
+                                               (user-message-input-preview
+                                                submission))))
            (setf (application-rendered-sequence application) sequence)
            (terminal-ui-set-status ui (application-thinking-label))
            (application--note-goal-turn
             application
             (agent-run-user-turn
              (application-agent application)
-             content
+             submission
              :observer (application-agent-observer
                         application
                         :steering-function steering-function)
@@ -1142,7 +1148,8 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
   nil)
 
 (-> application-run-message
-    (application string &key (:steering-function (option function)))
+    (application (or string user-message-input)
+     &key (:steering-function (option function)))
     null)
 (defun application-run-message (application content &key steering-function)
   "Run one user turn for CONTENT plus any automatic goal continuation turns."

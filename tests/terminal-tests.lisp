@@ -343,6 +343,69 @@
                      "Ctrl-D exits when the editor is empty"))))
   nil)
 
+(-> test-terminal-image-attachments () null)
+(defun test-terminal-image-attachments ()
+  "Test pasted image labels, submission payloads, pruning, and history recall."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (first-image (merge-pathnames "first image.png" root))
+         (second-image (merge-pathnames "second image.png" root))
+         (terminal (make-instance 'recording-terminal :columns 40))
+         (editor (line-editor-create))
+         (ui (terminal-ui-create :terminal terminal :editor editor)))
+    (unwind-protect
+         (progn
+           (test-conversation--write-tiny-png first-image)
+           (test-conversation--write-tiny-png second-image)
+           (with-terminal-ui (active-ui ui)
+             (terminal-ui-process-event
+              active-ui
+              (list :paste (format nil "'~A'" (namestring first-image))))
+             (terminal-ui-process-event active-ui '(:insert " describe this"))
+             (test-assert
+              (string= (line-editor-text editor)
+                       "[Image #1] describe this")
+              "pasting an image pathname inserts a numbered image label")
+             (multiple-value-bind (action submitted)
+                 (terminal-ui-process-event active-ui :submit)
+               (test-assert (eq action :submit)
+                            "an image draft remains an ordinary submission")
+               (test-assert
+                (and (typep submitted 'user-message-input)
+                     (string= (user-message-input-text submitted)
+                              "[Image #1] describe this")
+                     (equal (user-message-input-image-pathnames submitted)
+                            (list (truename first-image))))
+                "image submission preserves text and the absolute local path"))
+             (terminal-ui-process-event active-ui :history-previous)
+             (multiple-value-bind (action recalled)
+                 (terminal-ui-process-event active-ui :submit)
+               (test-assert
+                (and (eq action :submit)
+                     (typep recalled 'user-message-input)
+                     (equal (user-message-input-image-pathnames recalled)
+                            (list (truename first-image))))
+                "Clinedi history recall restores image attachment metadata"))
+             (terminal-ui-process-event
+              active-ui
+              (list :paste (format nil "'~A'" (namestring first-image))))
+             (terminal-ui-process-event
+              active-ui
+              (list :paste (format nil "'~A'" (namestring second-image))))
+             (line-editor-set-text editor "[Image #2] only")
+             (multiple-value-bind (action pruned)
+                 (terminal-ui-process-event active-ui :submit)
+               (test-assert
+                (and (eq action :submit)
+                     (typep pruned 'user-message-input)
+                     (string= (user-message-input-text pruned)
+                              "[Image #1] only")
+                     (equal (user-message-input-image-pathnames pruned)
+                            (list (truename second-image))))
+                "deleted image labels prune attachments and renumber survivors"))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-terminal-input-decoding () null)
 (defun test-terminal-input-decoding ()
   "Test production escape decoding and complete bracketed paste collection."
@@ -1070,6 +1133,7 @@
   (test-terminal-finalized-scrollback)
   (test-terminal-resize-frame)
   (test-terminal-line-editor)
+  (test-terminal-image-attachments)
   (test-terminal-input-decoding)
   (test-terminal-live-region-layout)
   (test-terminal-narrow-live-region)

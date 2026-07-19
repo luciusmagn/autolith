@@ -86,18 +86,51 @@
   (:documentation
    "Ephemeral terminal input and FIFO submission state for one application run."))
 
-(-> application--message-input (string) (option string))
+(-> application-input--text ((or string user-message-input)) string)
+(defun application-input--text (input)
+  "Return the editable text carried by INPUT."
+  (etypecase input
+    (string input)
+    (user-message-input (user-message-input-text input))))
+
+(-> application-input--copy
+    ((or string user-message-input))
+    (or string user-message-input))
+(defun application-input--copy (input)
+  "Return a detached copy of INPUT."
+  (etypecase input
+    (string (copy-seq input))
+    (user-message-input (user-message-input-copy input))))
+
+(-> application-input--preview ((or string user-message-input)) string)
+(defun application-input--preview (input)
+  "Return INPUT's text for pending-work presentation."
+  (etypecase input
+    (string input)
+    (user-message-input (user-message-input-preview input))))
+
+(-> application--message-input
+    ((or string user-message-input))
+    (option (or string user-message-input)))
 (defun application--message-input (input)
   "Return INPUT's model message, or NIL when it is empty or a slash command."
-  (cond
-    ((not (non-empty-string-p input))
-     nil)
-    ((uiop:string-prefix-p "//" input)
-     (subseq input 1))
-    ((uiop:string-prefix-p "/" input)
-     nil)
-    (t
-     input)))
+  (let ((text (application-input--text input)))
+    (cond
+      ((and (not (non-empty-string-p text))
+            (not (and (typep input 'user-message-input)
+                      (user-message-input-image-pathnames input))))
+       nil)
+      ((uiop:string-prefix-p "//" text)
+       (etypecase input
+         (string (subseq text 1))
+         (user-message-input
+          (user-message-input-create
+           :text (subseq text 1)
+           :image-pathnames (user-message-input-image-pathnames input)))))
+      ((uiop:string-prefix-p "/" text)
+       nil)
+      (t
+       (application-input--copy input)))))
 
 (-> application--quit-command-p (string) boolean)
 (defun application--quit-command-p (input)
@@ -133,11 +166,12 @@
   (with-lock-held ((application-input-controller-lock controller))
     (terminal-ui-set-pending-inputs
      (application-ui (application-input-controller-application controller))
-     (copy-list (application-input-controller-steering-items controller))
+     (mapcar #'application-input--preview
+             (application-input-controller-steering-items controller))
      (loop for work in (application-input-controller-work-items controller)
            for input = (second work)
-           when (stringp input)
-             collect (copy-seq input))))
+           when (typep input '(or string user-message-input))
+             collect (application-input--preview input))))
   nil)
 
 (-> application-input-controller-turn-active-p
@@ -203,7 +237,7 @@
   nil)
 
 (-> application-input-controller--enqueue
-    (application-input-controller keyword string)
+    (application-input-controller keyword (or string user-message-input))
     null)
 (defun application-input-controller--enqueue (controller kind input)
   "Append one work item of KIND carrying INPUT to CONTROLLER."
@@ -211,14 +245,14 @@
     (unless (application-input-controller-stopping-p controller)
       (setf (application-input-controller-work-items controller)
             (nconc (application-input-controller-work-items controller)
-                   (list (list kind (copy-seq input)))))
+                   (list (list kind (application-input--copy input)))))
       (condition-notify
        (application-input-controller-condition-variable controller))))
   (application-input-controller--publish-counts controller)
   nil)
 
 (-> application-input-controller--enqueue-steering
-    (application-input-controller string)
+    (application-input-controller (or string user-message-input))
     null)
 (defun application-input-controller--enqueue-steering (controller input)
   "Queue INPUT for the active turn, or promote it before follow-ups if that turn ended."
@@ -227,8 +261,8 @@
       (if (application-input-controller-active-p controller)
           (setf (application-input-controller-steering-items controller)
                 (nconc (application-input-controller-steering-items controller)
-                       (list (copy-seq input))))
-          (push (list ':message (copy-seq input))
+                       (list (application-input--copy input))))
+          (push (list ':message (application-input--copy input))
                 (application-input-controller-work-items controller)))
       (condition-notify
        (application-input-controller-condition-variable controller))))
@@ -294,38 +328,41 @@
   nil)
 
 (-> application-input-controller--handle-submission
-    (application-input-controller string &key (:steer-p boolean))
+    (application-input-controller (or string user-message-input)
+     &key (:steer-p boolean))
     null)
 (defun application-input-controller--handle-submission
     (controller input &key steer-p)
   "Route submitted INPUT to model work, command work, or busy-command policy."
-  (let ((message (application--message-input input)))
+  (let ((message (application--message-input input))
+        (text (application-input--text input)))
     (cond
       (message
        (if steer-p
            (application-input-controller--enqueue-steering controller message)
            (application-input-controller--enqueue controller ':message message)))
-      ((not (non-empty-string-p input))
+      ((not (non-empty-string-p text))
        nil)
       ((application-input-controller-busy-p controller)
-       (if (application--quit-command-p input)
+       (if (application--quit-command-p text)
            (application-input-controller--request-exit controller ':quit)
-           (application-input-controller--hold-command controller input)))
+           (application-input-controller--hold-command controller text)))
       (t
-       (application-input-controller--enqueue controller ':command input))))
+       (application-input-controller--enqueue controller ':command text))))
   nil)
 
 (-> application-input-controller--handle-queue-submission
-    (application-input-controller string)
+    (application-input-controller (or string user-message-input))
     null)
 (defun application-input-controller--handle-queue-submission (controller input)
   "Queue INPUT as post-turn message or command work."
-  (let ((message (application--message-input input)))
+  (let ((message (application--message-input input))
+        (text (application-input--text input)))
     (cond
       (message
        (application-input-controller--enqueue controller ':message message))
-      ((non-empty-string-p input)
-       (application-input-controller--enqueue controller ':command input))))
+      ((non-empty-string-p text)
+       (application-input-controller--enqueue controller ':command text))))
   nil)
 
 (-> application-input-controller--recall-follow-up
@@ -350,8 +387,8 @@
               (loop for queued-work
                       in (application-input-controller-work-items controller)
                     for input = (second queued-work)
-                    when (stringp input)
-                      collect (copy-seq input)))))
+                    when (typep input '(or string user-message-input))
+                      collect (application-input--preview input)))))
     (when work
       (terminal-ui-recall-follow-up
        (application-ui (application-input-controller-application controller))
@@ -818,7 +855,8 @@
   nil)
 
 (-> application--run-message-input
-    (application string &key (:steering-function (option function)))
+    (application (or string user-message-input)
+     &key (:steering-function (option function)))
     keyword)
 (defun application--run-message-input
     (application input &key steering-function)

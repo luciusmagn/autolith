@@ -192,6 +192,16 @@
     :accessor terminal-ui-steering-input-previews
     :type list
     :documentation "Sanitized steering text shown in the live region.")
+   (image-attachments
+    :initform nil
+    :accessor terminal-ui-image-attachments
+    :type list
+    :documentation "Local image pathnames and labels attached to the current draft.")
+   (image-history
+    :initform nil
+    :accessor terminal-ui-image-history
+    :type list
+    :documentation "Recent editor history text paired with its image attachments.")
    (stream-tail
     :initform nil
     :accessor terminal-ui-stream-tail

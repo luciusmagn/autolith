@@ -81,6 +81,134 @@
 
 ;;;; -- Terminal Presentation --
 
+(-> terminal-ui--image-label (integer) string)
+(defun terminal-ui--image-label (number)
+  "Return the visible composer label for image NUMBER."
+  (format nil "[Image #~D]" number))
+
+(-> terminal-ui--copy-image-attachments (list) list)
+(defun terminal-ui--copy-image-attachments (attachments)
+  "Return a detached copy of draft ATTACHMENTS."
+  (loop for attachment in attachments
+        collect (cons (copy-seq (first attachment))
+                      (rest attachment))))
+
+(-> terminal-ui--replace-image-labels (string list) string)
+(defun terminal-ui--replace-image-labels (text mapping)
+  "Replace image labels in TEXT according to simultaneous MAPPING."
+  (with-output-to-string (stream)
+    (loop with position = 0
+          while (< position (length text))
+          for replacement =
+            (find-if
+             (lambda (entry)
+               (let ((label (first entry)))
+                 (and (<= (+ position (length label)) (length text))
+                      (string= label text
+                               :start2 position
+                               :end2 (+ position (length label))))))
+             mapping)
+          do (if replacement
+                 (progn
+                   (write-string (rest replacement) stream)
+                   (incf position (length (first replacement))))
+                 (progn
+                   (write-char (char text position) stream)
+                   (incf position))))))
+
+(-> terminal-ui--submission-input (terminal-ui string)
+    (or string user-message-input))
+(defun terminal-ui--submission-input (ui text)
+  "Return TEXT with only its surviving, consecutively labelled attachments."
+  (let* ((attachments
+           (remove-if-not
+            (lambda (attachment)
+              (search (first attachment) text))
+            (terminal-ui-image-attachments ui)))
+         (mapping
+           (loop for attachment in attachments
+                 for number from 1
+                 collect (cons (first attachment)
+                               (terminal-ui--image-label number))))
+         (normalized-text (terminal-ui--replace-image-labels text mapping)))
+    (if attachments
+        (user-message-input-create
+         :text normalized-text
+         :image-pathnames (mapcar #'rest attachments))
+        normalized-text)))
+
+(-> terminal-ui--remember-image-submission (terminal-ui string list) null)
+(defun terminal-ui--remember-image-submission (ui text attachments)
+  "Remember submitted TEXT and ATTACHMENTS for Clinedi history recall."
+  (when attachments
+    (push (list :text (copy-seq text)
+                :attachments
+                (terminal-ui--copy-image-attachments attachments))
+          (terminal-ui-image-history ui))
+    (when (> (length (terminal-ui-image-history ui))
+             +terminal-history-limit+)
+      (setf (terminal-ui-image-history ui)
+            (subseq (terminal-ui-image-history ui)
+                    0 +terminal-history-limit+))))
+  nil)
+
+(-> terminal-ui--restore-history-images (terminal-ui) null)
+(defun terminal-ui--restore-history-images (ui)
+  "Restore or prune image attachments for UI's current editor text."
+  (let ((text (line-editor-text (terminal-ui-editor ui))))
+    (if (terminal-ui-image-attachments ui)
+        (setf (terminal-ui-image-attachments ui)
+              (remove-if-not
+               (lambda (attachment)
+                 (search (first attachment) text))
+               (terminal-ui-image-attachments ui)))
+        (let ((record
+                (find text
+                      (terminal-ui-image-history ui)
+                      :key (lambda (entry) (getf entry :text))
+                      :test #'string=)))
+          (when record
+            (setf (terminal-ui-image-attachments ui)
+                  (terminal-ui--copy-image-attachments
+                   (getf record :attachments)))))))
+  nil)
+
+(-> terminal-ui--attach-pasted-image (terminal-ui string) boolean)
+(defun terminal-ui--attach-pasted-image (ui pasted-text)
+  "Attach PASTED-TEXT when it names a supported local image."
+  (let ((pathname (image-input-recognize-pasted-path pasted-text)))
+    (if pathname
+        (let ((label
+                (terminal-ui--image-label
+                 (1+ (length (terminal-ui-image-attachments ui))))))
+          (line-editor-handle-event
+           (terminal-ui-editor ui)
+           (list ':insert label))
+          (setf (terminal-ui-image-attachments ui)
+                (nconc (terminal-ui-image-attachments ui)
+                       (list (cons label pathname))))
+          t)
+        nil)))
+
+(-> terminal-ui--set-draft-input
+    (terminal-ui (or string user-message-input))
+    null)
+(defun terminal-ui--set-draft-input (ui input)
+  "Replace UI's editor and attachment state with INPUT."
+  (etypecase input
+    (string
+     (setf (terminal-ui-image-attachments ui) nil)
+     (line-editor-set-text (terminal-ui-editor ui) (sanitize-text input)))
+    (user-message-input
+     (setf (terminal-ui-image-attachments ui)
+           (loop for pathname in (user-message-input-image-pathnames input)
+                 for number from 1
+                 collect (cons (terminal-ui--image-label number) pathname)))
+     (line-editor-set-text
+      (terminal-ui-editor ui)
+      (sanitize-text (user-message-input-text input)))))
+  nil)
+
 (-> terminal-ui-live-row-count (terminal-ui) (integer 0))
 (defun terminal-ui-live-row-count (ui)
   "Return the number of live physical rows currently painted for UI."
@@ -909,25 +1037,27 @@ when no resize needs to be applied."
   ui)
 
 (-> terminal-ui-recall-follow-up
-    (terminal-ui string &key (:steering-inputs list) (:queued-inputs list))
+    (terminal-ui (or string user-message-input)
+     &key (:steering-inputs list) (:queued-inputs list))
     terminal-ui)
 (defun terminal-ui-recall-follow-up
-    (ui text &key steering-inputs queued-inputs)
-  "Recall TEXT into UI while atomically refreshing pending input previews."
+    (ui input &key steering-inputs queued-inputs)
+  "Recall INPUT into UI while atomically refreshing pending input previews."
   (let ((safe-steering (mapcar #'sanitize-text steering-inputs))
         (safe-queued (mapcar #'sanitize-text queued-inputs)))
     (with-terminal-ui-locked (ui)
       (setf (terminal-ui-steering-input-previews ui) safe-steering
             (terminal-ui-queued-input-previews ui) safe-queued)
-      (line-editor-set-text (terminal-ui-editor ui) (sanitize-text text))
+      (terminal-ui--set-draft-input ui input)
       (terminal-ui--paint-live ui)))
   ui)
 
-(-> terminal-ui-set-input (terminal-ui string) terminal-ui)
-(defun terminal-ui-set-input (ui text)
-  "Replace UI's editable input with TEXT and repaint it."
+(-> terminal-ui-set-input
+    (terminal-ui (or string user-message-input)) terminal-ui)
+(defun terminal-ui-set-input (ui input)
+  "Replace UI's editable input with INPUT and repaint it."
   (with-terminal-ui-locked (ui)
-    (line-editor-set-text (terminal-ui-editor ui) (sanitize-text text))
+    (terminal-ui--set-draft-input ui input)
     (terminal-ui--paint-live ui))
   ui)
 
@@ -985,7 +1115,13 @@ when no resize needs to be applied."
       ((and (eq event :interrupt)
             (plusp (length (line-editor-text editor))))
        (line-editor-clear editor)
+       (setf (terminal-ui-image-attachments ui) nil)
        (values :cleared nil))
+      ((and (consp event)
+            (eq (first event) :paste)
+            (stringp (second event))
+            (terminal-ui--attach-pasted-image ui (second event)))
+       (values :changed nil))
       ((eq event :complete)
        (line-editor-handle-event editor '(:insert "    "))
        (values :changed nil))
@@ -1027,11 +1163,15 @@ when no resize needs to be applied."
 
 (-> terminal-ui-process-event
     (terminal-ui t &key (:queue-completion-p boolean))
-    (values keyword (option string)))
+    (values keyword (option (or string user-message-input))))
 (defun terminal-ui-process-event (ui event &key queue-completion-p)
   "Apply EVENT to UI's suggestions or editor and return its action and payload."
   (with-terminal-ui-locked (ui)
     (let* ((editor (terminal-ui-editor ui))
+           (text-before (copy-seq (line-editor-text editor)))
+           (images-before
+             (terminal-ui--copy-image-attachments
+              (terminal-ui-image-attachments ui)))
            (completion-items
              (and (eq event :complete)
                   (terminal-ui--reconcile-completions ui)))
@@ -1052,6 +1192,15 @@ when no resize needs to be applied."
             (values completion-action completion-payload)
             (multiple-value-bind (action payload)
                 (terminal-ui--apply-editor-event ui effective-event)
+              (when (eq action :changed)
+                (terminal-ui--restore-history-images ui))
+              (when (and (member action '(:submit :queue))
+                         (stringp payload))
+                (terminal-ui--remember-image-submission
+                 ui text-before images-before)
+                (setf payload (terminal-ui--submission-input
+                               ui payload)
+                      (terminal-ui-image-attachments ui) nil))
               (when (member action '(:changed :cleared :submit :queue))
                 (terminal-ui--repaint-live ui))
               (values action payload)))))))
