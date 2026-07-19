@@ -244,7 +244,7 @@ prefix from before selection. The commands are:
 /generations    list retained generations
 /rollback       start a retained generation through recovery
 /status         show usage and rate limits
-/compact        summarize earlier context now
+/compact on|off hide routine tool results; no argument summarizes context
 /quit           leave Autolith
 #+END_EXAMPLE
 
@@ -290,6 +290,13 @@ globally in =${XDG_STATE_HOME:-~/.local/state}/autolith/preferences.sexp= and
 survives clean restarts. Autolith never displays raw reasoning text or encrypted
 reasoning payloads; these are model-provided summaries, not hidden chain-of-thought.
 
+=/compact on=, the default, hides successful routine tool results while retaining
+failures, file-write and file-edit results, and arbitrary execution results from
+=shell.run=, =lisp.eval=, and =self.eval=. =/compact off= shows every tool result.
+The choice shares the private global preferences file with =/trace=. This changes
+terminal presentation only; every result remains in durable conversation history
+and provider context. With no argument, =/compact= still forces context compaction.
+
 Context compaction keeps long conversations going. When the newest provider
 step reports total token usage at or beyond the compaction limit, Autolith asks
 the model for a context checkpoint summary, appends it as a durable
@@ -299,7 +306,7 @@ The 5.6 family models have a 272000 token context window (read from the live
 model catalog), and compaction triggers at 80 percent of the window by
 default. Set =AUTOLITH_COMPACTION_THRESHOLD= to a percentage between 1 and 95 to
 compact earlier or later, and =AUTOLITH_CONTEXT_WINDOW= to override the window
-for unlisted models. =/compact= forces a compaction immediately, and
+for unlisted models. =/compact= with no argument forces a compaction immediately, and
 =/status= shows how full the context currently is.
 
 =/status= reports the model, token usage, and subscription rate limit windows

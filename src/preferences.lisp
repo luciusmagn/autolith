@@ -2,7 +2,7 @@
 
 ;;;; -- Global Preferences --
 
-(define-constant +preferences-version+ 2
+(define-constant +preferences-version+ 3
   :documentation "The readable global preferences file format version.")
 
 (defclass preference-state ()
@@ -23,7 +23,13 @@
     :initform nil
     :reader preference-state-reasoning-traces-p
     :type boolean
-    :documentation "Whether provider reasoning summaries are requested and shown."))
+    :documentation "Whether provider reasoning summaries are requested and shown.")
+   (compact-view-p
+    :initarg :compact-view-p
+    :initform t
+    :reader preference-state-compact-view-p
+    :type boolean
+    :documentation "Whether successful routine tool results are hidden."))
   (:documentation "Validated global choices restored across Autolith processes."))
 
 (-> preferences--form-p (t) boolean)
@@ -41,7 +47,7 @@
                   (case version
                     (1
                      t)
-                    (2
+                    ((2 3)
                      (let ((model (getf properties :model))
                            (effort (getf properties :reasoning-effort)))
                        (and
@@ -54,7 +60,13 @@
                              (null
                               (member effort
                                       +supported-reasoning-efforts+
-                                      :test #'string=)))))))
+                                      :test #'string=))))
+                        (or (= version 2)
+                            (and
+                             (readable-state-property-present-p
+                              properties :compact-view-p)
+                             (typep (getf properties :compact-view-p)
+                                    'boolean))))))
                     (otherwise
                      nil)))))
     (error ()
@@ -68,7 +80,8 @@
                    :model (getf properties :model)
                    :reasoning-effort (getf properties :reasoning-effort)
                    :reasoning-traces-p
-                   (getf properties :reasoning-traces-p))))
+                   (getf properties :reasoning-traces-p)
+                   :compact-view-p (getf properties :compact-view-p t))))
 
 (-> preferences--read (configuration) preference-state)
 (defun preferences--read (configuration)
@@ -116,6 +129,11 @@
   "Return the persisted reasoning-summary setting, defaulting safely to false."
   (preference-state-reasoning-traces-p (preferences-load configuration)))
 
+(-> preferences-compact-view-p (configuration) boolean)
+(defun preferences-compact-view-p (configuration)
+  "Return the persisted compact-view setting, defaulting safely to true."
+  (preference-state-compact-view-p (preferences-load configuration)))
+
 (-> preferences-apply-model-selection (configuration) configuration)
 (defun preferences-apply-model-selection (configuration)
   "Apply saved model choices unless their corresponding environment variables exist."
@@ -146,7 +164,9 @@
                :reasoning-effort
                (preference-state-reasoning-effort preferences)
                :reasoning-traces-p
-               (preference-state-reasoning-traces-p preferences)))
+               (preference-state-reasoning-traces-p preferences)
+               :compact-view-p
+               (preference-state-compact-view-p preferences)))
       (error (cause)
         (error 'preferences-error
                :message (format nil "Could not persist preferences at ~A: ~A"
@@ -168,7 +188,9 @@
       :model (configuration-model configuration)
       :reasoning-effort (configuration-reasoning-effort configuration)
       :reasoning-traces-p
-      (preference-state-reasoning-traces-p previous))))
+      (preference-state-reasoning-traces-p previous)
+      :compact-view-p
+      (preference-state-compact-view-p previous))))
   nil)
 
 (-> preferences-set-reasoning-traces (configuration boolean) null)
@@ -181,5 +203,21 @@
       'preference-state
       :model (preference-state-model previous)
       :reasoning-effort (preference-state-reasoning-effort previous)
-      :reasoning-traces-p enabled-p)))
+      :reasoning-traces-p enabled-p
+      :compact-view-p (preference-state-compact-view-p previous))))
+  nil)
+
+(-> preferences-set-compact-view (configuration boolean) null)
+(defun preferences-set-compact-view (configuration enabled-p)
+  "Atomically persist ENABLED-P without discarding other global choices."
+  (let ((previous (preferences-load configuration)))
+    (preferences--write
+     configuration
+     (make-instance
+      'preference-state
+      :model (preference-state-model previous)
+      :reasoning-effort (preference-state-reasoning-effort previous)
+      :reasoning-traces-p
+      (preference-state-reasoning-traces-p previous)
+      :compact-view-p enabled-p)))
   nil)

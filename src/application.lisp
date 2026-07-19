@@ -49,6 +49,12 @@
     :accessor application-reasoning-traces-p
     :type boolean
     :documentation "Whether provider-visible reasoning summaries appear in the transcript.")
+   (compact-view-p
+    :initarg :compact-view-p
+    :initform t
+    :accessor application-compact-view-p
+    :type boolean
+    :documentation "Whether successful routine tool results are hidden.")
    (permission-state
     :initarg :permission-state
     :initform (make-instance 'permission-state)
@@ -112,7 +118,8 @@
     (:name "/rollback"      :argument nil :description "pick a generation for recovery")
     (:name "/status"        :argument nil :description "show usage and rate limits")
     (:name "/context"       :argument nil :description "inspect request-local context")
-    (:name "/compact"       :argument nil :description "summarize earlier context now")
+    (:name "/compact"       :argument "on|off"
+     :description "hide routine results, or summarize with no argument")
     (:name "/quit"          :argument nil :description "leave Autolith"))
   :test #'equal
   :documentation "The interactive commands offered by completion and /help.")
@@ -212,6 +219,8 @@
            (user-init-pathname (user-init-load preferred-configuration))
            (reasoning-traces-p
              (preferences-reasoning-traces-p preferred-configuration))
+           (compact-view-p
+             (preferences-compact-view-p preferred-configuration))
            (permission-state (permissions-load preferred-configuration))
            (conversation (if conversation-id
                              (conversation-load-by-id preferred-configuration
@@ -243,7 +252,8 @@
                                        :agent agent
                                        :ui ui
                                        :permission-state permission-state
-                                       :reasoning-traces-p reasoning-traces-p)))
+                                       :reasoning-traces-p reasoning-traces-p
+                                       :compact-view-p compact-view-p)))
       (declare (ignore user-init-pathname))
       (setf (application-overlay-failures application) overlay-failures)
       (application--load-goal application)
@@ -278,6 +288,8 @@
              retained-configuration))
          (reasoning-traces-p
            (preferences-reasoning-traces-p prepared-configuration))
+         (compact-view-p
+           (preferences-compact-view-p prepared-configuration))
          (permission-state (permissions-load prepared-configuration))
          (recovery-conversation-id
            (let ((value (uiop:getenv "AUTOLITH_RECOVERY_CONVERSATION_ID")))
@@ -331,6 +343,7 @@
           (application-permission-mode application) :ask
           (application-input-controller application) nil
           (application-reasoning-traces-p application) reasoning-traces-p
+          (application-compact-view-p application) compact-view-p
           (application-rendered-sequence application)
           (if (and recovery-rendered-sequence
                    (string= (conversation-identifier conversation)
@@ -720,7 +733,13 @@
     (:tool-result
      (let* ((canonical-name (getf (rest record) :tool))
             (tool (application--find-tool application canonical-name)))
-       (application-tool-result-entry tool application record)))
+       (when (or (not (application-compact-view-p application))
+                 (not (eq (getf (rest record) :status) ':ok))
+                 (member canonical-name
+                         '("fs.write" "fs.edit" "shell.run"
+                           "lisp.eval" "self.eval")
+                         :test #'string=))
+         (application-tool-result-entry tool application record))))
     (:summary
      (list (terminal-span
             ':hint

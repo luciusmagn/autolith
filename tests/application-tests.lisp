@@ -3,13 +3,15 @@
 ;;;; -- Presentation Test Support --
 
 (-> application-tests--ui-application
-    (&key (:columns integer) (:reasoning-traces-p boolean))
+    (&key (:columns integer) (:reasoning-traces-p boolean)
+          (:compact-view-p boolean))
     application)
 (defun application-tests--ui-application
-    (&key (columns 40) reasoning-traces-p)
+    (&key (columns 40) reasoning-traces-p (compact-view-p t))
   "Return a minimal application presenting into a recording terminal."
   (make-instance 'application
                  :reasoning-traces-p reasoning-traces-p
+                 :compact-view-p compact-view-p
                  :tool-registry (make-default-tool-registry)
                  :ui (terminal-ui-create
                       :terminal (make-instance 'recording-terminal
@@ -374,6 +376,66 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-compact-view-command () null)
+(defun test-compact-view-command ()
+  "Test persistent filtering of successful routine tool results."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (application (application-tests--ui-application :columns 60))
+         (ui (application-ui application)))
+    (setf (application-configuration application) configuration)
+    (terminal-ui-start ui)
+    (unwind-protect
+         (let ((successful-read
+                 '(:tool-result :seq 1 :time 0 :call-id 1
+                   :tool "fs.read" :status :ok :output "read output"))
+               (failed-read
+                 '(:tool-result :seq 2 :time 0 :call-id 2
+                   :tool "fs.read" :status :error :output "read failed")))
+           (test-assert (application-compact-view-p application)
+                        "compact tool presentation defaults to enabled")
+           (test-assert
+            (null (conversation-record-entry application successful-read))
+            "compact presentation hides successful routine results")
+           (test-assert
+            (conversation-record-entry application failed-read)
+            "compact presentation retains failed routine results")
+           (dolist (tool-name '("fs.write" "fs.edit" "shell.run"
+                                "lisp.eval" "self.eval"))
+             (test-assert
+              (conversation-record-entry
+               application
+               (list :tool-result :seq 3 :time 0 :call-id tool-name
+                     :tool tool-name :status :ok :output "ok"))
+              (format nil "compact presentation retains successful ~A results"
+                      tool-name)))
+           (test-assert (eq (application-command application "/compact off")
+                            ':continue)
+                        "/compact off remains a nonmodal command")
+           (test-assert (not (application-compact-view-p application))
+                        "/compact off expands routine results")
+           (test-assert (not (preferences-compact-view-p configuration))
+                        "/compact off persists expanded presentation")
+           (test-assert
+            (conversation-record-entry application successful-read)
+            "expanded presentation shows successful routine results")
+           (test-assert (eq (application-command application "/compact on")
+                            ':continue)
+                        "/compact on remains a nonmodal command")
+           (test-assert (preferences-compact-view-p configuration)
+                        "/compact on persists compact presentation")
+           (test-assert
+            (handler-case
+                (progn
+                  (application-compact-view-command application "sometimes")
+                  nil)
+              (configuration-error ()
+                t))
+            "unsupported compact modes signal a typed usage error"))
+      (terminal-ui-stop ui)
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-command-permission-modes () null)
 (defun test-command-permission-modes ()
   "Test session permission commands and fail-closed command authorization."
@@ -475,7 +537,9 @@
 (-> test-transcript-entries () null)
 (defun test-transcript-entries ()
   "Test styled transcript entry construction, wrapping, and output bounds."
-  (let ((application (application-tests--ui-application :columns 40)))
+  (let ((application (application-tests--ui-application
+                      :columns 40
+                      :compact-view-p nil)))
     (let ((entry (conversation-record-entry
                   application
                   '(:message :seq 1 :time 0 :role :user :content "hello there"))))
@@ -2058,6 +2122,7 @@
   (test-application-banner-version)
   (test-thinking-label-selection)
   (test-reasoning-trace-command)
+  (test-compact-view-command)
   (test-command-permission-modes)
   (test-interrupt-resume-instruction)
   (test-transcript-entries)

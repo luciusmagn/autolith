@@ -389,6 +389,32 @@
               :message "Usage: /trace on or /trace off."))))
   nil)
 
+(-> application-compact-view-command (application string) null)
+(defun application-compact-view-command (application argument)
+  "Persist and apply APPLICATION's compact tool-result presentation mode."
+  (let ((mode (string-downcase argument)))
+    (cond
+      ((string= mode "on")
+       (preferences-set-compact-view
+        (application-configuration application)
+        t)
+       (setf (application-compact-view-p application) t)
+       (application-present
+        application
+        "Compact tool-result presentation is enabled and saved."))
+      ((string= mode "off")
+       (preferences-set-compact-view
+        (application-configuration application)
+        nil)
+       (setf (application-compact-view-p application) nil)
+       (application-present
+        application
+        "Compact tool-result presentation is disabled and saved."))
+      (t
+       (error 'configuration-error
+              :message "Usage: /compact on or /compact off."))))
+  nil)
+
 (-> application--model-items (application) list)
 (defun application--model-items (application)
   "Return picker items for the supported 5.6 model family."
@@ -810,7 +836,9 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        (application-present application (context-status))
        :continue)
       ((string= command "/compact")
-       (application-compact application)
+       (if argument
+           (application-compact-view-command application argument)
+           (application-compact application))
        :continue)
       ((string= command "/new")
        (application-install-conversation application

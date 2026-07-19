@@ -35,7 +35,10 @@
                           "missing preferences have no saved model")
              (test-assert
               (null (preference-state-reasoning-effort preferences))
-              "missing preferences have no saved reasoning effort"))
+              "missing preferences have no saved reasoning effort")
+             (test-assert
+              (preference-state-compact-view-p preferences)
+              "missing preferences default to compact tool presentation"))
            (ensure-directories-exist pathname)
            (with-open-file (stream pathname
                                    :direction :output
@@ -52,7 +55,10 @@
               (preference-state-reasoning-traces-p legacy)
               "version one reasoning-summary preferences remain readable")
              (test-assert (null (preference-state-model legacy))
-                          "version one preferences have no saved model"))
+                          "version one preferences have no saved model")
+             (test-assert
+              (preference-state-compact-view-p legacy)
+              "version one preferences default to compact tool presentation"))
            (let* ((selected
                     (configuration-with-reasoning-effort
                      (configuration-with-model configuration "gpt-5.6-luna")
@@ -67,7 +73,10 @@
                 "the selected reasoning effort survives a preference reload")
                (test-assert
                 (preference-state-reasoning-traces-p preferences)
-                "saving model choices preserves the trace preference"))
+                "saving model choices preserves the trace preference")
+               (test-assert
+                (preference-state-compact-view-p preferences)
+                "saving model choices preserves compact presentation"))
              (preferences-tests--without-model-environment
               (lambda ()
                 (let ((restored
@@ -92,7 +101,21 @@
               "changing traces preserves the selected model")
              (test-assert
               (string= (preference-state-reasoning-effort preferences) "high")
-              "changing traces preserves the selected effort"))
+              "changing traces preserves the selected effort")
+             (test-assert
+              (preference-state-compact-view-p preferences)
+              "changing traces preserves compact presentation"))
+           (preferences-set-compact-view configuration nil)
+           (let ((preferences (preferences-load configuration)))
+             (test-assert
+              (not (preference-state-compact-view-p preferences))
+              "expanded tool presentation survives a preference reload")
+             (test-assert
+              (string= (preference-state-model preferences) "gpt-5.6-luna")
+              "changing compact presentation preserves the selected model")
+             (test-assert
+              (not (preference-state-reasoning-traces-p preferences))
+              "changing compact presentation preserves trace mode"))
            (with-open-file (stream pathname
                                    :direction :output
                                    :if-exists :supersede

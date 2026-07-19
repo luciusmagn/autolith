@@ -548,6 +548,12 @@ Every executed tool result records nonnegative CPU and real durations. Terminal
 presentation shows both durations. Calls rejected before execution and repaired
 unknown-outcome records omit timing rather than inventing a duration.
 
+Compact terminal presentation is enabled by default and may be disabled as a
+durable global preference. It hides only successful routine tool-result entries.
+Failures, file writes and edits, and arbitrary execution through =shell.run=,
+=lisp.eval=, or =self.eval= remain visible. Presentation filtering never removes
+records from conversation storage, request projection, or compaction input.
+
 ** 8.2 User Configuration
 
 The optional =${XDG_CONFIG_HOME:-~/.config}/autolith/init.lisp= file is the
