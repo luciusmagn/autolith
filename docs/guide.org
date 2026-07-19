@@ -303,6 +303,19 @@ failures. =/later= lists the queue and =/later cancel ID= removes one entry.
 
 Use a double slash to send a user message that begins with a literal slash.
 
+* User Lisp configuration
+
+Autolith loads the optional
+=${XDG_CONFIG_HOME:-~/.config}/autolith/init.lisp= after its tracked system and
+selected private image commit, before it creates the provider request path. The
+file is read in the =AUTOLITH= package and is loaded again when reconnecting a
+retained generation, so it remains the final user-controlled configuration
+layer. It is ordinary Common Lisp running with the user's full privileges.
+
+This entry point is distinct from =overlays/*.lisp=, which exist only to migrate
+old self-modifications. User configuration is never built into the pristine
+recovery image.
+
 Conversations are append-only readable forms under
 =${XDG_DATA_HOME:-~/.local/share}/autolith/conversations/=. A truncated final form is
 ignored after a crash; malformed complete records are rejected. If a crash

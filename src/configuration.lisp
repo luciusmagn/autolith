@@ -83,6 +83,11 @@
     :reader configuration-cache-root
     :type pathname
     :documentation "The root for replaceable caches and temporary artifacts.")
+   (config-root
+    :initarg :config-root
+    :reader configuration-config-root
+    :type pathname
+    :documentation "The root for user-authored executable configuration.")
    (codex-auth-path
     :initarg :codex-auth-path
     :reader configuration-codex-auth-path
@@ -189,6 +194,9 @@
          (cache-home (environment-directory
                       "XDG_CACHE_HOME"
                       (merge-pathnames ".cache/" home)))
+         (config-home (environment-directory
+                       "XDG_CONFIG_HOME"
+                       (merge-pathnames ".config/" home)))
          (codex-home (environment-directory
                       "CODEX_HOME"
                       (merge-pathnames ".codex/" home)))
@@ -220,6 +228,7 @@
                    :data-root (merge-pathnames "autolith/" data-home)
                    :state-root (merge-pathnames "autolith/" state-home)
                    :cache-root (merge-pathnames "autolith/" cache-home)
+                   :config-root (merge-pathnames "autolith/" config-home)
                    :codex-auth-path (merge-pathnames "auth.json" codex-home)
                    :model selected-model
                    :reasoning-effort selected-effort
@@ -253,6 +262,7 @@ Selecting a different model recomputes the context window for that model."
                  :data-root (configuration-data-root configuration)
                  :state-root (configuration-state-root configuration)
                  :cache-root (configuration-cache-root configuration)
+                 :config-root (configuration-config-root configuration)
                  :codex-auth-path (configuration-codex-auth-path configuration)
                  :model (or model (configuration-model configuration))
                  :reasoning-effort (or reasoning-effort
@@ -352,10 +362,11 @@ Selecting a different model recomputes the context window for that model."
 
 (-> configuration-ensure-directories (configuration) configuration)
 (defun configuration-ensure-directories (configuration)
-  "Create CONFIGURATION's private data, state, and cache directories."
+  "Create CONFIGURATION's private data, state, cache, and config directories."
   (dolist (directory (list (configuration-data-root configuration)
                            (configuration-state-root configuration)
-                           (configuration-cache-root configuration)))
+                           (configuration-cache-root configuration)
+                           (configuration-config-root configuration)))
     (ensure-directories-exist directory))
   configuration)
 
@@ -363,6 +374,11 @@ Selecting a different model recomputes the context window for that model."
 (defun configuration-conversation-root (configuration)
   "Return the directory containing append-only conversation files."
   (merge-pathnames "conversations/" (configuration-data-root configuration)))
+
+(-> configuration-user-init-path (configuration) pathname)
+(defun configuration-user-init-path (configuration)
+  "Return the user-authored Lisp initialization pathname."
+  (merge-pathnames "init.lisp" (configuration-config-root configuration)))
 
 (-> configuration-memory-path (configuration) pathname)
 (defun configuration-memory-path (configuration)

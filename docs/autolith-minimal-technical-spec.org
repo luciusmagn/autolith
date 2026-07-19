@@ -76,6 +76,13 @@ The active SBCL image contains:
 - Self-inspection and self-modification facilities.
 - Loaded Lisp dependencies.
 
+After the tracked system and selected private image commit load, Autolith loads
+=${XDG_CONFIG_HOME:-~/.config}/autolith/init.lisp= when it exists. This
+user-authored Common Lisp is the final executable configuration layer and
+therefore takes precedence over built-in and privately committed definitions.
+It executes with the user's full privileges, is loaded again when reconnecting
+a retained generation, and is never included in the pristine recovery image.
+
 This process is expected to evolve while it is running.
 
 Setup may install a preloaded baseline active image containing compiled Autolith
@@ -402,7 +409,7 @@ with a distinguished recovery status.
 
 * 8. Persistence
 
-Autolith persists eight kinds of state:
+Autolith persists nine kinds of state:
 
 - Source in Git.
 - Conversations as S-expression files.
@@ -412,6 +419,7 @@ Autolith persists eight kinds of state:
 - A private Git history retaining complete image-commit artifacts.
 - Working generations as saved Lisp cores and reconstruction scripts.
 - Worker images as immutable SBCL cores with manifests and durable notes.
+- User-authored executable configuration under the XDG config root.
 
 ** 8.1 Conversation Files
 
@@ -493,7 +501,20 @@ Every executed tool result records nonnegative CPU and real durations. Terminal
 presentation shows both durations. Calls rejected before execution and repaired
 unknown-outcome records omit timing rather than inventing a duration.
 
-** 8.2 Mutation Journal
+** 8.2 User Configuration
+
+The optional =${XDG_CONFIG_HOME:-~/.config}/autolith/init.lisp= file is the
+explicit entry point for user Lisp. Autolith loads it in the =AUTOLITH= package
+after the tracked system and selected private image commit, before the first
+provider request. A retained generation reconnect loads the current file again
+instead of relying on a copy captured in its core.
+
+The file is trusted executable code with the same user privileges as Autolith.
+A load failure is a structured startup error identifying the file and original
+condition. The file is separate from legacy mutation overlays and private image
+commits, so mutation rollback never discards user policy.
+
+** 8.3 Mutation Journal
 
 The mutation journal is append-only and records enough information to
 understand recent changes after a crash.
@@ -512,7 +533,7 @@ A journal entry should identify:
 The journal is for recovery and diagnosis. It does not replace private
 image commits or their complete replay scripts.
 
-** 8.3 Persistent Memories
+** 8.4 Persistent Memories
 
 Persistent memories are stored in one readable =memories.sexp= file beneath the
 data root. The file begins with a versioned header and continues as an
@@ -540,7 +561,7 @@ a short excerpt for selection; exact content remains available through
 =memory.search= and =memory.read=. Memory corruption degrades this catalog to a
 bounded unavailable notice instead of preventing unrelated model work.
 
-** 8.4 Workspace Agendas
+** 8.5 Workspace Agendas
 
 Workspace agendas are stored in one readable =agendas.sexp= file beneath the
 data root. The complete versioned state is published atomically with private

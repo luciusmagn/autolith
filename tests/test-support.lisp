@@ -28,6 +28,7 @@
                    :data-root (merge-pathnames "data/" root)
                    :state-root (merge-pathnames "state/" root)
                    :cache-root (merge-pathnames "cache/" root)
+                   :config-root (merge-pathnames "config/" root)
                    :codex-auth-path (merge-pathnames "missing-auth.json" root)
                    :model +default-model+
                    :reasoning-effort +default-reasoning-effort+
@@ -48,6 +49,7 @@
                    :data-root (merge-pathnames "data/" state-root)
                    :state-root (merge-pathnames "state/" state-root)
                    :cache-root (merge-pathnames "cache/" state-root)
+                   :config-root (merge-pathnames "config/" state-root)
                    :codex-auth-path (merge-pathnames "missing-auth.json" state-root)
                    :model +default-model+
                    :reasoning-effort +default-reasoning-effort+

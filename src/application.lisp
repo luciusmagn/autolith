@@ -206,6 +206,7 @@
     (configuration-ensure-directories preferred-configuration)
     (durable-mutations-load preferred-configuration)
     (let* ((overlay-failures (image-state-load preferred-configuration))
+           (user-init-pathname (user-init-load preferred-configuration))
            (reasoning-traces-p
              (preferences-reasoning-traces-p preferred-configuration))
            (permission-state (permissions-load preferred-configuration))
@@ -240,6 +241,7 @@
                                        :ui ui
                                        :permission-state permission-state
                                        :reasoning-traces-p reasoning-traces-p)))
+      (declare (ignore user-init-pathname))
       (setf (application-overlay-failures application) overlay-failures)
       (application--load-goal application)
       application)))
@@ -265,9 +267,14 @@
             :model (configuration-model previous)
             :reasoning-effort (configuration-reasoning-effort previous)
             :immutable-p effective-immutable-p))
+         (prepared-configuration
+           (progn
+             (configuration-ensure-directories retained-configuration)
+             (user-init-load retained-configuration)
+             retained-configuration))
          (reasoning-traces-p
-           (preferences-reasoning-traces-p retained-configuration))
-         (permission-state (permissions-load retained-configuration))
+           (preferences-reasoning-traces-p prepared-configuration))
+         (permission-state (permissions-load prepared-configuration))
          (recovery-conversation-id
            (let ((value (uiop:getenv "AUTOLITH_RECOVERY_CONVERSATION_ID")))
              (and (non-empty-string-p value) value)))
@@ -275,19 +282,19 @@
          (conversation
            (cond
              (conversation-id
-              (conversation-load-by-id retained-configuration conversation-id))
+              (conversation-load-by-id prepared-configuration conversation-id))
              (recovery-conversation-id
-              (conversation-load-by-id retained-configuration
+              (conversation-load-by-id prepared-configuration
                                        recovery-conversation-id))
              ((conversation-persisted-p retained-conversation)
               (conversation-load-by-id
-               retained-configuration
+               prepared-configuration
                (conversation-identifier retained-conversation)))
              (t
-              (conversation-create retained-configuration))))
+              (conversation-create prepared-configuration))))
          (configuration
            (application--configuration-for-conversation
-            retained-configuration
+            prepared-configuration
             conversation))
          (provider (provider-create
                     configuration

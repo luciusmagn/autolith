@@ -13,6 +13,7 @@
                  :data-root (configuration-data-root configuration)
                  :state-root (configuration-state-root configuration)
                  :cache-root (configuration-cache-root configuration)
+                 :config-root (configuration-config-root configuration)
                  :codex-auth-path (configuration-codex-auth-path configuration)
                  :model (configuration-model configuration)
                  :reasoning-effort

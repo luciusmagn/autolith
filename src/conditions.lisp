@@ -16,6 +16,19 @@
   ()
   (:documentation "A failure caused by invalid or unavailable configuration."))
 
+(define-condition user-init-error (configuration-error)
+  ((pathname
+    :initarg :pathname
+    :reader user-init-error-pathname
+    :type pathname
+    :documentation "The user initialization file that could not be loaded.")
+   (cause
+    :initarg :cause
+    :reader user-init-error-cause
+    :type serious-condition
+    :documentation "The underlying condition signaled while loading the file."))
+  (:documentation "Loading the user's executable Autolith configuration failed."))
+
 (define-condition working-directory-error (configuration-error)
   ((requested-path
     :initarg :requested-path

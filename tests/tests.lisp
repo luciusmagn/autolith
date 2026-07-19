@@ -73,6 +73,7 @@
     (test-assert (vectorp (json-decode "[1,2,3]"))
                  "JSON arrays have one consistent vector representation")
     (test-memory-persistence)
+    (test-user-init)
     (test-memory-tools)
     (test-agenda-persistence-and-transport)
     (test-agenda-malformed-state)
