@@ -270,11 +270,14 @@ conversations and saved cores. Initial operations include:
 - =memory.forget=
 
 Memories are workspace-scoped by default. Global memories are reserved for
-cross-workspace preferences and guidance. The model receives a bounded catalog
-of global and current-workspace memories on every request and uses the search
-and read tools for exact recall. Catalog values are untrusted quoted data, not
-instructions. Memory writes must exclude credentials, secrets, transient
-progress, and unsupported guesses.
+cross-workspace preferences and guidance. Immediately before a normal provider
+request, Autolith ranks global and current-workspace memories against the latest
+user input. When related values exist, the model receives a bounded
+request-local notice with identifiers, metadata, and short excerpts, then uses
+the search and read tools for exact recall. The notice is an ephemeral context
+contribution and its values are untrusted quoted data, not instructions. Memory
+writes must exclude credentials, secrets, transient progress, and unsupported
+guesses.
 
 ** 5.4 =agenda.*=
 
@@ -586,11 +589,15 @@ erasure of earlier bytes. Reading binds =*read-eval*= to =nil=, rejects malforme
 complete records, and tolerates an incomplete final form. The next successful
 append atomically repairs an incomplete tail before publishing the new record.
 
-Every model request receives a deterministic bounded catalog containing only
-global and current-workspace memories. The catalog includes enough metadata and
-a short excerpt for selection; exact content remains available through
-=memory.search= and =memory.read=. Memory corruption degrades this catalog to a
-bounded unavailable notice instead of preventing unrelated model work.
+Memory search uses a deterministic weighted lexical rank. Title and tag matches
+weigh more than body and workspace matches, broad term coverage receives an
+additional weight, and update time plus identifier provide stable tie breakers.
+Immediately before a normal model request, the same rank selects a bounded set
+of global and current-workspace memories related to the latest user input. Their
+metadata and short excerpts enter only the request-local context contribution;
+exact content remains available through =memory.search= and =memory.read=.
+Memory corruption omits the contribution, records a bounded contributor failure
+for diagnostics, and does not prevent unrelated model work.
 
 ** 8.5 Workspace Agendas
 

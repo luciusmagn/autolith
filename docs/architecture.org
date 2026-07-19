@@ -81,21 +81,22 @@ whether a crash interrupted the final form, and the next append asks
 ** =memories.lisp= and =memory-tools.lisp=
 
 Own the append-only portable memory log, replacement replay, recall tombstones,
-workspace and global selection, bounded prompt catalog, and the =memory.*= tool
-surface. Every provider request receives metadata and a short excerpt for
-global memories and memories matching the current workspace. The catalog is
-quoted as untrusted JSON data; exact bodies remain behind search and read tools.
-A damaged memory log yields a bounded unavailable notice instead of breaking
-the provider path. An incomplete final form is ignored and atomically removed
-when the next complete record is appended.
+workspace and global selection, deterministic lexical ranking, and the
+=memory.*= tool surface. =memory-context.lisp= contributes a bounded set of
+metadata and short excerpts when relevant memories match the latest user input.
+That request-local evidence is quoted as untrusted JSON data and never enters
+conversation history; exact bodies remain behind search and read tools. A
+damaged memory log yields a bounded contributor failure instead of breaking the
+provider path. An incomplete final form is ignored and atomically removed when
+the next complete record is appended.
 
 The design was informed by OpenAI Codex commit
 =5bed6447998c754d154dbd796517310b8f04d4ce=. That implementation uses SQLite
 for background extraction jobs and usage ranking, then consolidates selected
 results into a Markdown tree whose bounded =memory_summary.md= enters developer
-instructions. Autolith keeps the same useful separation between a small prompt
-catalog and deeper read tools, but its single-agent runtime does not need a job
-database, background extraction model calls, Git-backed consolidation
+instructions. Autolith keeps the same useful separation between small ranked
+recall evidence and deeper read tools, but its single-agent runtime does not
+need a job database, background extraction model calls, Git-backed consolidation
 workspace, or generated Markdown hierarchy.
 
 ** =provider.lisp=

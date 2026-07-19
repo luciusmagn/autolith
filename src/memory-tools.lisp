@@ -183,7 +183,7 @@
 (defmethod tool-execute ((tool memory-search-tool)
                          (context tool-context)
                          (arguments hash-table))
-  "Search titles, content, tags, and workspace names for all query terms."
+  "Search titles, content, tags, and workspace names by lexical relevance."
   (let ((query (tool-argument arguments "query" :required t)))
     (unless (stringp query)
       (error 'tool-error

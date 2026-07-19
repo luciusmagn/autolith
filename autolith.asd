@@ -36,6 +36,7 @@
                              (:file "agendas")
                              (:file "prompt")
                              (:file "context")
+                             (:file "memory-context")
                              (:file "provider")
                              (:file "tools")
                              (:file "memory-tools")

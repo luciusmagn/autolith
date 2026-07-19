@@ -366,8 +366,9 @@ after a crash and atomically repairs that tail before the next append.
 Memories are workspace-scoped by default. They are recalled only when Autolith
 runs in the same workspace. Global scope is intended for cross-workspace user
 preferences and durable guidance. =memory.list= shows metadata, =memory.search=
-requires every case-insensitive query term to match somewhere in the title,
-body, tags, or workspace, and =memory.read= returns one complete active memory.
+ranks case-insensitive query terms across title, body, tags, and workspace,
+favoring title, tag, and broad-coverage matches. =memory.read= returns one
+complete active memory.
 =memory.remember= creates a memory or replaces one by identifier.
 =memory.remember= limits the complete body to 5,000 characters so one
 =memory.read= call can return it without hidden paging.
@@ -376,12 +377,14 @@ append-only, forgetting is not secure erasure of historical bytes; stop
 Autolith and deliberately rewrite or remove the private file when erasure is
 required.
 
-On every provider request, the system prompt receives a bounded catalog of
-global and current-workspace memories. Each entry contains quoted JSON metadata,
-tags, and a short content excerpt. The model uses that catalog to decide whether
-to call =memory.search= and =memory.read= for exact recall. A malformed log does
-not prevent an ordinary model request: the catalog becomes a bounded unavailable
-notice, while memory tool calls report the typed persistence failure.
+Immediately before each normal provider request, Autolith ranks global and
+current-workspace memories against the latest user input. When matches exist, a
+bounded request-local contribution supplies quoted JSON metadata, tags, and
+short excerpts. It never enters durable conversation history. The model uses
+that notice to decide whether to call =memory.search= and =memory.read= for exact
+recall. A malformed log does not prevent an ordinary model request: recall is
+omitted and the failure appears in =/context= diagnostics, while memory tool
+calls report the typed persistence failure.
 
 Autolith does not automatically summarize every conversation. The model writes
 a memory when durable information is likely to help later, and the prompt tells

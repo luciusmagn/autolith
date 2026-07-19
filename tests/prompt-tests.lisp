@@ -83,8 +83,8 @@
                   prompt))
      "the system prompt prefers available Lisp tooling over Python scripts")
     (test-assert
-     (search "Persistent memory catalog: no relevant memories" prompt)
-     "the system prompt carries the current relevant-memory catalog")
+     (search "request-local related-memory notice" prompt)
+     "the system prompt explains request-local ranked memory recall")
     (test-assert (search "Current workspace agenda: empty" prompt)
                  "the system prompt carries the current workspace agenda")
     (test-assert (search "Repository Guidelines" prompt)

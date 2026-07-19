@@ -238,11 +238,11 @@
         (list
          'memory-search-tool
          "memory" "search"
-         "Search persistent memory titles, bodies, tags, and workspace names. Every whitespace-delimited query term must match."
+         "Search persistent memory titles, bodies, tags, and workspace names in weighted relevance order."
          (tool-object-schema
           (json-object
            "query" (tool-string-property
-                    "Case-insensitive whitespace-delimited search terms.")
+                    "Case-insensitive lexical search terms; title and tag matches rank highest.")
            "scope" (tool-string-property
                     "relevant, global, workspace, or all; defaults to relevant.")
            "max-results" (tool-integer-property

@@ -174,20 +174,58 @@
                                                    :visibility :all))
                              3)
                           "the next append atomically repairs an incomplete tail")
-             (let ((catalog (memory-prompt-catalog configuration)))
-               (test-assert (search "Repository check" catalog)
-                            "the prompt catalog includes relevant memory metadata")
-               (test-assert (not (search "Other project" catalog))
-                            "the prompt catalog excludes unrelated workspaces"))
+             (let* ((matches (memory-rank configuration "Repository script"))
+                    (best (first matches))
+                    (conversation
+                      (conversation-create configuration
+                                           :identifier "memory-context")))
+               (test-assert
+                (and best
+                     (string= (memory-title (memory-match-memory best))
+                              "Repository check")
+                     (plusp (memory-match-score best)))
+                "memory ranking favors weighted title and content matches")
+               (conversation-append-user-message conversation
+                                                 "Check the repository script")
+               (let* ((request
+                        (make-instance 'request-context
+                                       :configuration configuration
+                                       :conversation conversation
+                                       :tool-namespaces #()
+                                       :turn-budget-state :normal))
+                      (contribution (memory-related-context request))
+                      (evidence
+                        (and contribution
+                             (context-contribution-evidence contribution))))
+                 (test-assert
+                  (and evidence
+                       (search "Repository check" evidence)
+                       (not (search "Other project" evidence)))
+                  "request-local recall offers ranked relevant memory metadata")
+                 (test-assert
+                  (not (search "Repository check" (system-prompt configuration)))
+                  "persistent memory metadata stays outside the durable system prompt")))
              (with-open-file (stream (configuration-memory-path configuration)
                                      :direction :output
                                      :if-exists :append
                                      :external-format :utf-8)
                (write-string "#.(error \"reader evaluation ran\")" stream))
-             (test-assert
-              (search "catalog is unavailable"
-                      (memory-prompt-catalog configuration))
-              "malformed memory data degrades prompt context without running read evaluation")))
+             (let* ((conversation
+                      (conversation-create configuration
+                                           :identifier "memory-corruption"))
+                    (*context-contributors* nil)
+                    (*context-last-delivery* nil))
+               (conversation-append-user-message conversation "repository script")
+               (register-context-contributor "related-memories"
+                                             'memory-related-context
+                                             :source ':built-in)
+               (let ((delivery
+                       (context-resolve-request configuration conversation #())))
+                 (test-assert
+                  (string= (first (first
+                                    (context-delivery-failures delivery)))
+                           "related-memories")
+                  "malformed memory data degrades to context diagnostics without reader evaluation")))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
