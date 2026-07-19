@@ -250,7 +250,9 @@ prefix from before selection. The commands are:
 
 =/resume=, =/rollback=, =/model=, and =/effort= open a vertical interactive
 picker; each also accepts an explicit argument. Tab cycles the picker alongside
-Up and Down navigation. Conversations and generations are listed newest first.
+Up and Down navigation. The resume picker lists conversations from the current
+directory first and other sessions underneath. Each section is ordered by newest
+activity first. Generations are listed newest first.
 From the shell, =autolith resume= opens the same picker and may be followed by
 an explicit conversation identifier.
 Conversations remember the directory they were started in, and the picker

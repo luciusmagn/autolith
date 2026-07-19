@@ -1440,27 +1440,71 @@
                           (list (truename image))))
               "command-line images preload a labelled composer draft")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
-  (let* ((configuration (test-configuration))
-         (root (test-configuration-root configuration)))
+  (let* ((base-configuration (test-configuration))
+         (root (test-configuration-root base-configuration))
+         (current-workspace (merge-pathnames "current-workspace/" root))
+         (other-workspace (merge-pathnames "other-workspace/" root)))
+    (ensure-directories-exist current-workspace)
+    (ensure-directories-exist other-workspace)
     (unwind-protect
-         (let* ((older (conversation-create configuration :identifier "older"))
+         (let* ((configuration
+                  (configuration-with-working-directory
+                   base-configuration
+                   current-workspace))
+                (other-configuration
+                  (configuration-with-working-directory
+                   base-configuration
+                   other-workspace))
+                (current-older
+                  (conversation-create configuration
+                                       :identifier "current-older"))
                 (active (conversation-create configuration :identifier "active"))
+                (other-older
+                  (conversation-create other-configuration
+                                       :identifier "other-older"))
+                (other-newer
+                  (conversation-create other-configuration
+                                       :identifier "other-newer"))
                 (terminal (make-instance 'scripted-terminal :columns 60))
                 (application (make-instance 'application
                                             :configuration configuration
                                             :conversation active
                                             :ui (terminal-ui-create
                                                  :terminal terminal))))
-           (conversation-append-user-message older "older saved conversation")
-           (conversation-append-user-message active "active saved conversation")
+           (conversation-append-user-message current-older
+                                             "older saved conversation")
+           (conversation-append-user-message
+            active
+            "please refresh the transcript colors")
+           (conversation-append-user-message other-older
+                                             "older other conversation")
+           (conversation-append-user-message other-newer
+                                             "newer other conversation")
+           (let ((now (- (get-universal-time)
+                         +unix-epoch-universal-time+)))
+             (flet ((set-activity (conversation seconds-ago)
+                      (let ((time (- now seconds-ago)))
+                        (sb-posix:utime
+                         (namestring (conversation-pathname conversation))
+                         time
+                         time))))
+               (set-activity active 10)
+               (set-activity other-newer 20)
+               (set-activity current-older 30)
+               (set-activity other-older 40)))
            (let ((items (application--conversation-items application)))
-             (test-assert (= (length items) 2)
+             (test-assert (= (length items) 4)
                           "every saved conversation is offered")
-             (test-assert (find "older" items
-                                :key (lambda (item)
-                                       (getf item :name))
-                                :test #'string=)
-                          "older conversations appear in the picker")
+             (test-assert
+              (equal (mapcar (lambda (item) (getf item :name)) items)
+                     '("active" "current-older" "other-newer" "other-older"))
+              "resume groups current sessions first and sorts each by activity")
+             (test-assert
+              (and (search "current directory" (getf (first items) :group))
+                   (search "current directory" (getf (second items) :group))
+                   (string= (getf (third items) :group) "other sessions")
+                   (string= (getf (fourth items) :group) "other sessions"))
+              "resume items identify their current and other session groups")
              (test-assert (search ", current"
                                   (getf (find "active" items
                                               :key (lambda (item)
@@ -1468,23 +1512,19 @@
                                               :test #'string=)
                                         :description))
                           "the active conversation is marked current")
-             (test-assert (search (application--abbreviated-directory
-                                   (namestring
-                                    (configuration-working-directory
-                                     configuration)))
-                                  (getf (first items) :description))
-                          "picker items show the conversation origin directory")
-             (conversation-append-user-message
-              active
-              "please refresh the transcript colors")
+             (test-assert
+              (search (application--abbreviated-directory
+                       (namestring current-workspace))
+                      (getf (first items) :group))
+              "the current session heading identifies its directory")
+             (test-assert
+              (search (application--abbreviated-directory
+                       (namestring other-workspace))
+                      (getf (third items) :description))
+              "other session rows identify their origin directories")
              (test-assert
               (search "· please refresh the transcript colors"
-                      (getf (find "active"
-                                  (application--conversation-items application)
-                                  :key (lambda (item)
-                                         (getf item :name))
-                                  :test #'string=)
-                            :description))
+                      (getf (first items) :description))
               "picker items preview the newest message")
              (terminal-ui-start (application-ui application))
              (setf (scripted-terminal-events terminal) (list :submit))

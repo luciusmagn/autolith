@@ -476,6 +476,10 @@ A fresh conversation remains in memory until it has a durable record. The
 header and first record are published together atomically, so starting and
 leaving an empty conversation does not create a conversation file.
 
+Interactive conversation selection groups sessions from the current working
+directory above sessions from other directories. Each group is ordered from
+newest to oldest file activity, and group headings are not selectable.
+
 A conversation file is an append-only sequence of top-level
 S-expressions. It is not wrapped in one enclosing list.
 

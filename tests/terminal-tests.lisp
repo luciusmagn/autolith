@@ -858,9 +858,12 @@
       (test-assert (= (search "first" (first texts))
                       (search "second" (second texts)))
                    "picker descriptions share one content-aware value column")))
-  (let* ((items '((:name "alpha" :argument nil :description "first entry")
-                  (:name "beta" :argument nil :description "second entry")
-                  (:name "gamma" :argument nil :description "third entry")))
+  (let* ((items '((:name "alpha" :argument nil :description "first entry"
+                   :group "current directory")
+                  (:name "beta" :argument nil :description "second entry"
+                   :group "current directory")
+                  (:name "gamma" :argument nil :description "third entry"
+                   :group "other sessions")))
          (terminal (make-instance 'scripted-terminal
                                   :columns 60
                                   :events (list :history-next :submit)))
@@ -877,6 +880,9 @@
                      "the picker paints its title")
         (test-assert (search "alpha" painted)
                      "the picker paints its items")
+        (test-assert (and (search "current directory" painted)
+                          (search "other sessions" painted))
+                     "the picker paints nonselectable candidate groups")
         (test-assert (not (terminal-tests--forbidden-control-p painted))
                      "the picker never erases the display"))
       (test-assert (null (terminal-ui-selector active-ui))

@@ -275,26 +275,65 @@
     (error ()
       nil)))
 
+(-> application--conversation-current-directory-p
+    ((option string) pathname)
+    boolean)
+(defun application--conversation-current-directory-p (directory current)
+  "Return true when recorded DIRECTORY denotes CURRENT."
+  (and (non-empty-string-p directory)
+       (handler-case
+           (string= (namestring
+                     (uiop:ensure-directory-pathname (pathname directory)))
+                    (namestring (uiop:ensure-directory-pathname current)))
+         (error ()
+           nil))))
+
 (-> application--conversation-items (application) list)
 (defun application--conversation-items (application)
-  "Return picker items for saved conversations, newest first."
-  (let ((current (conversation-identifier
-                  (application-conversation application))))
-    (loop for pathname in (conversation-list
-                           (application-configuration application))
-          for identifier = (pathname-name pathname)
-          for header = (conversation-peek-header pathname)
-          collect (list :name identifier
-                        :argument nil
-                        :description
-                        (format nil "~A~@[, ~A~]~:[~;, current~]~@[ · ~A~]"
-                                (application--calendar-description
-                                 (or (file-write-date pathname) 0))
-                                (application--abbreviated-directory
-                                 (getf (rest header) :directory))
-                                (string= identifier current)
-                                (application--conversation-preview
-                                 pathname))))))
+  "Return grouped picker items, newest first within each workspace section."
+  (let* ((configuration (application-configuration application))
+         (current-identifier
+           (conversation-identifier (application-conversation application)))
+         (current-directory
+           (configuration-working-directory configuration))
+         (current-group
+           (format nil "current directory · ~A"
+                   (application--abbreviated-directory
+                    (namestring current-directory))))
+         (current-items nil)
+         (other-items nil))
+    (dolist (pathname (conversation-list configuration))
+      (let* ((identifier (pathname-name pathname))
+             (header (conversation-peek-header pathname))
+             (directory (getf (rest header) :directory))
+             (current-directory-p
+               (application--conversation-current-directory-p
+                directory
+                current-directory))
+             (item
+               (list :name identifier
+                     :argument nil
+                     :group (if current-directory-p
+                                current-group
+                                "other sessions")
+                     :description
+                     (if current-directory-p
+                         (format nil "~A~:[~;, current~]~@[ · ~A~]"
+                                 (application--calendar-description
+                                  (or (file-write-date pathname) 0))
+                                 (string= identifier current-identifier)
+                                 (application--conversation-preview pathname))
+                         (format nil
+                                 "~A~@[, ~A~]~:[~;, current~]~@[ · ~A~]"
+                                 (application--calendar-description
+                                  (or (file-write-date pathname) 0))
+                                 (application--abbreviated-directory directory)
+                                 (string= identifier current-identifier)
+                                 (application--conversation-preview pathname))))))
+        (if current-directory-p
+            (push item current-items)
+            (push item other-items))))
+    (append (nreverse current-items) (nreverse other-items))))
 
 (-> application--effort-items (application) list)
 (defun application--effort-items (application)

@@ -333,7 +333,7 @@
 
 (-> terminal-ui--choice-rows (selector integer) list)
 (defun terminal-ui--choice-rows (selector row-width)
-  "Return styled candidate rows from SELECTOR within ROW-WIDTH."
+  "Return styled candidate rows and nonselectable group headings."
   (multiple-value-bind (index-rows arrangement-widths)
       (selector-arrange selector
                         row-width
@@ -353,11 +353,25 @@
                                    :minimum-widths '(1 0)))
            (label-width (or (first column-widths) 0))
            (description-width (or (second column-widths) 0)))
-      (loop for index-row in index-rows
-            for index = (first index-row)
-            for entry = (nth index (selector-items selector))
-            for selected-p = (= index (selector-selection selector))
-            collect (terminal--clip-spans
+      (let ((previous-group nil))
+        (loop for index-row in index-rows
+              for index = (first index-row)
+              for entry = (nth index (selector-items selector))
+              for selected-p = (= index (selector-selection selector))
+              for group = (getf entry :group)
+              append
+              (prog1
+                  (append
+                   (when (and group (not (equal group previous-group)))
+                     (append
+                      (when previous-group (list nil))
+                      (list
+                       (terminal--clip-spans
+                        (list (terminal-span ':strong
+                                             (format nil "  ~A" group)))
+                        row-width))))
+                   (list
+                    (terminal--clip-spans
                      (list (terminal-span (if selected-p
                                               :brand
                                               :dim)
@@ -377,7 +391,8 @@
                             (text-cell-prefix
                              (or (getf entry :description) "")
                              description-width)))
-                     row-width)))))
+                     row-width)))
+                (setf previous-group group)))))))
 
 (-> terminal-ui--completion-rows (terminal-ui integer) list)
 (defun terminal-ui--completion-rows (ui row-width)
