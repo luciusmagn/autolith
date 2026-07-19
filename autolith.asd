@@ -8,6 +8,7 @@
                #:cl-exec-sandbox
                #:clifff
                #:clinedi
+               #:colorlisp
                #:closer-mop
                #:dexador
                #:bordeaux-threads

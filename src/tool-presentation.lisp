@@ -345,12 +345,77 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
       (format nil "~V@A" width line-number)
       (make-string width :initial-element #\Space)))
 
+
+(-> application--syntax-style (keyword) terminal-style)
+(defun application--syntax-style (category)
+  "Map a ColorLisp semantic CATEGORY onto Autolith's base terminal palette."
+  (case category
+    (:comment ':syntax-comment)
+    ((:keyword :macro) ':syntax-keyword)
+    (:string ':syntax-string)
+    ((:escape :special) ':syntax-escape)
+    ((:number :constant) ':syntax-number)
+    ((:type :namespace :builtin) ':syntax-type)
+    ((:function :method) ':syntax-function)
+    ((:property :attribute) ':syntax-property)
+    (:heading ':syntax-heading)
+    (:link ':syntax-link)
+    (otherwise ':plain)))
+
+
+(-> application--syntax-segments->lines (list) vector)
+(defun application--syntax-segments->lines (segments)
+  "Convert ColorLisp SEGMENTS into a vector of terminal-span rows."
+  (let ((rows nil)
+        (current nil))
+    (labels ((emit (style text start end)
+               "Append TEXT between START and END to the current styled row."
+               (when (< start end)
+                 (push (terminal-span style (subseq text start end)) current)))
+
+             (finish-row ()
+               "Finish the current row and begin another."
+               (push (nreverse current) rows)
+               (setf current nil)))
+      (dolist (segment segments)
+        (let ((text (segment-text segment))
+              (style (application--syntax-style
+                      (segment-category segment)))
+              (start 0))
+          (loop for newline = (position #\Newline text :start start)
+                while newline
+                do (emit style text start newline)
+                   (finish-row)
+                   (setf start (1+ newline))
+                finally (emit style text start (length text)))))
+      (finish-row))
+    (coerce (nreverse rows) 'vector)))
+
+
+(-> application--syntax-lines (string string) (option vector))
+(defun application--syntax-lines (text path)
+  "Return syntax-highlighted display lines for TEXT at PATH, or NIL."
+  (handler-case
+      (let ((lines (application--display-lines text)))
+        (when lines
+          (let* ((source (format nil "~{~A~^~%~}" lines))
+                 (language (language-detect path :source source)))
+            (when language
+              (let ((highlighted
+                      (application--syntax-segments->lines
+                       (highlight-segments source :language language))))
+                (and (= (length highlighted) (length lines))
+                     highlighted))))))
+    (colorlisp-error ()
+      nil)))
+
 (-> application--edit-line-row
     (keyword string &key (:width integer)
-                         (:line-number (option integer)))
+                         (:line-number (option integer))
+                         (:content-spans (option list)))
     list)
 (defun application--edit-line-row
-    (kind text &key (width 1) line-number)
+    (kind text &key (width 1) line-number content-spans)
   "Return one numbered context, removed, or added diff row."
   (let ((style (ecase kind
                  (:context ':dim)
@@ -360,19 +425,21 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
                   (:context " ")
                   (:removed "-")
                   (:added "+"))))
-    (list
+    (cons
      (terminal-span
       style
-      (format nil "~A ~A │ ~A"
+      (format nil "~A ~A │ "
               marker
-              (application--edit-line-number-cell line-number width)
-              text)))))
+              (application--edit-line-number-cell line-number width)))
+     (or content-spans
+         (list (terminal-span style text))))))
 
 (-> application--edit-change-rows
-    (vector keyword &key (:start-line (option integer)) (:width integer))
+    (vector keyword &key (:start-line (option integer)) (:width integer)
+                         (:highlighted-lines (option vector)))
     list)
 (defun application--edit-change-rows
-    (lines kind &key start-line (width 1))
+    (lines kind &key start-line (width 1) highlighted-lines)
   "Return bounded numbered changed LINES of KIND."
   (let* ((visible-count (min +application-tool-call-lines+ (length lines)))
          (omitted (- (length lines) visible-count))
@@ -386,7 +453,9 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
                     kind
                     (aref lines index)
                     :width width
-                    :line-number line-number))
+                    :line-number line-number
+                    :content-spans (and highlighted-lines
+                                        (aref highlighted-lines index))))
      (when (plusp omitted)
        (let ((line-number (and start-line (+ start-line visible-count))))
          (list
@@ -398,15 +467,18 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
 
 (-> application--edit-diff-rows
     (string string &key (:old-start-line (option integer))
-                        (:new-start-line (option integer)))
+                        (:new-start-line (option integer))
+                        (:path (option string)))
     list)
 (defun application--edit-diff-rows
-    (old-text new-text &key old-start-line new-start-line)
+    (old-text new-text &key old-start-line new-start-line path)
   "Return a bounded line-numbered diff between OLD-TEXT and NEW-TEXT."
   (let* ((old-lines (coerce (or (application--display-lines old-text) nil)
                             'vector))
          (new-lines (coerce (or (application--display-lines new-text) nil)
                             'vector))
+         (old-highlighted (and path (application--syntax-lines old-text path)))
+         (new-highlighted (and path (application--syntax-lines new-text path)))
          (prefix-length
            (application--edit-common-prefix-length old-lines new-lines))
          (suffix-length
@@ -437,19 +509,34 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
                :line-number (or (and new-start-line
                                      (+ new-start-line prefix-length -1))
                                 (and old-start-line
-                                     (+ old-start-line prefix-length -1))))))
+                                     (+ old-start-line prefix-length -1)))
+               :content-spans
+               (or (and new-highlighted
+                        (aref new-highlighted (1- prefix-length)))
+                   (and old-highlighted
+                        (aref old-highlighted (1- prefix-length)))))))
            (application--edit-change-rows
             removed
             ':removed
             :start-line (and old-start-line
                              (+ old-start-line prefix-length))
-            :width width)
+            :width width
+            :highlighted-lines
+            (and old-highlighted
+                 (subseq old-highlighted
+                         prefix-length
+                         (- (length old-lines) suffix-length))))
            (application--edit-change-rows
             added
             ':added
             :start-line (and new-start-line
                              (+ new-start-line prefix-length))
-            :width width)
+            :width width
+            :highlighted-lines
+            (and new-highlighted
+                 (subseq new-highlighted
+                         prefix-length
+                         (- (length new-lines) suffix-length))))
            (when (plusp suffix-length)
              (list
               (application--edit-line-row
@@ -462,7 +549,14 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
                            (- (length new-lines) suffix-length)))
                    (and old-start-line
                         (+ old-start-line
-                           (- (length old-lines) suffix-length))))))))))))
+                           (- (length old-lines) suffix-length))))
+               :content-spans
+               (or (and new-highlighted
+                        (aref new-highlighted
+                              (- (length new-lines) suffix-length)))
+                   (and old-highlighted
+                        (aref old-highlighted
+                              (- (length old-lines) suffix-length))))))))))))
 
 (-> application--edit-file-hunks
     (application string string &key (:new-text string) (:replace-all boolean))
@@ -516,7 +610,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
                 :new-text new-text
                 :replace-all replace-all)))
     (if (null hunks)
-        (application--edit-diff-rows old-text new-text)
+        (application--edit-diff-rows old-text new-text :path path)
         (let* ((visible-count (min +application-tool-diff-hunks+
                                    (length hunks)))
                (omitted (- (length hunks) visible-count)))
@@ -530,7 +624,8 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
                           old-text
                           new-text
                           :old-start-line old-start-line
-                          :new-start-line new-start-line)))
+                          :new-start-line new-start-line
+                          :path path)))
            (when (plusp omitted)
              (list nil
                    (list (terminal-span

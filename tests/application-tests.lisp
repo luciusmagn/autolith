@@ -754,22 +754,40 @@
                                  (not (search "changes" text)))
                             "fs.edit identifies its path and scope without a redundant label")
                (test-assert
-                (and (find (terminal-span :dim "  10 │ before")
+                (and (find (terminal-span :dim "  10 │ ")
                            entry
                            :test #'equal)
-                     (find (terminal-span :failure "- 11 │ old value")
+                     (find (terminal-span :failure "- 11 │ ")
                            entry
                            :test #'equal)
-                     (find (terminal-span :success "+ 11 │ new value")
+                     (find (terminal-span :success "+ 11 │ ")
                            entry
                            :test #'equal)
-                     (find (terminal-span :dim "  12 │ after")
+                     (find (terminal-span :dim "  12 │ ")
                            entry
                            :test #'equal))
                 "fs.edit uses one numbered gutter for all diff lines")))
         (uiop:delete-directory-tree root
                                     :validate t
                                     :if-does-not-exist :ignore)))
+    (let ((entry (response-item-entry
+                  application
+                  (json-object
+                   "type" "function_call"
+                   "namespace" "fs"
+                   "name" "edit"
+                   "arguments" (json-encode
+                                (json-object
+                                 "path" "src/main.rs"
+                                 "old-text" "fn old() { 1 }"
+                                 "new-text" "fn new() { 2 }"))))))
+      (test-assert
+       (and (find (terminal-span :syntax-keyword "fn") entry :test #'equal)
+            (find (terminal-span :syntax-function "old") entry :test #'equal)
+            (find (terminal-span :syntax-function "new") entry :test #'equal)
+            (find (terminal-span :syntax-number "1") entry :test #'equal)
+            (find (terminal-span :syntax-number "2") entry :test #'equal))
+       "fs.edit syntax-highlights removed and added source with ColorLisp"))
     (let* ((entry (response-item-entry
                    application
                    (json-object

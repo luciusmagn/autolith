@@ -1034,6 +1034,14 @@
    "semantic styles resolve to rendition controls")
   (test-assert (null (terminal-style-sequence :plain))
                "the plain style resolves to no control sequence")
+  (test-assert
+   (and (string= (terminal-style-sequence :syntax-keyword)
+                 (format nil "~C[35m" +terminal-escape-character+))
+        (string= (terminal-style-sequence :syntax-string)
+                 (format nil "~C[32m" +terminal-escape-character+))
+        (string= (terminal-style-sequence :syntax-function)
+                 (format nil "~C[34m" +terminal-escape-character+)))
+   "syntax styles use the terminal's base ANSI palette")
   (let ((indexed-sequences
           (loop for style in '(:brand-gradient-1 :brand-gradient-2
                                :brand-gradient-3 :brand-gradient-4

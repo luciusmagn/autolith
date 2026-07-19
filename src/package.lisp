@@ -63,6 +63,12 @@
                 #:live-region-suspend
                 #:live-region-dismiss
                 #:live-region-resize)
+  (:import-from #:colorlisp
+                #:colorlisp-error
+                #:highlight-segments
+                #:language-detect
+                #:segment-category
+                #:segment-text)
   (:import-from #:bordeaux-threads
                 #:condition-notify
                 #:condition-wait

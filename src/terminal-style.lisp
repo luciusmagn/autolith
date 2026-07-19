@@ -10,7 +10,10 @@
            :recovery-gradient-1 :recovery-gradient-2 :recovery-gradient-3
            :recovery-gradient-4 :recovery-gradient-5 :recovery-gradient-6
            :user :tool :success :failure :notice :dim :hint :selected
-           :strong :emphasis :code))
+           :strong :emphasis :code
+           :syntax-comment :syntax-keyword :syntax-string :syntax-escape
+           :syntax-number :syntax-type :syntax-function :syntax-property
+           :syntax-heading :syntax-link))
 
 ;; General interface styles use the basic ANSI palette so Autolith follows the
 ;; terminal theme. Only the startup mark opts into the indexed brand gradient.
@@ -26,7 +29,17 @@
     (:selected . "7")
     (:strong   . "1")
     (:emphasis . "3")
-    (:code     . "36"))
+    (:code     . "36")
+    (:syntax-comment  . "2")
+    (:syntax-keyword  . "35")
+    (:syntax-string   . "32")
+    (:syntax-escape   . "33")
+    (:syntax-number   . "33")
+    (:syntax-type     . "36")
+    (:syntax-function . "34")
+    (:syntax-property . "36")
+    (:syntax-heading  . "1;35")
+    (:syntax-link     . "4;36"))
   :test #'equal
   :documentation "Select-graphic-rendition parameters for each semantic style.")
 

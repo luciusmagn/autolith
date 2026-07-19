@@ -54,6 +54,10 @@
  (:class qlot/source/git:source-git
   :initargs (:remote-url "https://github.com/luciusmagn/clifff.git" :ref "a57058ba3ffd222af57513e412a1d01508b4d1b3")
   :version "git-a57058ba3ffd222af57513e412a1d01508b4d1b3"))
+("colorlisp" .
+ (:class qlot/source/git:source-git
+  :initargs (:remote-url "https://github.com/luciusmagn/colorlisp.git" :ref "40ea50788cd7fe8f874e4dcfc05087719705c1a0")
+  :version "git-40ea50788cd7fe8f874e4dcfc05087719705c1a0"))
 ("sexp-store" .
  (:class qlot/source/git:source-git
   :initargs (:remote-url "https://github.com/luciusmagn/sexp-store.git" :ref "92a2ad458e92ecf4526ccb9bb387f89283c4dcc3")
