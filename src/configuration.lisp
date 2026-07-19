@@ -40,12 +40,12 @@
   '("gpt-5.6-sol" "gpt-5.6-luna" "gpt-5.6-terra")
   "The 5.6 model family identifiers offered by the interactive model picker.")
 
-;; Window sizes read from the live Codex model catalog on 2026-07-12; every
-;; 5.6 family model reported context_window 372000.
+;; Window sizes read from the live Codex model catalog on 2026-07-19 and
+;; confirmed in Codex reference commit 0fb559f0f6e231a88ac02ea002d3ecd248e2b515.
 (defparameter +model-context-windows+
-  '(("gpt-5.6-sol"   . 372000)
-    ("gpt-5.6-luna"  . 372000)
-    ("gpt-5.6-terra" . 372000))
+  '(("gpt-5.6-sol"   . 272000)
+    ("gpt-5.6-luna"  . 272000)
+    ("gpt-5.6-terra" . 272000))
   "Provider context window sizes in tokens for known models.")
 
 (define-constant +default-context-window+ 272000

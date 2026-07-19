@@ -16,14 +16,14 @@
                                                      "gpt-5.6-luna"))
                           "gpt-5.6-luna")
                  "model copies swap only the model")
-    (test-assert (= (configuration-context-window configuration) 372000)
+    (test-assert (= (configuration-context-window configuration) 272000)
                  "5.6 models carry the live catalog context window")
     (test-assert (= (configuration-context-window
                      (configuration-with-model configuration "gpt-5.6-terra"))
-                    372000)
+                    272000)
                  "model copies recompute the context window")
     (test-assert (= (configuration-compaction-token-limit configuration)
-                    297600)
+                    217600)
                  "compaction triggers at the threshold share of the window")
     (test-assert (handler-case
                      (progn

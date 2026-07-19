@@ -277,7 +277,7 @@ step reports total token usage at or beyond the compaction limit, Autolith asks
 the model for a context checkpoint summary, appends it as a durable
 =(:summary ...)= record, and replaces the request projection with one bridge
 message carrying that summary; the durable conversation file keeps everything.
-The 5.6 family models have a 372000 token context window (read from the live
+The 5.6 family models have a 272000 token context window (read from the live
 model catalog), and compaction triggers at 80 percent of the window by
 default. Set =AUTOLITH_COMPACTION_THRESHOLD= to a percentage between 1 and 95 to
 compact earlier or later, and =AUTOLITH_CONTEXT_WINDOW= to override the window
