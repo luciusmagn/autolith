@@ -44,8 +44,13 @@
     (test-assert
      (and (search "short durable workspace plan" prompt)
           (search "do not mirror every tool call" prompt)
+          (search "Child tasks are ephemeral execution" prompt)
           (search "Attach relevant persistent memories by ID" prompt))
      "the system prompt reserves agenda for durable workspace state")
+    (test-assert
+     (and (search "Inspect task.agents before choosing a specialized role" prompt)
+          (search "Child agents never receive self.* tools" prompt))
+     "the system prompt directs deliberate fail-closed delegation")
     (test-assert
      (and (search "started with --immutable" immutable-prompt)
           (search "self namespace is inspection-only" immutable-prompt)
