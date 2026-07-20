@@ -228,6 +228,8 @@ let
       git init --quiet --initial-branch=master "$out"
       git -C "$out" config user.name "Autolith Nix build"
       git -C "$out" config user.email "nix-build@localhost"
+      git -C "$out" config gc.auto 0
+      git -C "$out" config maintenance.auto false
       git -C "$out" add --all
       GIT_AUTHOR_DATE='2000-01-01T00:00:00Z' \
         GIT_COMMITTER_DATE='2000-01-01T00:00:00Z' \
@@ -237,6 +239,10 @@ let
       # immutable Nix store at runtime.
       rm "$out/.git/index"
       git -C "$out" read-tree HEAD
+
+      # Pack synchronously before Nix scans the output. Background maintenance
+      # can otherwise remove loose objects during the fixup phase.
+      git -C "$out" gc --quiet --prune=now
     '';
   };
 
