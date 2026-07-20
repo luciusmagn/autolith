@@ -350,24 +350,35 @@ in conversation selection. Each execution receives a unique artifact directory.
 Terminal publication writes at most one portable result artifact and retains
 its pathname in the parent-facing result.
 
-Role definitions are Markdown files with strict YAML frontmatter and a role
-prompt body. Discovery precedence is project =.autolith/agents/=, then
+Role definitions are bounded =*.sexp= files containing exactly one top-level
+Common Lisp property list. Reading binds =*read-eval*= to =nil=, uses a fresh
+=(copy-readtable nil)=, and requires clean end-of-file after that form.
+Discovery precedence is project
+=.autolith/agents/=, then
 =${XDG_CONFIG_HOME:-~/.config}/autolith/agents/=, then bundled roles. A higher
 precedence definition replaces the same lower precedence name. Parsing and
-policy validation fail closed: malformed definitions, unknown fields, duplicate
-fields, invalid indentation, invalid types, and invalid policy values are
-reported rather than guessed. A malformed higher precedence role must not
-silently expose or select a lower precedence role of the same name.
+policy validation fail closed: malformed reader input, reader labels, circular
+or shared structure, extra forms or trailing garbage, unknown or duplicate
+keys, improper lists, invalid types, and invalid policy values are reported
+rather than guessed. A malformed higher precedence role must not silently
+expose or select a lower precedence role of the same name.
 
-The supported role policy fields are =name=, =description=, =tools=, =spawns=,
-=model=, =thinking-level=, =output=, and =blocking=. An omitted or empty =tools=
-policy grants no ordinary tools. A wildcard grants every child-safe tool, not
+The exact role keys are =:name=, =:description=, =:instructions=, =:tools=,
+=:spawns=, =:models=, =:reasoning-effort=, =:output=, and =:blocking-p=.
+=:name=, =:description=, and =:instructions= are required nonempty strings.
+=:tools= is =nil=, =:all=, or a proper list of canonical tool-spec strings.
+=nil= grants no ordinary tools, while =:all= grants every child-safe tool, not
 every primary-agent tool. Every explicit grant is intersected with the
-child-safe registry. Child sessions never receive =self.*= tools. External
-commands retain the primary session's authorization boundary.
+child-safe registry. Canonical specs are exact =namespace.name= values,
+=namespace.*= patterns, or =web_search=. Unknown or unavailable tools and every
+=self.*=, =task.*=, =job.*=, or =yield.*= grant are rejected. External commands
+retain the primary session's authorization boundary.
 
-An omitted or empty =spawns= policy denies further delegation. An explicit
-role list or wildcard remains subject to the configured maximum child depth.
+=:spawns= is =nil=, =:all=, or a proper list of role-name strings. =nil= denies
+further delegation. An explicit role list or =:all= remains subject to the
+configured maximum child depth. =:models= is =nil= or a nonempty proper list of
+supported model identifiers or aliases. =:reasoning-effort= is =nil=, =:auto=,
+or a supported effort keyword. =:blocking-p= is exactly =t= or =nil=.
 The primary session owns its conversation's root jobs. A child owns only jobs
 created below its own task identity, so its =job.*= tools cannot inspect or
 control its parent, siblings, unrelated trees, or jobs from another primary
@@ -383,7 +394,7 @@ roles or their restrictions matter.
 =task.run= accepts one assignment or an independent batch. Synchronous children
 hold the call until their terminal results are collected. A non-blocking role
 may instead run as a detached job and return its identity immediately. A role
-with =blocking: true= always remains synchronous. =job.list=, =job.get=,
+with =:blocking-p t= always remains synchronous. =job.list=, =job.get=,
 =job.wait=, and =job.cancel= expose only jobs owned by the requesting session as
 described above. Cancellation cascades from a job to its descendants.
 
@@ -405,11 +416,17 @@ workers.
 Every child must finish by calling =yield.submit= exactly once with =success=,
 =failed=, or =aborted= status. A normal assistant stop without a yield is a
 failed child run. Successful yields carry useful parent-facing text and, when
-the role declares =output=, structured data satisfying that JSON schema. Failed
-or aborted yields carry an explicit error. Invalid or repeated yields are
-rejected. A synchronous batch succeeds only when every synchronous child
-succeeds, while its result still identifies every child, terminal status,
-error, structured data, and artifact.
+the role declares =:output=, structured data satisfying its native schema DSL.
+Schemas are property lists whose type names are keywords and whose object
+properties are string-keyed association lists. The recursive structural subset
+supports =:object=, =:array=, =:string=, =:number=, =:integer=, =:boolean=,
+=:null=, and =:enum=. In schema and structured-output values, =nil= represents
+JSON false and =:null= represents JSON null where the distinction matters. JSON
+Schema conversion happens only at provider and API compatibility boundaries.
+Failed or aborted yields carry an explicit error.
+Invalid or repeated yields are rejected. A synchronous batch succeeds only when
+every synchronous child succeeds, while its result still identifies every
+child, terminal status, error, structured data, and artifact.
 
 Request-local context is scoped to the conversation making the provider
 request. Concurrent primary and child requests never share a mutable current

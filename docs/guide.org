@@ -303,49 +303,63 @@ presence. Project roles under =.autolith/agents/= override user roles under
 A malformed higher-precedence role is reported and never silently replaced by a
 lower-precedence role with the same name.
 
-Each user or project role is one UTF-8 Markdown file. It starts with an exact
-=---= on the first line, contains one closing =---=, and has a nonempty prompt
-body. Frontmatter permits each of =name=, =description=, =tools=, =spawns=,
-=model=, =thinking-level=, =output=, and =blocking= at most once. =name= and
-=description= are required. For example:
+Each user or project role is one bounded UTF-8 =*.sexp= file containing exactly
+one top-level Common Lisp property list and nothing after it. Autolith reads the
+form with =*read-eval*= bound to =nil= and a fresh =(copy-readtable nil)=. The
+only keys are =:name=, =:description=, =:instructions=, =:tools=, =:spawns=,
+=:models=, =:reasoning-effort=,
+=:output=, and =:blocking-p=, each at most once. The first three are required
+nonempty strings. For example:
 
-#+BEGIN_SRC markdown
----
-name: reviewer
-description: Review a change for correctness and regressions.
-tools: [fs.read, search.*]
-spawns: [scout]
-model: "@parent"
-thinking-level: high
-output: |
-  {"type":"object","required":["verdict"],"properties":{"verdict":{"type":"string"},"findings":{"type":"array","items":{"type":"string"}}}}
-blocking: true
----
-Review the requested change. Report concrete, evidence-backed findings.
+#+BEGIN_SRC lisp
+(:name "reviewer"
+ :description "Review a change for correctness and regressions."
+ :instructions "Report concrete, evidence-backed findings."
+ :tools ("fs.read" "search.*")
+ :spawns ("scout")
+ :models ("@parent")
+ :reasoning-effort :high
+ :output (:type :object
+          :properties (("answer" (:type :string))
+                       ("findings" (:type :array
+                                    :items (:type :string))))
+          :required ("answer")
+          :additional-properties nil)
+ :blocking-p t)
 #+END_SRC
 
-The grammar is deliberately strict. It has no tabs, aliases, anchors,
-frontmatter comments, or arbitrary nesting. Scalar values may be plain, valid
-JSON double-quoted strings, or single-quoted strings. =tools=, =spawns=, and
-=model= accept one scalar or one single-line bracketed list. =tools: *= grants
-all child-safe tools; an omitted =tools= or =tools: []= grants none. Entries are
-exact tool names or =namespace.*= patterns. Role files cannot grant =self.*=,
-=task.*=, =job.*=, or =yield.*= directly. Delegation and the terminal yield tool
-come only from the task runtime's policy.
+The reader and validator deliberately reject reader labels, circular or shared
+structure, extra forms or trailing garbage, unknown or duplicate keys, improper
+lists, and values of the wrong type. =:tools= is =nil=, =:all=, or a proper list
+of canonical tool-spec strings. =nil= grants no ordinary tools; =:all= grants
+all child-safe tools. List entries are exact =namespace.name= values,
+=namespace.*= patterns, or =web_search=. Unknown or unavailable tools are
+rejected. Role files cannot grant =self.*=, =task.*=, =job.*=, or =yield.*=
+directly. Delegation and the terminal yield tool come only from the task
+runtime's policy.
 
-Similarly, =spawns: *= permits any discovered role within the depth limit, while
-an omitted =spawns= or =spawns: []= permits no child delegation. =model= accepts
-a known model identifier or supported =@= alias. =thinking-level= accepts a
-supported effort or automatic alias. =blocking= is exactly =true= or =false=
-and defaults to false. =output= is a JSON object, either on the same line or
-after =output: |= as JSON lines carrying a two-space block prefix. A successful
-child must submit matching data when an output schema is present.
+=:spawns= is =nil=, =:all=, or a proper list of role-name strings. =nil= denies
+child delegation, and every other value remains subject to the depth limit.
+=:models= is =nil= or a nonempty proper list of known model identifiers or
+supported =@= aliases. =:reasoning-effort= is =nil=, =:auto=, or a supported
+effort keyword. =:blocking-p= is exactly =t= or =nil= and defaults to =nil=.
+There are no wildcard strings, scalar-list conveniences, or alternate key
+spellings.
+
+=:output= is =nil= or the native schema DSL shown above: a property list with
+keyword type names and string-keyed object properties. It recursively supports
+=:object=, =:array=, =:string=, =:number=, =:integer=, =:boolean=, =:null=, and
+=:enum=. A successful child must submit matching structured data when a schema
+is present. In schemas and structured values, =nil= represents JSON false and
+=:null= represents JSON null where the distinction matters. JSON Schema is used
+only when translating values at a provider or API compatibility boundary; role
+files and internal task results remain native Lisp data.
 
 =task.run= starts one child from flat =agent=, =task=, optional =name=,
 =context=, and =async= arguments, or starts an independent =tasks= batch with
 shared nonempty =context=. Synchronous children are collected into the tool
 result. =async: true= detaches a non-blocking role and returns a job identifier;
-a role with =blocking: true= always remains synchronous. Every child must end
+a role with =:blocking-p t= always remains synchronous. Every child must end
 with exactly one =yield.submit= carrying =success=, =failed=, or =aborted=. A
 normal model stop without that yield is a failed child run.
 
