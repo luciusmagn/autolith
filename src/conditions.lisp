@@ -44,7 +44,7 @@
     :initarg :stage
     :reader working-directory-error-stage
     :type keyword
-    :documentation "The validation, worker, process, search, or application stage that failed.")
+    :documentation "The validation, worker, process, tools, or application stage that failed.")
    (cause
     :initarg :cause
     :reader working-directory-error-cause

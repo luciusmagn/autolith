@@ -1659,6 +1659,61 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-application-tool-runtime-lifecycle () null)
+(defun test-application-tool-runtime-lifecycle ()
+  "Test conversation switching and checkpoint saving retire tool runtimes."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (registry (make-instance 'tool-registry))
+         (runtime-identity (list ':application-runtime))
+         (close-count 0)
+         (detach-count 0))
+    (unwind-protect
+         (let* ((first-conversation
+                  (conversation-create configuration
+                                       :identifier "runtime-first"))
+                (second-conversation
+                  (conversation-create configuration
+                                       :identifier "runtime-second"))
+                (provider (provider-create configuration))
+                (tool
+                  (make-instance
+                   'tool-test-runtime-tool
+                   :namespace "test"
+                   :name "runtime"
+                   :description "Exercise application runtime cleanup."
+                   :parameters (tool-object-schema (json-object) nil)
+                   :runtime-identity runtime-identity
+                   :close-function (lambda () (incf close-count))
+                   :detach-function (lambda () (incf detach-count))))
+                (application nil))
+           (tool-registry-register registry tool)
+           (setf application
+                 (make-instance
+                  'application
+                  :configuration configuration
+                  :conversation first-conversation
+                  :provider provider
+                  :tool-registry registry
+                  :worker nil
+                  :agent (agent-create :configuration configuration
+                                       :provider provider
+                                       :conversation first-conversation
+                                       :tool-registry registry
+                                       :worker nil)
+                  :ui nil))
+           (application-install-conversation application second-conversation)
+           (test-assert (= close-count 1)
+                        "switching conversations closes background tool runtimes")
+           (test-assert (eq (application-conversation application)
+                            second-conversation)
+                        "runtime cleanup preserves conversation switching")
+           (checkpoint-detach-state application)
+           (test-assert (= detach-count 1)
+                        "checkpoint saving detaches background tool runtimes"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-working-directory-command () null)
 (defun test-working-directory-command ()
   "Test /cwd completion, full-path parsing, presentation, and no-argument status."
@@ -1727,7 +1782,7 @@
                     (recording-terminal-output terminal))
             "/cwd without a path presents the current workspace"))
       (ignore-errors (terminal-ui-stop ui))
-      (ignore-errors (tool-registry-close-search-state registry))
+      (ignore-errors (tool-registry-close-runtime-state registry))
       (uiop:chdir previous-process-directory)
       (setf *default-pathname-defaults* previous-defaults)
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
@@ -2182,6 +2237,7 @@
   (test-late-steering-promotion)
   (test-conversation-picker)
   (test-working-directory-switch)
+  (test-application-tool-runtime-lifecycle)
   (test-working-directory-command)
   (test-effort-switch)
   (test-status-entry)

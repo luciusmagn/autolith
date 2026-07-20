@@ -350,6 +350,32 @@
 (defgeneric tool-execute (tool context arguments)
   (:documentation "Execute TOOL with validated JSON ARGUMENTS inside CONTEXT."))
 
+(-> tool-runtime-identity (tool) t)
+(defgeneric tool-runtime-identity (tool)
+  (:documentation
+   "Return TOOL's shared ephemeral runtime identity, or NIL when it owns none."))
+
+(defmethod tool-runtime-identity ((tool tool))
+  "Return NIL because ordinary tools own no ephemeral runtime."
+  nil)
+
+(-> tool-runtime-close (tool) null)
+(defgeneric tool-runtime-close (tool)
+  (:documentation "Stop TOOL's ephemeral runtime and release its resources."))
+
+(defmethod tool-runtime-close ((tool tool))
+  "Leave an ordinary stateless TOOL unchanged."
+  nil)
+
+(-> tool-runtime-detach (tool) null)
+(defgeneric tool-runtime-detach (tool)
+  (:documentation
+   "Detach TOOL's inherited external resources before saving a forked image."))
+
+(defmethod tool-runtime-detach ((tool tool))
+  "Leave an ordinary stateless TOOL unchanged."
+  nil)
+
 (-> tool-argument (json-object string &key (:required boolean)) t)
 (defun tool-argument (arguments name &key required)
   "Return NAME from ARGUMENTS, signaling TOOL-ERROR when REQUIRED and absent."
@@ -376,6 +402,34 @@
     :type hash-table
     :documentation "Canonical dotted tool names mapped to tool objects."))
   (:documentation "The model-visible tools and their active dispatch objects."))
+
+(-> tool-registry--apply-runtime-operation (tool-registry function) null)
+(defun tool-registry--apply-runtime-operation (registry function)
+  "Call FUNCTION once per runtime, attempting all before signaling a failure."
+  (let ((seen (make-hash-table :test #'eq))
+        (first-failure nil))
+    (dolist (tool (tool-registry-tools registry))
+      (let ((identity (tool-runtime-identity tool)))
+        (when (and identity (not (gethash identity seen)))
+          (setf (gethash identity seen) t)
+          (handler-case
+              (funcall function tool)
+            (error (condition)
+              (unless first-failure
+                (setf first-failure condition)))))))
+    (when first-failure
+      (error first-failure)))
+  nil)
+
+(-> tool-registry-close-runtime-state (tool-registry) null)
+(defun tool-registry-close-runtime-state (registry)
+  "Stop every distinct ephemeral tool runtime owned by REGISTRY."
+  (tool-registry--apply-runtime-operation registry #'tool-runtime-close))
+
+(-> tool-registry-detach-runtime-state (tool-registry) null)
+(defun tool-registry-detach-runtime-state (registry)
+  "Detach every distinct inherited tool runtime owned by REGISTRY."
+  (tool-registry--apply-runtime-operation registry #'tool-runtime-detach))
 
 (-> tool-registry-register (tool-registry tool) tool)
 (defun tool-registry-register (registry tool)

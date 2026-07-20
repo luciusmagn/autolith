@@ -1,10 +1,45 @@
 (in-package #:autolith)
 
+;;;; -- Runtime Test Boundary --
+
+(defclass tool-test-runtime-tool (tool)
+  ((runtime-identity
+    :initarg :runtime-identity
+    :reader tool-test-runtime-identity
+    :type t
+    :documentation "The shared test runtime identity.")
+   (close-function
+    :initarg :close-function
+    :reader tool-test-runtime-close-function
+    :type function
+    :documentation "The callback recording runtime closure.")
+   (detach-function
+    :initarg :detach-function
+    :reader tool-test-runtime-detach-function
+    :type function
+    :documentation "The callback recording runtime detachment."))
+  (:documentation "A tool exposing deterministic ephemeral-runtime callbacks."))
+
+(defmethod tool-runtime-identity ((tool tool-test-runtime-tool))
+  "Return TOOL's shared test runtime identity."
+  (tool-test-runtime-identity tool))
+
+(defmethod tool-runtime-close ((tool tool-test-runtime-tool))
+  "Invoke TOOL's deterministic close callback."
+  (funcall (tool-test-runtime-close-function tool))
+  nil)
+
+(defmethod tool-runtime-detach ((tool tool-test-runtime-tool))
+  "Invoke TOOL's deterministic detach callback."
+  (funcall (tool-test-runtime-detach-function tool))
+  nil)
+
+
 ;;;; -- Subsystem Tests --
 
 (-> test-tool-registry () null)
 (defun test-tool-registry ()
-  "Test namespaced tool schema construction and total dispatch failure handling."
+  "Test tool schemas, dispatch failure handling, and runtime lifecycle cleanup."
   (let* ((registry (make-default-tool-registry))
          (schemas (tool-registry-provider-schemas registry))
          (configuration (test-configuration))
@@ -79,6 +114,68 @@
            (test-assert (not (tool-result-success-p result))
                         "unknown provider calls produce a correlated tool failure"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  (let ((registry (make-instance 'tool-registry))
+        (runtime-identity (list ':shared-runtime))
+        (close-count 0)
+        (detach-count 0))
+    (flet ((make-runtime-tool (name)
+             "Return one test tool sharing the lexical runtime counters."
+             (make-instance
+              'tool-test-runtime-tool
+              :namespace "test"
+              :name name
+              :description "Exercise the runtime lifecycle protocol."
+              :parameters (tool-object-schema (json-object) nil)
+              :runtime-identity runtime-identity
+              :close-function (lambda () (incf close-count))
+              :detach-function (lambda () (incf detach-count)))))
+      (tool-registry-register registry (make-runtime-tool "first"))
+      (tool-registry-register registry (make-runtime-tool "second"))
+      (tool-registry-close-runtime-state registry)
+      (tool-registry-detach-runtime-state registry)
+      (test-assert (= close-count 1)
+                   "a shared tool runtime closes exactly once per registry")
+      (test-assert (= detach-count 1)
+                   "a shared tool runtime detaches exactly once per registry")))
+  (let ((registry (make-instance 'tool-registry))
+        (close-order nil)
+        (failure nil))
+    (flet ((make-runtime-tool (name identity close-function)
+             "Return one independently identified close-test tool."
+             (make-instance
+              'tool-test-runtime-tool
+              :namespace "failure-test"
+              :name name
+              :description "Exercise complete runtime cleanup after failure."
+              :parameters (tool-object-schema (json-object) nil)
+              :runtime-identity identity
+              :close-function close-function
+              :detach-function (lambda () nil))))
+      (tool-registry-register
+       registry
+       (make-runtime-tool
+        "failure"
+        (list ':failure)
+        (lambda ()
+          (push ':failure close-order)
+          (error "expected runtime close failure"))))
+      (tool-registry-register
+       registry
+       (make-runtime-tool
+        "later"
+        (list ':later)
+        (lambda () (push ':later close-order))))
+      (setf failure
+            (handler-case
+                (progn
+                  (tool-registry-close-runtime-state registry)
+                  nil)
+              (error (condition)
+                condition)))
+      (test-assert failure
+                   "runtime closure reports the first cleanup failure")
+      (test-assert (equal (nreverse close-order) '(:failure :later))
+                   "runtime closure attempts later resources after a failure")))
   nil)
 
 (-> test-workspace-tools () null)

@@ -173,12 +173,12 @@
                            (uiop:process-info-pid
                             (worker-process worker))))
                   "a killed helper resets its databases and restarts without killing Autolith")))
-             (tool-registry-close-search-state registry)
+             (tool-registry-close-runtime-state registry)
              (test-assert
               (null (worker-process (search-tool-engine files-tool)))
               "closing a registry stops and clears its isolated watcher")))
       (when registry
-        (ignore-errors (tool-registry-close-search-state registry)))
+        (ignore-errors (tool-registry-close-runtime-state registry)))
       (if previous-library
           (sb-posix:setenv "AUTOLITH_FFF_LIBRARY" previous-library 1)
           (sb-posix:unsetenv "AUTOLITH_FFF_LIBRARY"))

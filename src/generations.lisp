@@ -549,7 +549,7 @@
     :initform nil
     :reader checkpoint-backend-tool-registry
     :type t
-    :documentation "The active registry whose native search state must be stopped."))
+    :documentation "The active registry whose ephemeral runtimes must be stopped."))
   (:documentation "The platform boundary for non-stopping live-image checkpoints."))
 
 (defclass linux-sbcl-checkpoint-backend (checkpoint-backend)
@@ -768,7 +768,7 @@
            :pathname nil))
   (let ((registry (checkpoint-backend-tool-registry backend)))
     (when registry
-      (tool-registry-close-search-state registry)))
+      (tool-registry-close-runtime-state registry)))
   (let* ((configuration (checkpoint-backend-configuration backend))
          (worker (checkpoint-backend-worker backend))
          (source-commit (checkpoint--source-snapshot configuration))

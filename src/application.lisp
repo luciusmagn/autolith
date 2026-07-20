@@ -272,6 +272,8 @@
     (application &key conversation-id
                    (immutable-p nil immutable-p-supplied-p))
   "Reconnect retained APPLICATION resources, optionally selecting CONVERSATION-ID."
+  (tool-registry-close-runtime-state
+   (application-tool-registry application))
   (image-state-reconnect)
   (context-runtime-reset)
   (let* ((previous (application-configuration application))
@@ -321,7 +323,6 @@
                     configuration
                     :reasoning-summaries-p reasoning-traces-p))
          (worker (lisp-worker-pool-create configuration))
-         (previous-registry (application-tool-registry application))
          (registry (task-augment-tool-registry
                     (make-default-tool-registry
                      :immutable-p effective-immutable-p)))
@@ -338,10 +339,10 @@
                       (parse-integer value :junk-allowed nil)))
              (error ()
                nil))))
-    (ignore-errors (tool-registry-close-search-state previous-registry))
     (setf (application-configuration application) configuration
           (application-conversation application) conversation
           (application-provider application) provider
+          (application-tool-registry application) registry
           (application-worker application) worker
           (application-agent application) agent
           (application-ui application) ui
@@ -363,7 +364,7 @@
 (defmethod checkpoint-detach-state ((application application))
   "Detach APPLICATION's ephemeral object graph in a checkpoint saver child."
   (context-runtime-reset)
-  (tool-registry-detach-search-state
+  (tool-registry-detach-runtime-state
    (application-tool-registry application))
   (setf (application-provider application) nil
         (application-worker application) nil
@@ -465,6 +466,11 @@
                 :cause cause
                 :rollback-cause (restore-previous-workspace))))
       (handler-case
+          (tool-registry-close-runtime-state
+           (application-tool-registry application))
+        (error (condition)
+          (fail ':tools condition)))
+      (handler-case
           (lisp-worker-manager-change-working-directory manager configuration)
         (error (condition)
           (fail ':workers condition)))
@@ -477,11 +483,6 @@
         (error (condition)
           (fail ':process condition)))
       (handler-case
-          (tool-registry-close-search-state
-           (application-tool-registry application))
-        (error (condition)
-          (fail ':search condition)))
-      (handler-case
           (application--install-configuration application configuration)
         (error (condition)
           (fail ':application condition)))
@@ -490,6 +491,8 @@
 (-> application-install-conversation (application conversation) application)
 (defun application-install-conversation (application conversation)
   "Make CONVERSATION active and restore its model selection."
+  (tool-registry-close-runtime-state
+   (application-tool-registry application))
   (application--install-configuration
    application
    (application--configuration-for-conversation

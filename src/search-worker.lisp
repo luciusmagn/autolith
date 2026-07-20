@@ -50,31 +50,18 @@
                            (configuration-working-directory configuration))
              :cause (or (clifff-error-cause condition) condition)))))
 
-(-> tool-registry--search-workers (tool-registry) list)
-(defun tool-registry--search-workers (registry)
-  "Return the distinct clifff workers owned by REGISTRY."
-  (let ((seen (make-hash-table :test #'eq))
-        (workers nil))
-    (dolist (tool (tool-registry-tools registry))
-      (when (typep tool 'search-tool)
-        (let ((worker (search-tool-engine tool)))
-          (unless (gethash worker seen)
-            (setf (gethash worker seen) t)
-            (push worker workers)))))
-    workers))
+(defmethod tool-runtime-identity ((tool search-tool))
+  "Return the isolated clifff worker shared by this search tool family."
+  (search-tool-engine tool))
 
-(-> tool-registry-close-search-state (tool-registry) null)
-(defun tool-registry-close-search-state (registry)
-  "Stop every isolated clifff worker owned by REGISTRY."
-  (dolist (worker (tool-registry--search-workers registry))
-    (worker-close worker))
+(defmethod tool-runtime-close ((tool search-tool))
+  "Stop TOOL's isolated clifff worker."
+  (worker-close (search-tool-engine tool))
   nil)
 
-(-> tool-registry-detach-search-state (tool-registry) null)
-(defun tool-registry-detach-search-state (registry)
-  "Detach inherited clifff streams before saving a forked Lisp image."
-  (dolist (worker (tool-registry--search-workers registry))
-    (worker-detach worker))
+(defmethod tool-runtime-detach ((tool search-tool))
+  "Detach TOOL's inherited clifff streams before saving a forked Lisp image."
+  (worker-detach (search-tool-engine tool))
   nil)
 
 

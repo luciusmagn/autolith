@@ -283,11 +283,11 @@
       (sb-sys:enable-interrupt sb-unix:sigwinch :default)
       (when input-controller
         (application-input-controller-stop input-controller))
-      (when worker
-        (lisp-worker-manager-stop worker))
       (ignore-errors
-        (tool-registry-close-search-state
-         (application-tool-registry application)))))
+        (tool-registry-close-runtime-state
+         (application-tool-registry application)))
+      (when worker
+        (lisp-worker-manager-stop worker))))
   nil)
 
 ;;;; -- Command-Line Entry --
