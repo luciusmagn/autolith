@@ -54,8 +54,8 @@
                   :documentation
                   "The specialized role instructions prepended to each assignment.")
    (tools :initarg :tools :initform nil :reader
-          task-agent-definition-tools :type list :documentation
-          "The optional child tool allowlist.")
+          task-agent-definition-tools :type t :documentation
+          "NIL, an explicit child tool allowlist, or :ALL child-safe tools.")
    (spawns :initarg :spawns :initform nil :reader
            task-agent-definition-spawns :type t :documentation
            "NIL, a list of agent names, or :ALL for nested delegation.")
@@ -115,14 +115,16 @@
                                  "Fast read-only codebase research and compressed handoff context."
                                  :system-prompt
                                  "Investigate rapidly and return source-grounded findings. Stay read-only. Search broadly, read only relevant sections, cite paths and line ranges, explain how the pieces connect, and finish with a concise handoff."
-                                 :tools '("fs.read" "fs.list" "web_search")
+                                 :tools
+                                 '("fs.read" "fs.list" "search.*" "web_search")
                                  :models '("@smol") :thinking-level "medium"
                                  :source :bundled)
    (task-agent-definition-create :name "designer" :description
                                  "UI and UX specialist for implementation, review, and visual refinement."
                                  :system-prompt
                                  "Act as a pragmatic product and interface designer. Inspect the existing design language before changing it, preserve accessibility and terminal constraints, implement concrete improvements when asked, and report the rationale and verification."
-                                 :models '("@designer") :thinking-level "high"
+                                 :tools :all :models '("@designer")
+                                 :thinking-level "high"
                                  :source :bundled)
    (task-agent-definition-create :name "reviewer" :description
                                  "Code review specialist for correctness, security, and regression analysis."
@@ -130,7 +132,7 @@
                                  "Review the requested change as a senior maintainer. Prioritize concrete correctness, security, data-loss, concurrency, and compatibility defects. Verify claims against source and tests. Return actionable findings ordered by severity, with paths and line ranges, and avoid stylistic noise."
                                  :tools
                                  '("fs.read" "fs.list" "shell.run"
-                                   "web_search")
+                                   "search.*" "web_search")
                                  :spawns '("scout") :models '("@slow")
                                  :thinking-level "high" :blocking-p t :source
                                  :bundled)
@@ -140,20 +142,21 @@
                                  "Research external behavior from authoritative documentation and source. Prefer installed dependency source and primary references over memory. State versions and uncertainty, quote exact APIs where useful, and return a concise implementation-ready answer."
                                  :tools
                                  '("fs.read" "fs.list" "shell.run" "lisp.*"
-                                   "web_search")
+                                   "search.*" "web_search")
                                  :models '("@smol") :thinking-level "low"
                                  :source :bundled)
    (task-agent-definition-create :name "task" :description
                                  "General-purpose child agent for delegated multi-step work."
                                  :system-prompt
                                  "Own the delegated assignment end to end. Inspect before changing, preserve unrelated work, use the available tools directly, verify proportionally to risk, and return concrete results rather than a plan. Delegate only when it materially helps."
-                                 :spawns :all :models '("@task") :source
+                                 :tools :all :spawns :all :models '("@task") :source
                                  :bundled)
    (task-agent-definition-create :name "sonic" :description
                                  "Low-overhead agent for strictly mechanical updates or data collection."
                                  :system-prompt
                                  "Perform only the narrowly specified mechanical work. Avoid redesign and speculative cleanup. Make the smallest correct change, run a focused verification, and report exactly what changed."
-                                 :models '("@smol") :thinking-level "medium"
+                                 :tools :all :models '("@smol")
+                                 :thinking-level "medium"
                                  :source :bundled)))
 
 (defun task--trim (text)
@@ -227,6 +230,12 @@
                collect (string item)))
         (t (list (princ-to-string value)))))
 
+(defun task--frontmatter-tools (value)
+  "Normalize frontmatter VALUE into a fail-closed child tool policy."
+  (if (eq value :all)
+      :all
+      (task--frontmatter-list value)))
+
 (defun task--markdown-frontmatter (contents pathname)
   "Return top-level frontmatter, body, and raw nested fields from CONTENTS."
   (let ((lines (task--split-lines contents)))
@@ -275,7 +284,7 @@
                                   pathname)
     (let* ((name (gethash "name" fields))
            (description (gethash "description" fields))
-           (tools (task--frontmatter-list (gethash "tools" fields)))
+           (tools (task--frontmatter-tools (gethash "tools" fields)))
            (models (task--frontmatter-list (gethash "model" fields)))
            (spawn-value (gethash "spawns" fields))
            (spawns
@@ -456,8 +465,14 @@
 		 :type agent :documentation
 		 "The parent session supplying provider and workspace context.")
    (parent-call-id :initarg :parent-call-id :initform nil :reader
-		   task-job-parent-call-id :type (option string) :documentation
-		   "The task.run function call that created this child.")
+			   task-job-parent-call-id :type (option string) :documentation
+			   "The task.run function call that created this child.")
+   (command-authorization-function
+    :initarg :command-authorization-function
+    :initform nil
+    :reader task-job-command-authorization-function
+    :type (option function)
+    :documentation "The parent capability used to authorize child shell commands.")
    (detached-p :initarg :detached-p :reader task-job-detached-p :type
                boolean :documentation
                "True when the parent did not wait for this child.")
@@ -509,6 +524,17 @@
         "The lifecycle and progress record for this child."))
   (:documentation
    "A real in-process agent session that must finish through yield.submit."))
+
+(defmethod agent-turn-complete-p
+    ((agent task-child-agent) (result provider-result))
+  "Return true after AGENT yields or stops without requesting continuation."
+  (or (task-completion-called-p (task-child-agent-completion agent))
+      (call-next-method)))
+
+(defmethod agent-turn-completion-details ((agent task-child-agent))
+  "Identify whether AGENT completed through its explicit yield protocol."
+  (list :yielded-p
+        (task-completion-called-p (task-child-agent-completion agent))))
 
 (defclass task-tool-result (tool-result)
   ((details :initarg :details :reader task-tool-result-details
@@ -824,24 +850,20 @@
   (let* ((normalized (string-downcase spec))
          (canonical (string-downcase (tool-canonical-name tool)))
          (namespace (string-downcase (tool-namespace tool))))
-    (or (string= normalized canonical) (string= normalized namespace)
-        (string= normalized (format nil "~A.*" namespace))
-        (and (string= normalized "read")
-             (member canonical '("fs.read" "fs.list") :test #'string=))
-        (and (member normalized '("bash" "exec" "grep" "glob") :test #'string=)
-             (string= canonical "shell.run"))
-        (and (string= normalized "lisp") (string= namespace "lisp"))
-        (and (string= normalized "task") (string= canonical "task.run"))
-        (and (string= normalized "job") (string= namespace "job")))))
+    (or (string= normalized canonical)
+        (string= normalized namespace)
+        (string= normalized (format nil "~A.*" namespace)))))
 
 (defun task--definition-allows-tool-p (definition tool)
   "Return true when DEFINITION permits ordinary TOOL."
   (let ((specs (task-agent-definition-tools definition))
         (namespace (tool-namespace tool)))
-    (and (member namespace '("fs" "shell" "lisp") :test #'string=)
-         (or (null specs)
-             (some (lambda (spec) (task--tool-spec-matches-p spec tool))
-                   specs)))))
+    (and (member namespace '("fs" "search" "shell" "lisp") :test #'string=)
+         (or (eq specs :all)
+             (and (listp specs)
+                  (some (lambda (spec)
+                          (task--tool-spec-matches-p spec tool))
+                        specs))))))
 
 (defun task-child-tool-registry (parent-registry definition orchestrator depth)
   "Build a restricted child registry with yield and structurally bounded spawning."
@@ -922,39 +944,17 @@
            (task-agent-definition-thinking-level definition)
            (configuration-reasoning-effort parent-configuration)))
          (web-enabled-p
-          (or (null (task-agent-definition-tools definition))
+          (or (eq (task-agent-definition-tools definition) :all)
               (member "web_search" (task-agent-definition-tools definition)
                       :test #'string-equal))))
-    (make-instance 'configuration :source-root
-                   (configuration-source-root parent-configuration)
-                   :working-directory
-                   (configuration-working-directory parent-configuration)
-                   :config-root (configuration-config-root parent-configuration)
-                   :data-root (configuration-data-root parent-configuration)
-                   :state-root (configuration-state-root parent-configuration)
-                   :cache-root (configuration-cache-root parent-configuration)
-                   :codex-auth-path
-                   (configuration-codex-auth-path parent-configuration) :model
-                   model :reasoning-effort effort :web-search-mode
-                   (if web-enabled-p
-                       (configuration-web-search-mode parent-configuration)
-                       "disabled")
-                   :context-window (configuration--context-window-for model)
-                   :compaction-threshold-percent
-                   (configuration-compaction-threshold-percent
-                    parent-configuration)
-                   :provider-endpoint
-                   (configuration-provider-endpoint parent-configuration))))
-
-(defun task-definition-request-budget (definition)
-  "Return the soft provider-request budget for DEFINITION."
-  (task--environment-integer "AUTOLITH_TASK_REQUEST_BUDGET"
-                             (if (member
-                                  (task-agent-definition-name definition)
-                                  '("scout" "sonic") :test #'string=)
-                                 100
-                                 200)
-                             :minimum 1))
+    (configuration--clone
+     parent-configuration
+     :model model
+     :reasoning-effort effort
+     :web-search-mode
+     (if web-enabled-p
+         (configuration-web-search-mode parent-configuration)
+         "disabled"))))
 
 (defun task-output-definition-text (definition)
   "Return DEFINITION's output contract as prompt text, or NIL."
@@ -1077,166 +1077,6 @@
             (task-completion-label completion) (and (stringp label) label))
       (tool-success
        "Terminal yield accepted. The child session will now stop."))))
-
-(defun task-child--yield-only-schemas (agent)
-  "Return only AGENT's yield namespace schema for hard finalization."
-  (let ((tool
-         (tool-registry-find (agent-tool-registry agent) "yield" "submit")))
-    (if tool
-        (vector
-         (json-object "type" "namespace" "name" "yield" "description"
-                      "Required child completion protocol." "tools"
-                      (vector (tool-provider-schema tool))))
-        #())))
-
-(defun task-child--execute-tool-calls (agent calls observer tool-round)
-  "Execute child CALLS, rejecting calls after the first accepted yield."
-  (loop for remaining on calls
-        for call = (first remaining)
-        for call-id = (json-get call "call_id")
-        for tool-name = (function-call-canonical-name call)
-        do (let ((context
-                  (make-instance 'tool-context :configuration
-                                 (agent-configuration agent) :worker
-                                 (agent-worker agent) :conversation
-                                 (agent-conversation agent) :agent agent
-                                 :observer observer :call-id call-id)))
-             (agent-observer-status observer :tool-call-started
-                                    (list :tool-round tool-round :call-id
-                                          call-id :tool tool-name))
-             (let ((result
-                    (tool-registry-execute-call (agent-tool-registry agent)
-                                                call context)))
-               (conversation-append-tool-result (agent-conversation agent)
-                                                call-id :tool-name tool-name
-                                                :output (tool-result-content result)
-                                                :success-p (tool-result-success-p result))
-               (agent-observer-status observer :tool-call-completed
-                                      (list :tool-round tool-round :call-id
-                                            call-id :tool tool-name :success-p
-                                            (tool-result-success-p result)
-                                            :output
-                                            (tool-result-content result)
-                                            :details
-                                            (and
-                                             (typep result 'task-tool-result)
-                                             (task-tool-result-details
-                                              result))))))
-        when (task-completion-called-p (task-child-agent-completion agent))
-        do (when (rest remaining)
-             (agent--reject-tool-calls agent (rest remaining) observer
-                                       :tool-round tool-round :message
-                                       "This call was not executed because the child already yielded.")) (return))
-  nil)
-
-(defun task-child--run-provider-loop (agent observer goal-context)
-  "Run a bounded child turn until yield.submit or hard finalization."
-  (let ((seen-call-identifiers (make-hash-table :test #'equal))
-        (request-number 0)
-        (tool-rounds 0)
-        (tool-calls 0))
-    (loop
-     (when (agent--should-compact-p agent)
-       (agent-compact-conversation agent observer))
-     (incf request-number)
-     (let ((budget-state (agent--budget-state agent request-number)))
-       (when (eq budget-state :warning)
-         (agent-observer-status observer :turn-budget-warning
-                                (list :provider-step request-number
-                                      :maximum-provider-steps
-                                      (agent-maximum-provider-steps agent))))
-       (agent-observer-status observer :provider-request-started
-                              (list :request-number request-number :tool-rounds
-                                    tool-rounds :turn-budget-state
-                                    budget-state))
-       (let* ((conversation (agent-conversation agent))
-              (provider-tools
-               (if (eq budget-state :finalization)
-                   (task-child--yield-only-schemas agent)
-                   (tool-registry-provider-schemas
-                    (agent-tool-registry agent))))
-              (result
-               (provider-stream-turn (agent-provider agent) conversation
-                                     provider-tools
-                                     (agent--provider-event-callback observer)
-                                     :turn-budget-state
-                                     (if (eq budget-state :finalization)
-                                         :normal
-                                         budget-state)
-                                     :goal-context goal-context))
-              (calls (provider-result-tool-calls result)))
-         (agent--validate-tool-call-identifiers agent calls
-                                                :seen-call-identifiers seen-call-identifiers
-                                                :request-number request-number)
-         (agent--persist-provider-result agent result request-number)
-         (setf (conversation-turn-state conversation)
-               (provider-result-turn-state result))
-         (agent-observer-status observer :provider-request-completed
-                                (list :request-number request-number
-                                      :response-id
-                                      (provider-result-response-id result)
-                                      :usage
-                                      (agent--portable-value
-                                       (provider-result-usage result))
-                                      :output-item-count
-                                      (length
-                                       (provider-result-output-items result))
-                                      :tool-call-count (length calls)
-                                      :turn-completion
-                                      (provider-result-turn-completion result)
-                                      :turn-budget-state budget-state))
-         (cond
-           ((and calls
-                 (> (+ tool-calls (length calls))
-                    (agent-maximum-tool-calls agent)))
-            (let ((message
-                   (format nil
-                           "This call was not executed because the child reached its ~:D-call tool budget."
-                           (agent-maximum-tool-calls agent))))
-              (agent--reject-tool-calls agent calls observer :tool-round
-					(1+ tool-rounds) :message message)
-              (agent--signal-budget-exhausted
-                 agent :provider-step request-number :tool-calls tool-calls
-                 :reason :tool-call-limit :message message)))
-           (calls (incf tool-rounds) (incf tool-calls (length calls))
-		  (task-child--execute-tool-calls agent calls observer tool-rounds)))
-         (when (task-completion-called-p (task-child-agent-completion agent))
-           (agent-observer-status observer :turn-completed
-                                  (list :provider-requests request-number
-                                        :tool-rounds tool-rounds :tool-calls
-                                        tool-calls :yielded-p t :response-id
-                                        (provider-result-response-id result)))
-           (return result))
-         (when (eq budget-state :finalization)
-           (agent-observer-status observer :turn-completed
-                                  (list :provider-requests request-number
-                                        :tool-rounds tool-rounds :tool-calls
-                                        tool-calls :yielded-p nil
-                                        :budget-finalization-p t :response-id
-                                        (provider-result-response-id result)))
-           (return result))
-         (when (null calls)
-           (agent-observer-status observer :provider-follow-up
-                                  (list :request-number request-number :reason
-                                        :yield-required))))))))
-
-(defmethod agent-run-user-turn
-    ((agent task-child-agent) (content string)
-     &key (observer (make-instance 'agent-observer)) goal-context)
-  "Run one serialized child turn until its explicit terminal yield."
-  (unless (non-empty-string-p content)
-    (error 'agent-loop-error :message
-           "A child assignment requires non-empty content." :conversation-id
-           (conversation-identifier (agent-conversation agent)) :request-number
-           nil))
-  (with-lock-held ((agent-turn-lock agent))
-    (let ((conversation (agent-conversation agent)))
-      (when (agent--should-compact-p agent)
-        (agent-compact-conversation agent observer))
-      (conversation-append-user-message conversation content)
-      (unwind-protect
-           (task-child--run-provider-loop agent observer goal-context)
-        (setf (conversation-turn-state conversation) nil)))))
 
 (defun task--utf8-length (text)
   "Return the UTF-8 byte length of TEXT on the supported SBCL runtime."
@@ -1411,17 +1251,13 @@
          (registry
           (task-child-tool-registry (agent-tool-registry parent) definition
                                     orchestrator depth))
-         (budget (task-definition-request-budget definition))
-         (hard-limit (+ (ceiling (* 3 budget) 2) 5))
          (provider
           (provider-with-configuration (agent-provider parent) configuration))
          (child
           (make-instance 'task-child-agent :configuration configuration
                          :provider provider :conversation conversation
                          :tool-registry registry :worker worker
-                         :maximum-provider-steps hard-limit
-                         :provider-step-warning budget :maximum-tool-calls
-                         +default-maximum-tool-calls+ :definition definition
+                         :definition definition
                          :identity (task-job-identity job) :depth depth
                          :completion completion :orchestrator orchestrator :job
                          job))
@@ -1439,7 +1275,10 @@
                                           (lambda (status details)
                                             (task-progress-note-status job
                                                                        status
-                                                                       details)))))
+                                                                       details))
+                                          :command-authorization-callback
+                                          (task-job-command-authorization-function
+                                           job))))
     (unwind-protect
          (let ((result
 		(agent-run-user-turn child (getf (task-job-item job) :task)
@@ -1555,7 +1394,9 @@
   nil)
 
 (defun task-orchestrator-start-job
-    (orchestrator parent-agent definition item detached-p parent-call-id)
+    (orchestrator
+     &key parent-agent definition item detached-p parent-call-id
+       command-authorization-function)
   "Create, register, and start one child JOB."
   (let* ((identity
           (task-orchestrator-create-identity orchestrator (getf item :name)
@@ -1565,7 +1406,9 @@
           (make-instance 'task-job :orchestrator orchestrator :identity
                          identity :definition definition :item item
                          :parent-agent parent-agent :parent-call-id
-                         parent-call-id :detached-p detached-p)))
+                         parent-call-id :detached-p detached-p
+                         :command-authorization-function
+                         command-authorization-function)))
     (with-lock-held ((task-orchestrator-lock orchestrator))
       (setf (gethash (getf identity :id) (task-orchestrator-jobs orchestrator))
             job))
@@ -1757,12 +1600,16 @@
            (progn
              (dolist (entry ordered)
                (let ((job
-                      (task-orchestrator-start-job orchestrator parent
-                                                   (getf entry :definition)
-                                                   (getf entry :item)
-                                                   (getf entry :detached)
-                                                   (tool-context-call-id
-                                                    context))))
+                      (task-orchestrator-start-job
+                       orchestrator
+                       :parent-agent parent
+                       :definition (getf entry :definition)
+                       :item (getf entry :item)
+                       :detached-p (getf entry :detached)
+                       :parent-call-id (tool-context-call-id context)
+                       :command-authorization-function
+                       (tool-context-command-authorization-function
+                        context))))
 		 (push job jobs)
 		 (if (getf entry :detached)
                      (push job detached)

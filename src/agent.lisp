@@ -242,6 +242,26 @@
   (:documentation
    "Persist user CONTENT, run model and tool rounds, and return the final provider result."))
 
+(-> agent-turn-complete-p (agent provider-result) boolean)
+(defgeneric agent-turn-complete-p (agent result)
+  (:documentation
+   "Return true when RESULT completes AGENT's active user turn."))
+
+(defmethod agent-turn-complete-p ((agent agent) (result provider-result))
+  "Return true when RESULT needs neither tool execution nor a provider follow-up."
+  (declare (ignore agent))
+  (and (null (provider-result-tool-calls result))
+       (not (eq (provider-result-turn-completion result) ':continue))))
+
+(-> agent-turn-completion-details (agent) list)
+(defgeneric agent-turn-completion-details (agent)
+  (:documentation "Return AGENT-specific portable turn-completion details."))
+
+(defmethod agent-turn-completion-details ((agent agent))
+  "Return no extra completion details for an ordinary AGENT."
+  (declare (ignore agent))
+  nil)
+
 (defmethod agent-run-user-turn
     ((agent agent) (content string)
      &key (observer (make-instance 'agent-observer)) goal-context)
@@ -365,66 +385,107 @@
              round-identifiers))
   nil)
 
-(-> agent--execute-tool-calls
-    (agent list &key (:observer agent-observer) (:tool-round integer))
+(-> agent--reject-tool-calls
+    (agent list agent-observer
+     &key (:tool-round integer) (:message string))
     null)
-(defun agent--execute-tool-calls (agent calls &key observer tool-round)
-  "Execute CALLS sequentially and append one correlated result for every call."
+(defun agent--reject-tool-calls
+    (agent calls observer &key tool-round message)
+  "Append one explicit MESSAGE failure output for every rejected call in CALLS."
   (dolist (call calls)
-    (let* ((call-id (json-get call "call_id"))
-           (tool-name (function-call-canonical-name call))
-           (context
-             (make-instance 'tool-context
-                            :configuration (agent-configuration agent)
-                            :worker (agent-worker agent)
-                            :conversation (agent-conversation agent)
-                            :registry (agent-tool-registry agent)
-                            :agent agent
-                            :observer observer
-                            :call-id call-id
-                            :command-authorization-function
-                            (lambda (command directory)
-                              (agent-observer-authorize-command
-                               observer command directory)))))
+    (let* ((call-id   (json-get call "call_id"))
+           (tool-name (function-call-canonical-name call)))
+      (conversation-append-tool-result
+       (agent-conversation agent)
+       call-id
+       :tool-name tool-name
+       :output message
+       :success-p nil)
       (agent-observer-status
        observer
-       :tool-call-started
+       ':tool-call-completed
        (list :tool-round tool-round
              :call-id call-id
-             :tool tool-name))
-      (let* ((real-start (get-internal-real-time))
-             (cpu-start (get-internal-run-time))
-             (result
-               (tool-registry-execute-call
-                (agent-tool-registry agent)
-                call
-                context))
-             (cpu-microseconds
-               (round (* (- (get-internal-run-time) cpu-start) 1000000)
-                      internal-time-units-per-second))
-             (real-microseconds
-               (round (* (- (get-internal-real-time) real-start) 1000000)
-                      internal-time-units-per-second)))
-        (conversation-append-tool-result
-         (agent-conversation agent)
-         call-id
-         :tool-name tool-name
-         :output (tool-result-content result)
-         :image-attachments (tool-result-image-attachments result)
-         :success-p (tool-result-success-p result)
-         :cpu-microseconds cpu-microseconds
-         :real-microseconds real-microseconds)
-        (agent-observer-status
-         observer
-         :tool-call-completed
-         (list :tool-round tool-round
-               :call-id call-id
-               :tool tool-name
+             :tool tool-name
+             :success-p nil
+             :output message))))
+  nil)
+
+(-> agent--execute-tool-calls
+    (agent list provider-result
+     &key (:observer agent-observer) (:tool-round integer))
+    null)
+(defun agent--execute-tool-calls
+    (agent calls provider-result &key observer tool-round)
+  "Execute CALLS sequentially and stop after AGENT reaches terminal state."
+  (loop for remaining on calls
+        for call = (first remaining)
+        do
+          (let* ((call-id   (json-get call "call_id"))
+                 (tool-name (function-call-canonical-name call))
+                 (context
+                   (make-instance
+                    'tool-context
+                    :configuration (agent-configuration agent)
+                    :worker (agent-worker agent)
+                    :conversation (agent-conversation agent)
+                    :registry (agent-tool-registry agent)
+                    :agent agent
+                    :observer observer
+                    :call-id call-id
+                    :command-authorization-function
+                    (lambda (command directory)
+                      (agent-observer-authorize-command
+                       observer command directory)))))
+            (agent-observer-status
+             observer
+             :tool-call-started
+             (list :tool-round tool-round
+                   :call-id call-id
+                   :tool tool-name))
+            (let* ((real-start (get-internal-real-time))
+                   (cpu-start  (get-internal-run-time))
+                   (result
+                     (tool-registry-execute-call
+                      (agent-tool-registry agent)
+                      call
+                      context))
+                   (cpu-microseconds
+                     (round (* (- (get-internal-run-time) cpu-start) 1000000)
+                            internal-time-units-per-second))
+                   (real-microseconds
+                     (round (* (- (get-internal-real-time) real-start) 1000000)
+                            internal-time-units-per-second)))
+              (conversation-append-tool-result
+               (agent-conversation agent)
+               call-id
+               :tool-name tool-name
+               :output (tool-result-content result)
+               :image-attachments (tool-result-image-attachments result)
                :success-p (tool-result-success-p result)
                :cpu-microseconds cpu-microseconds
-               :real-microseconds real-microseconds
-               :output (tool-result-content result)
-               :details (tool-result-details result))))))
+               :real-microseconds real-microseconds)
+              (agent-observer-status
+               observer
+               :tool-call-completed
+               (list :tool-round tool-round
+                     :call-id call-id
+                     :tool tool-name
+                     :success-p (tool-result-success-p result)
+                     :cpu-microseconds cpu-microseconds
+                     :real-microseconds real-microseconds
+                     :output (tool-result-content result)
+                     :details (tool-result-details result)))))
+        (when (agent-turn-complete-p agent provider-result)
+          (when (rest remaining)
+            (agent--reject-tool-calls
+             agent
+             (rest remaining)
+             observer
+             :tool-round tool-round
+             :message
+             "This call was not executed because the agent turn already completed."))
+          (return)))
   nil)
 
 (-> agent--apply-steering-input (agent agent-observer integer) null)
@@ -540,15 +601,16 @@ persisted as history, only the durable summary record is."
                :output-item-count (length (provider-result-output-items result))
                :tool-call-count (length calls)
                :turn-completion (provider-result-turn-completion result)))
-        (when (and (null calls)
-                   (not (eq (provider-result-turn-completion result) :continue)))
+        (when (agent-turn-complete-p agent result)
           (agent-observer-status
            observer
            :turn-completed
-           (list :provider-requests request-number
-                 :tool-rounds tool-rounds
-                 :tool-calls tool-calls
-                 :response-id (provider-result-response-id result)))
+           (append
+            (list :provider-requests request-number
+                  :tool-rounds tool-rounds
+                  :tool-calls tool-calls
+                  :response-id (provider-result-response-id result))
+            (agent-turn-completion-details agent)))
           (return result))
         (cond
           ((null calls)
@@ -559,7 +621,20 @@ persisted as history, only the durable summary record is."
           (t
            (incf tool-rounds)
            (incf tool-calls (length calls))
-           (agent--execute-tool-calls agent calls
+           (agent--execute-tool-calls agent calls result
                                       :observer observer
                                       :tool-round tool-rounds)
-           (agent--apply-steering-input agent observer request-number)))))))
+           (if (agent-turn-complete-p agent result)
+               (progn
+                 (agent-observer-status
+                  observer
+                  :turn-completed
+                  (append
+                   (list :provider-requests request-number
+                         :tool-rounds tool-rounds
+                         :tool-calls tool-calls
+                         :response-id (provider-result-response-id result))
+                   (agent-turn-completion-details agent)))
+                 (return result))
+               (agent--apply-steering-input
+                agent observer request-number))))))))

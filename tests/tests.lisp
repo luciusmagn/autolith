@@ -116,6 +116,7 @@
     (run-device-authentication-tests)
     (run-agent-tests)
     (test-task-orchestration)
+    (test-task-child-shared-agent-loop)
     (run-terminal-tests)
     (run-layout-tests)
     (run-markdown-tests)

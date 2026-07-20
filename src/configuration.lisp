@@ -256,12 +256,14 @@
     (configuration &key (:working-directory (option pathname))
                    (:model (option string))
                    (:reasoning-effort (option string))
-                   (:immutable-p boolean))
+                   (:immutable-p boolean)
+                   (:web-search-mode (option string)))
     configuration)
 (defun configuration--clone
     (configuration
      &key working-directory model reasoning-effort
-       (immutable-p nil immutable-p-supplied-p))
+       (immutable-p nil immutable-p-supplied-p)
+       (web-search-mode nil web-search-mode-supplied-p))
   "Copy CONFIGURATION, replacing only supplied workspace or model choices.
 
 Selecting a different model recomputes the context window for that model."
@@ -282,7 +284,10 @@ Selecting a different model recomputes the context window for that model."
                  :immutable-p (if immutable-p-supplied-p
                                   immutable-p
                                   (configuration-immutable-p configuration))
-                 :web-search-mode (configuration-web-search-mode configuration)
+                 :web-search-mode
+                 (if web-search-mode-supplied-p
+                     web-search-mode
+                     (configuration-web-search-mode configuration))
                  :context-window (if model
                                      (configuration--context-window-for model)
                                      (configuration-context-window

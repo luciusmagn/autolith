@@ -67,6 +67,10 @@
     :accessor application-permission-mode
     :type (member :ask :sandboxed :full-access)
     :documentation "The command approval behavior for this process session.")
+   (command-authorization-lock
+    :initform (make-lock "Autolith command authorization")
+    :reader application-command-authorization-lock
+    :documentation "The lock serializing command prompts from concurrent agents.")
    (input-controller
     :initform nil
     :accessor application-input-controller

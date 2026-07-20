@@ -608,18 +608,20 @@
 (-> application-authorize-command (application string pathname) keyword)
 (defun application-authorize-command (application command directory)
   "Return the session, saved, or interactively selected permission for COMMAND."
-  (case (application-permission-mode application)
-    (:full-access
-     ':full-access)
-    (:sandboxed
-     ':sandboxed)
-    (:ask
-     (if (permissions-allowed-p
-          (application-permission-state application)
-          command
-          directory)
-         ':sandboxed
-         (application--ask-command-permission application command directory)))))
+  (with-lock-held ((application-command-authorization-lock application))
+    (case (application-permission-mode application)
+      (:full-access
+       ':full-access)
+      (:sandboxed
+       ':sandboxed)
+      (:ask
+       (if (permissions-allowed-p
+            (application-permission-state application)
+            command
+            directory)
+           ':sandboxed
+           (application--ask-command-permission
+            application command directory))))))
 
 (-> application-input-controller-schedule-later
     (application-input-controller string &key (:due-at timestamp) (:window string))
