@@ -26,6 +26,28 @@
       apps.${system}.default = {
         type = "app";
         program = "${autolith}/bin/autolith";
+        meta.description = "Run Autolith";
       };
+
+      checks.${system}.startup = pkgs.runCommand "autolith-startup-check" {
+        nativeBuildInputs = [ autolith ];
+      } ''
+        export HOME="$TMPDIR/home"
+        export XDG_DATA_HOME="$HOME/.local/share"
+        mkdir -p "$HOME"
+        autolith --version >/dev/null
+        test "$(autolith --version)" = "autolith ${autolith.autolithSystem.version}"
+
+        export COLORLISP_NATIVE_LIBRARY="${autolith.colorlispNativeLibrary}/lib/libcolorlisp-tree-sitter.so"
+        "${autolith.runtime}/bin/sbcl" \
+          --noinform \
+          --no-sysinit \
+          --no-userinit \
+          --non-interactive \
+          --eval '(require :asdf)' \
+          --eval '(asdf:load-system :colorlisp)' \
+          --eval '(unless (find :number (colorlisp:highlight-spans "fn main() { 42 }" :language :rust) :key (function colorlisp:span-category)) (error "Packaged ColorLisp failed to classify a Rust number."))'
+        touch "$out"
+      '';
     };
 }

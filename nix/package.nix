@@ -11,9 +11,53 @@ let
     src = pkgs.fetchFromGitHub {
       owner = "luciusmagn";
       repo = "clinedi";
-      rev = "760cf8ac47b72dee36dc121bc09f8fb5ffa5dc2b";
-      hash = "sha256-+B5DX2IaXEFfuUCaoIGbn2H4z2m2qx8CnwVMhjeMvlY=";
+      rev = "e6f115e5bf2f225f985cf7314ffcadbd938fcbaf";
+      hash = "sha256-SUFSTnT2PIuEIFkdnF6aJN6fg6+sqxEz89sfVNcu90o=";
     };
+  };
+
+  colorlispSource = pkgs.fetchFromGitHub {
+    owner = "luciusmagn";
+    repo = "colorlisp";
+    rev = "dc0666fdfa79c7377067f42b0524e026650f0afa";
+    hash = "sha256-z5GC6GfIJpMMCyJ9ft1wtqX9bhAuXn2FF2yy+rb5/Ls=";
+  };
+
+  colorlispNativeLibrary = pkgs.stdenv.mkDerivation {
+    pname = "colorlisp-tree-sitter";
+    version = "0.1.0";
+    src = colorlispSource;
+    dontConfigure = true;
+    buildPhase = ''
+      runHook preBuild
+      cc -shared -fPIC -O2 -std=gnu11 -fvisibility=hidden \
+        -I vendor/tree-sitter/include \
+        -I vendor/tree-sitter/src \
+        $(find vendor/grammars -mindepth 1 -maxdepth 1 -type d -printf '-I %p ') \
+        -o libcolorlisp-tree-sitter.so \
+        native/colorlisp-tree-sitter.c \
+        vendor/tree-sitter/src/lib.c \
+        $(find vendor/grammars -mindepth 2 -maxdepth 2 -name parser.c -print | sort) \
+        $(find vendor/grammars -mindepth 2 -maxdepth 2 -name scanner.c -print | sort)
+      runHook postBuild
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 libcolorlisp-tree-sitter.so \
+        "$out/lib/libcolorlisp-tree-sitter.so"
+      runHook postInstall
+    '';
+  };
+
+  colorlisp = pkgs.sbcl.buildASDFSystem {
+    pname = "colorlisp";
+    version = "0.1.0";
+    src = colorlispSource;
+    lispLibs = with pkgs.sbclPackages; [
+      babel
+      cffi
+      cl-ppcre
+    ];
   };
 
   clifff = pkgs.sbcl.buildASDFSystem {
@@ -123,6 +167,7 @@ let
       cl-base64
       cffi
       closer-mop
+      colorlisp
       dexador
       opticl
       quri
@@ -142,6 +187,28 @@ let
       mkdir -p "$out/.qlot"
       cat > "$out/.qlot/setup.lisp" <<'LISP'
       (require :asdf)
+      (let* ((source-root (uiop:getenv "AUTOLITH_NIX_SOURCE_ROOT"))
+             (cache-root  (uiop:getenv "AUTOLITH_ASDF_CACHE")))
+        (when (and source-root cache-root)
+          (let* ((source
+                   (uiop:ensure-directory-pathname source-root))
+                 (configuration
+                   (asdf/output-translations:parse-output-translations-string
+                    (uiop:getenv "ASDF_OUTPUT_TRANSLATIONS")))
+                 (entry
+                   (find-if
+                    (lambda (candidate)
+                      (and (consp candidate)
+                           (stringp (first candidate))
+                           (uiop:pathname-equal
+                            source
+                            (uiop:ensure-directory-pathname
+                             (first candidate)))))
+                    (rest configuration))))
+            (unless entry
+              (error "No Nix ASDF mapping exists for ~A" source-root))
+            (setf (second entry) (format nil "~A//" cache-root))
+            (asdf:initialize-output-translations configuration))))
       (defpackage #:ql
         (:use #:cl)
         (:export #:quickload))
@@ -208,6 +275,7 @@ pkgs.writeShellApplication {
     data_home="''${XDG_DATA_HOME:-$home/.local/share}"
     export AUTOLITH_SBCL="${runtime}/bin/sbcl"
     export AUTOLITH_SBCL_SOURCE_ROOT="${sbclSource}"
+    export COLORLISP_NATIVE_LIBRARY="${colorlispNativeLibrary}/lib/libcolorlisp-tree-sitter.so"
     export AUTOLITH_FFF_LIBRARY="${fffLibrary}/lib/libfff_c.so"
     export CL_EXEC_SANDBOX_BWRAP="${pkgs.bubblewrap}/bin/bwrap"
     export CL_EXEC_SANDBOX_HELPER="${sandboxHelper}/libexec/cl-exec-sandbox-helper"
@@ -220,7 +288,11 @@ pkgs.writeShellApplication {
     export GIT_OPTIONAL_LOCKS=0
 
     runtime_root="$data_home/autolith/runtimes/${expectedSbclVersion}"
+    asdf_cache="$data_home/autolith/asdf-cache/${builtins.baseNameOf (toString autolithSystem)}"
     mkdir -p "$runtime_root"
+    mkdir -p "$asdf_cache"
+    export AUTOLITH_ASDF_CACHE="$asdf_cache"
+    export AUTOLITH_NIX_SOURCE_ROOT="${autolithSystem}/"
 
     if [ "$(readlink "$runtime_root/source" 2>/dev/null || true)" != "${sbclSource}" ]; then
       rm -rf "$runtime_root/source"
@@ -263,7 +335,8 @@ pkgs.writeShellApplication {
   };
 
   passthru = {
-    inherit autolithSystem clExecSandbox clifff clinedi fffLibrary runtime
-      sandboxHelper sbclSource sbclWorkers sexpStore;
+    inherit autolithSystem clExecSandbox clifff clinedi colorlisp
+      colorlispNativeLibrary fffLibrary runtime sandboxHelper sbclSource
+      sbclWorkers sexpStore;
   };
 }
