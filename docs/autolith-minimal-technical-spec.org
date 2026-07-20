@@ -335,14 +335,89 @@ This command boundary limits accidental damage from external programs. It does
 not make Autolith a hostile-code sandbox because filesystem, Lisp worker, and
 active-image tools remain separately privileged capabilities.
 
-** 5.5 Future Sub-Agents
+** 5.6 Child Agents and Jobs
 
-Sub-agents are out of scope for the first version.
+The primary agent may delegate bounded work to in-process child sessions. A
+child uses the ordinary provider, streaming, tool-execution, authorization,
+compaction, and turn-completion path. It does not use a second reduced agent
+loop. Each child receives a separate conversation, provider configuration,
+tool registry, explicit assignment, optional shared context, role instructions,
+and depth.
 
-When added, they use =lisp.*= workers by default and do not receive
-=self.*= tools unless explicitly granted.
+Child conversations and result artifacts are private execution records beneath
+the data root. They are not ordinary resumable conversations and never appear
+in conversation selection. Each execution receives a unique artifact directory.
+Terminal publication writes at most one portable result artifact and retains
+its pathname in the parent-facing result.
 
-This is an accidental-damage boundary, not a hostile-code sandbox.
+Role definitions are Markdown files with strict YAML frontmatter and a role
+prompt body. Discovery precedence is project =.autolith/agents/=, then
+=${XDG_CONFIG_HOME:-~/.config}/autolith/agents/=, then bundled roles. A higher
+precedence definition replaces the same lower precedence name. Parsing and
+policy validation fail closed: malformed definitions, unknown fields, duplicate
+fields, invalid indentation, invalid types, and invalid policy values are
+reported rather than guessed. A malformed higher precedence role must not
+silently expose or select a lower precedence role of the same name.
+
+The supported role policy fields are =name=, =description=, =tools=, =spawns=,
+=model=, =thinking-level=, =output=, and =blocking=. An omitted or empty =tools=
+policy grants no ordinary tools. A wildcard grants every child-safe tool, not
+every primary-agent tool. Every explicit grant is intersected with the
+child-safe registry. Child sessions never receive =self.*= tools. External
+commands retain the primary session's authorization boundary.
+
+An omitted or empty =spawns= policy denies further delegation. An explicit
+role list or wildcard remains subject to the configured maximum child depth.
+The primary session owns its conversation's root jobs. A child owns only jobs
+created below its own task identity, so its =job.*= tools cannot inspect or
+control its parent, siblings, unrelated trees, or jobs from another primary
+conversation.
+
+=task.agents= is the read-only discovery interface. It reports only roles the
+caller may select, including effective name, description, source, pathname,
+model and effort policy, tool and spawn policy, and whether an output contract
+exists. It also reports diagnostics needed to correct rejected role files. The
+model should inspect it before choosing a specialized role when the available
+roles or their restrictions matter.
+
+=task.run= accepts one assignment or an independent batch. Synchronous children
+hold the call until their terminal results are collected. A non-blocking role
+may instead run as a detached job and return its identity immediately. A role
+with =blocking: true= always remains synchronous. =job.list=, =job.get=,
+=job.wait=, and =job.cancel= expose only jobs owned by the requesting session as
+described above. Cancellation cascades from a job to its descendants.
+
+Admission is bounded by batch and live-job limits. A bounded FIFO feeds a
+reusable worker pool with configured concurrency and an implementation maximum.
+Nested synchronous delegation must make progress even when every reusable
+worker is occupied; it must not deadlock waiting for another worker. Runtime
+deadlines use one shared monitor rather than one watchdog thread per job.
+Terminal jobs have bounded retention, and terminal publication is single-writer
+even when completion, cancellation, and timeout race.
+
+Task workers and monitors are application runtime resources. Clean shutdown and
+conversation replacement cancel outstanding work and join the pool. Checkpoint
+preparation closes the pool before enforcing the single-threaded saver boundary.
+The forked saver detaches inherited task state, and a retained-generation
+reconnect constructs fresh runtime resources rather than reviving captured
+workers.
+
+Every child must finish by calling =yield.submit= exactly once with =success=,
+=failed=, or =aborted= status. A normal assistant stop without a yield is a
+failed child run. Successful yields carry useful parent-facing text and, when
+the role declares =output=, structured data satisfying that JSON schema. Failed
+or aborted yields carry an explicit error. Invalid or repeated yields are
+rejected. A synchronous batch succeeds only when every synchronous child
+succeeds, while its result still identifies every child, terminal status,
+error, structured data, and artifact.
+
+Request-local context is scoped to the conversation making the provider
+request. Concurrent primary and child requests never share a mutable current
+request slot. Contributions are assembled at each provider-request boundary,
+attributed to that conversation, and remain ephemeral under section 4.1.
+
+Tool restriction, process separation, depth, and scheduling are
+accidental-damage and reliability boundaries, not a hostile-code sandbox.
 
 * 6. Live Self-Modification
 

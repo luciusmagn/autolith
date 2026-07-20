@@ -293,9 +293,69 @@ globally in =${XDG_STATE_HOME:-~/.local/state}/autolith/preferences.sexp= and
 survives clean restarts. Autolith never displays raw reasoning text or encrypted
 reasoning payloads; these are model-provided summaries, not hidden chain-of-thought.
 
-User-defined child-agent roles are Markdown files under
-=${XDG_CONFIG_HOME:-~/.config}/autolith/agents/=. A project may override a role
-with a Markdown file under =.autolith/agents/= in the workspace.
+** Child agents and jobs
+
+Use =task.agents= to inspect the child roles the caller may select and any
+rejected role files. It reports each effective role's description, source,
+pathname, model and effort policy, tool and spawn policy, and output-contract
+presence. Project roles under =.autolith/agents/= override user roles under
+=${XDG_CONFIG_HOME:-~/.config}/autolith/agents/=, which override bundled roles.
+A malformed higher-precedence role is reported and never silently replaced by a
+lower-precedence role with the same name.
+
+Each user or project role is one UTF-8 Markdown file. It starts with an exact
+=---= on the first line, contains one closing =---=, and has a nonempty prompt
+body. Frontmatter permits each of =name=, =description=, =tools=, =spawns=,
+=model=, =thinking-level=, =output=, and =blocking= at most once. =name= and
+=description= are required. For example:
+
+#+BEGIN_SRC markdown
+---
+name: reviewer
+description: Review a change for correctness and regressions.
+tools: [fs.read, search.*]
+spawns: [scout]
+model: "@parent"
+thinking-level: high
+output: |
+  {"type":"object","required":["verdict"],"properties":{"verdict":{"type":"string"},"findings":{"type":"array","items":{"type":"string"}}}}
+blocking: true
+---
+Review the requested change. Report concrete, evidence-backed findings.
+#+END_SRC
+
+The grammar is deliberately strict. It has no tabs, aliases, anchors,
+frontmatter comments, or arbitrary nesting. Scalar values may be plain, valid
+JSON double-quoted strings, or single-quoted strings. =tools=, =spawns=, and
+=model= accept one scalar or one single-line bracketed list. =tools: *= grants
+all child-safe tools; an omitted =tools= or =tools: []= grants none. Entries are
+exact tool names or =namespace.*= patterns. Role files cannot grant =self.*=,
+=task.*=, =job.*=, or =yield.*= directly. Delegation and the terminal yield tool
+come only from the task runtime's policy.
+
+Similarly, =spawns: *= permits any discovered role within the depth limit, while
+an omitted =spawns= or =spawns: []= permits no child delegation. =model= accepts
+a known model identifier or supported =@= alias. =thinking-level= accepts a
+supported effort or automatic alias. =blocking= is exactly =true= or =false=
+and defaults to false. =output= is a JSON object, either on the same line or
+after =output: |= as JSON lines carrying a two-space block prefix. A successful
+child must submit matching data when an output schema is present.
+
+=task.run= starts one child from flat =agent=, =task=, optional =name=,
+=context=, and =async= arguments, or starts an independent =tasks= batch with
+shared nonempty =context=. Synchronous children are collected into the tool
+result. =async: true= detaches a non-blocking role and returns a job identifier;
+a role with =blocking: true= always remains synchronous. Every child must end
+with exactly one =yield.submit= carrying =success=, =failed=, or =aborted=. A
+normal model stop without that yield is a failed child run.
+
+=job.list= lists visible jobs, =job.get= inspects one job and its progress,
+=job.wait= waits for a bounded interval, and =job.cancel= interrupts a queued or
+running job and its descendants. The primary agent sees only jobs owned by its
+current conversation. A child sees only descendants of its own task identity,
+never its parent, siblings, unrelated task trees, or another conversation's
+jobs. Child transcripts and complete result artifacts remain in private task
+storage outside the normal conversation picker.
 
 =/compact on=, the default, hides successful routine tool results while retaining
 failures, file-write and file-edit results, and arbitrary execution results from
