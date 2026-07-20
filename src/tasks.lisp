@@ -1993,6 +1993,17 @@
     ((non-empty-string-p shared) shared) ((non-empty-string-p item) item)
     (t nil)))
 
+(-> task--json-boolean (t string) boolean)
+(defun task--json-boolean (value field)
+  "Return JSON boolean VALUE or reject FIELD's non-boolean value."
+  (cond
+    ((eq value t) t)
+    ((eq value false) nil)
+    (t
+     (error 'task-error
+            :message (format nil "Task field ~S must be a boolean." field)
+            :tool-name "task.run"))))
+
 (defun task--normalize-item (object shared-context top-async)
   "Validate and normalize one flat task OBJECT."
   (unless (json-object-p object)
@@ -2002,12 +2013,11 @@
         (name (json-get object "name"))
         (agent (or (json-get object "agent") "task"))
         (context (task--repair-prose (json-get object "context")))
-        (isolated (json-get object "isolated"))
         (async
          (multiple-value-bind (value present-p)
              (gethash "async" object)
            (if present-p
-               value
+               (task--json-boolean value "async")
                top-async))))
     (unless (non-empty-string-p task)
       (error 'task-error :message
@@ -2020,13 +2030,12 @@
     (unless (non-empty-string-p agent)
       (error 'task-error :message "A task agent must be a non-empty string."
              :tool-name "task.run"))
-    (when isolated
+    (when (nth-value 1 (gethash "isolated" object))
       (error 'task-error :message
-             "Worktree isolation is not available in this live-image task port."
+             "task.run does not accept the unsupported isolated field."
              :tool-name "task.run"))
     (list :name name :agent (string-downcase agent) :task task :context
-          (task--combine-context shared-context context) :async (and async t)
-          :isolated nil)))
+          (task--combine-context shared-context context) :async async)))
 
 (defun task-normalize-arguments (arguments)
   "Validate TASK.RUN ARGUMENTS and return ordinary normalized item plists."
@@ -2037,7 +2046,12 @@
   (let* ((tasks (json-get arguments "tasks"))
          (flat-task (json-get arguments "task"))
          (shared-context (task--repair-prose (json-get arguments "context")))
-         (top-async (json-get arguments "async"))
+         (top-async
+          (multiple-value-bind (value present-p)
+              (gethash "async" arguments)
+            (if present-p
+                (task--json-boolean value "async")
+                nil)))
          (items
           (cond
             (tasks
@@ -2293,9 +2307,6 @@
                        "context"
                        (tool-string-property
                         "Optional item-specific background.")
-                       "isolated"
-                       (tool-boolean-property
-                        "Request worktree isolation when available.")
                        "async"
                        (tool-boolean-property
                         "Detach this non-blocking child as a background job.")))
@@ -2313,9 +2324,6 @@
                        "context"
                        (tool-string-property
                         "Shared non-empty background required for batch calls.")
-                       "isolated"
-                       (tool-boolean-property
-                        "Request worktree isolation when available.")
                        "async"
                        (tool-boolean-property
                         "Detach non-blocking children as background jobs.")

@@ -190,6 +190,29 @@
                           "task normalization canonicalizes agent names")
              (test-assert (getf item :async)
                           "task normalization preserves detached execution"))
+           (let ((item (first (task-normalize-arguments
+                               (json-object "task" "Stay synchronous."
+                                            "async" false)))))
+             (test-assert (null (getf item :async))
+                          "JSON false remains false for task async policy"))
+           (test-assert
+            (handler-case
+                (progn
+                  (task-normalize-arguments
+                   (json-object "task" "Reject removed fields."
+                                "isolated" false))
+                  nil)
+              (task-error () t))
+            "task normalization rejects the removed isolated field")
+           (test-assert
+            (handler-case
+                (progn
+                  (task-normalize-arguments
+                   (json-object "task" "Reject bad booleans."
+                                "async" "false"))
+                  nil)
+              (task-error () t))
+            "task normalization rejects non-boolean async values")
            (test-assert
             (handler-case
                 (progn
