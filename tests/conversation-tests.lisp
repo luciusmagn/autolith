@@ -349,6 +349,45 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-conversation-private-storage () null)
+(defun test-conversation-private-storage ()
+  "Test private transcript persistence outside public conversation discovery."
+  (let* ((configuration (test-configuration))
+         (root          (test-configuration-root configuration))
+         (storage-root  (merge-pathnames "private/task-transcripts/" root)))
+    (unwind-protect
+         (let ((conversation
+                 (conversation-create configuration
+                                      :identifier "private-turn"
+                                      :storage-root storage-root)))
+           (test-assert (not (probe-file (conversation-pathname conversation)))
+                        "an empty private conversation leaves no transcript")
+           (conversation-append-user-message conversation "private assignment")
+           (test-assert (probe-file (conversation-pathname conversation))
+                        "the first private record persists its transcript")
+           (let ((loaded (conversation-load
+                          (conversation-pathname conversation))))
+             (test-assert
+              (string= (json-get (first (conversation-input-items loaded))
+                                 "role")
+                       "user")
+              "a private transcript remains directly reloadable"))
+           (test-assert
+            (not (find (conversation-pathname conversation)
+                       (conversation-list configuration)
+                       :test #'equal))
+            "private transcripts stay out of public conversation listings")
+           (test-assert
+            (handler-case
+                (progn
+                  (conversation-load-by-id configuration "private-turn")
+                  nil)
+              (conversation-error ()
+                t))
+            "public identifier loading cannot reach a private transcript"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-conversation-persistence () null)
 (defun test-conversation-persistence ()
   "Test append-only conversation projection and incomplete-tail recovery."

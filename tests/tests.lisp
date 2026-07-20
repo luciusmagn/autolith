@@ -89,6 +89,7 @@
     (test-system-prompt-context)
     (test-request-local-context)
     (test-conversation-persistence)
+    (test-conversation-private-storage)
     (test-conversation-origin-directory)
     (test-conversation-model-selection)
     (test-conversation-compaction)

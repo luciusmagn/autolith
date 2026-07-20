@@ -97,12 +97,17 @@
           (conversation-incomplete-tail-p conversation) nil))
   nil)
 
-(-> conversation-create (configuration &key (:identifier (option string))) conversation)
-(defun conversation-create (configuration &key identifier)
-  "Create an in-memory conversation that persists with its first record."
+(-> conversation-create
+    (configuration &key (:identifier (option string))
+                        (:storage-root (option pathname)))
+    conversation)
+(defun conversation-create (configuration &key identifier storage-root)
+  "Create an in-memory conversation that persists under optional STORAGE-ROOT."
   (let* ((created-at (get-universal-time))
          (conversation-id (or identifier (make-identifier)))
-         (root (configuration-conversation-root configuration))
+         (root (uiop:ensure-directory-pathname
+                (or storage-root
+                    (configuration-conversation-root configuration))))
          (origin-directory (namestring
                             (configuration-working-directory configuration)))
          (pathname (merge-pathnames
