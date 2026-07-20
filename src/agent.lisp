@@ -2,15 +2,6 @@
 
 ;;;; -- Agent Events --
 
-(define-constant +default-maximum-provider-steps+ nil
-  :documentation "The optional final provider step, disabled by default.")
-
-(define-constant +default-provider-step-warning+ nil
-  :documentation "The optional provider step that starts budget reminders.")
-
-(define-constant +default-maximum-tool-calls+ 256
-  :documentation "The maximum number of individual tool calls executed in one user turn.")
-
 (defclass agent-observer ()
   ()
   (:documentation "A presentation sink for incremental agent output and lifecycle status."))
@@ -74,21 +65,6 @@
     :reader agent-worker
     :type t
     :documentation "The disposable Lisp worker supplied to lisp.* calls.")
-   (maximum-provider-steps
-    :initarg :maximum-provider-steps
-    :reader agent-maximum-provider-steps
-    :type (option (integer 1))
-    :documentation "The optional final tools-disabled step for one user message.")
-   (provider-step-warning
-    :initarg :provider-step-warning
-    :reader agent-provider-step-warning
-    :type (option (integer 1))
-    :documentation "The step that starts model-visible budget reminders, or NIL.")
-   (maximum-tool-calls
-    :initarg :maximum-tool-calls
-    :reader agent-maximum-tool-calls
-    :type (integer 1)
-    :documentation "The maximum individual tool calls executed for one user message.")
    (turn-lock
     :initform (make-lock "Autolith agent turn")
     :reader agent-turn-lock
@@ -110,29 +86,6 @@
     :type (option integer)
     :documentation "The provider request number within the user turn, if known."))
   (:documentation "A malformed response or invariant violation in the main agent loop."))
-
-(define-condition agent-turn-budget-exhausted (autolith-error)
-  ((maximum-provider-steps
-    :initarg :maximum-provider-steps
-    :reader agent-turn-budget-exhausted-maximum-provider-steps
-    :type (integer 1)
-    :documentation "The configured final provider step for this turn.")
-   (provider-step
-    :initarg :provider-step
-    :reader agent-turn-budget-exhausted-provider-step
-    :type (integer 1)
-    :documentation "The provider step on which the turn stopped.")
-   (tool-calls
-    :initarg :tool-calls
-    :reader agent-turn-budget-exhausted-tool-calls
-    :type (integer 0)
-    :documentation "The individual tool calls executed before exhaustion.")
-   (reason
-    :initarg :reason
-    :reader agent-turn-budget-exhausted-reason
-    :type keyword
-    :documentation "The deterministic budget rule that stopped the turn."))
-  (:documentation "A long turn reached a configured spending guard without corrupting Autolith."))
 
 
 ;;;; -- Observer Protocol --
@@ -259,10 +212,7 @@
      (:provider (option model-provider))
      (:conversation (option conversation))
      (:tool-registry (option tool-registry))
-     (:worker t)
-     (:maximum-provider-steps (option integer))
-     (:provider-step-warning (option integer))
-     (:maximum-tool-calls integer))
+     (:worker t))
     agent)
 (defun agent-create
     (&key
@@ -270,27 +220,11 @@
        provider
        conversation
        tool-registry
-       worker
-       (maximum-provider-steps +default-maximum-provider-steps+)
-       (provider-step-warning +default-provider-step-warning+)
-       (maximum-tool-calls +default-maximum-tool-calls+))
+       worker)
   "Create an agent, filling unspecified provider, conversation, registry, and worker roles."
   (unless (typep configuration 'configuration)
     (error 'configuration-error
            :message "AGENT-CREATE requires a CONFIGURATION instance."))
-  (unless (or (null maximum-provider-steps)
-              (typep maximum-provider-steps '(integer 1)))
-    (error 'configuration-error
-           :message "The maximum provider steps must be NIL or a positive integer."))
-  (unless (or (null provider-step-warning)
-              (and maximum-provider-steps
-                   (typep provider-step-warning '(integer 1))
-                   (< provider-step-warning maximum-provider-steps)))
-    (error 'configuration-error
-           :message "The provider step warning requires and must precede the final step."))
-  (unless (typep maximum-tool-calls '(integer 1))
-    (error 'configuration-error
-           :message "The maximum tool calls must be a positive integer."))
   (make-instance 'agent
                  :configuration configuration
                  :provider (or provider (provider-create configuration))
@@ -298,10 +232,7 @@
                                    (conversation-create configuration))
                  :tool-registry (or tool-registry
                                     (make-default-tool-registry))
-                 :worker (or worker (lisp-worker-pool-create configuration))
-                 :maximum-provider-steps maximum-provider-steps
-                 :provider-step-warning provider-step-warning
-                 :maximum-tool-calls maximum-tool-calls))
+                 :worker (or worker (lisp-worker-pool-create configuration))))
 
 (-> agent-run-user-turn
     (agent (or string user-message-input) &key (:observer agent-observer)
@@ -309,7 +240,7 @@
     provider-result)
 (defgeneric agent-run-user-turn (agent content &key observer goal-context)
   (:documentation
-   "Persist user CONTENT, run all bounded model and tool rounds, and return the final provider result."))
+   "Persist user CONTENT, run model and tool rounds, and return the final provider result."))
 
 (defmethod agent-run-user-turn
     ((agent agent) (content string)
@@ -520,63 +451,6 @@
        (list :message-count (length messages)))))
   nil)
 
-(-> agent--reject-tool-calls
-    (agent list agent-observer
-     &key (:tool-round integer) (:message string))
-    null)
-(defun agent--reject-tool-calls
-    (agent calls observer &key tool-round message)
-  "Append one explicit MESSAGE failure output for every rejected call in CALLS."
-  (dolist (call calls)
-    (let* ((call-id (json-get call "call_id"))
-           (tool-name (function-call-canonical-name call)))
-      (conversation-append-tool-result
-       (agent-conversation agent)
-       call-id
-       :tool-name tool-name
-       :output message
-       :success-p nil)
-      (agent-observer-status
-       observer
-       :tool-call-completed
-       (list :tool-round tool-round
-             :call-id call-id
-             :tool tool-name
-             :success-p nil
-             :output message))))
-  nil)
-
-(-> agent--budget-state (agent integer) turn-budget-state)
-(defun agent--budget-state (agent provider-step)
-  "Return AGENT's budget phase for PROVIDER-STEP."
-  (let ((maximum-provider-steps (agent-maximum-provider-steps agent)))
-    (cond
-      ((and maximum-provider-steps
-            (= provider-step maximum-provider-steps))
-       :finalization)
-      ((and (agent-provider-step-warning agent)
-            (>= provider-step (agent-provider-step-warning agent)))
-       :warning)
-      (t
-       :normal))))
-
-(-> agent--signal-budget-exhausted
-    (agent
-     &key (:provider-step integer)
-          (:tool-calls integer)
-          (:reason keyword)
-          (:message string))
-    null)
-(defun agent--signal-budget-exhausted
-    (agent &key provider-step tool-calls reason message)
-  "Signal deterministic turn-budget REASON for AGENT with a visible MESSAGE."
-  (error 'agent-turn-budget-exhausted
-         :message message
-         :maximum-provider-steps (agent-maximum-provider-steps agent)
-         :provider-step provider-step
-         :tool-calls tool-calls
-         :reason reason))
-
 (-> agent--should-compact-p (agent) boolean)
 (defun agent--should-compact-p (agent)
   "Return true when the newest usage crossed AGENT's compaction limit."
@@ -620,7 +494,7 @@ persisted as history, only the durable summary record is."
     (agent agent-observer (option string))
     provider-result)
 (defun agent--run-provider-loop (agent observer goal-context)
-  "Run bounded provider and tool rounds until AGENT's turn completes."
+  "Run provider and tool rounds until AGENT's turn completes."
   (let ((seen-call-identifiers (make-hash-table :test #'equal))
         (request-number 0)
         (tool-rounds 0)
@@ -629,115 +503,59 @@ persisted as history, only the durable summary record is."
       (when (agent--should-compact-p agent)
         (agent-compact-conversation agent observer))
       (incf request-number)
-      (let ((budget-state (agent--budget-state agent request-number)))
-        (when (eq budget-state :warning)
-          (agent-observer-status
-           observer
-           :turn-budget-warning
-           (list :provider-step request-number
-                 :maximum-provider-steps
-                 (agent-maximum-provider-steps agent))))
+      (agent-observer-status
+       observer
+       :provider-request-started
+       (list :request-number request-number
+             :tool-rounds tool-rounds))
+      (let* ((conversation (agent-conversation agent))
+             (result
+               (provider-stream-turn
+                (agent-provider agent)
+                conversation
+                :tool-namespaces
+                (tool-registry-provider-schemas
+                 (agent-tool-registry agent))
+                :event-callback (agent--provider-event-callback observer)
+                :goal-context goal-context))
+             (calls (provider-result-tool-calls result)))
+        (agent--validate-tool-call-identifiers
+         agent
+         calls
+         :seen-call-identifiers seen-call-identifiers
+         :request-number request-number)
+        (agent--persist-provider-result agent result request-number)
+        (setf (conversation-turn-state conversation)
+              (provider-result-turn-state result))
         (agent-observer-status
          observer
-         :provider-request-started
+         :provider-request-completed
          (list :request-number request-number
-               :tool-rounds tool-rounds
-               :turn-budget-state budget-state))
-        (let* ((conversation (agent-conversation agent))
-               (provider-tools
-                 (if (eq budget-state :finalization)
-                     #()
-                     (tool-registry-provider-schemas
-                      (agent-tool-registry agent))))
-               (result
-                 (provider-stream-turn
-                  (agent-provider agent)
-                  conversation
-                  :tool-namespaces provider-tools
-                  :event-callback (agent--provider-event-callback observer)
-                  :turn-budget-state budget-state
-                  :goal-context goal-context))
-               (calls (provider-result-tool-calls result)))
-          (agent--validate-tool-call-identifiers
-           agent
-           calls
-           :seen-call-identifiers seen-call-identifiers
-           :request-number request-number)
-          (agent--persist-provider-result agent result request-number)
-          (setf (conversation-turn-state conversation)
-                (provider-result-turn-state result))
+               :response-id (provider-result-response-id result)
+               :usage (agent--portable-value (provider-result-usage result))
+               :output-item-count (length (provider-result-output-items result))
+               :tool-call-count (length calls)
+               :turn-completion (provider-result-turn-completion result)))
+        (when (and (null calls)
+                   (not (eq (provider-result-turn-completion result) :continue)))
           (agent-observer-status
            observer
-           :provider-request-completed
-           (list :request-number request-number
-                 :response-id (provider-result-response-id result)
-                 :usage (agent--portable-value (provider-result-usage result))
-                 :output-item-count (length (provider-result-output-items result))
-                 :tool-call-count (length calls)
-                 :turn-completion (provider-result-turn-completion result)
-                 :turn-budget-state budget-state))
-          (when (eq budget-state :finalization)
-            (when calls
-              (let ((message
-                      "Tools were disabled on the final turn step, so this call was not executed."))
-                (agent--reject-tool-calls
-                 agent calls observer
-                 :tool-round (1+ tool-rounds)
-                 :message message)
-                (agent--signal-budget-exhausted
-                 agent
-                 :provider-step request-number
+           :turn-completed
+           (list :provider-requests request-number
+                 :tool-rounds tool-rounds
                  :tool-calls tool-calls
-                 :reason ':tools-requested-during-finalization
-                 :message
-                 "The model requested tools during the text-only final turn step.")))
-            (agent-observer-status
-             observer
-             :turn-completed
-             (list :provider-requests request-number
-                   :tool-rounds tool-rounds
-                   :tool-calls tool-calls
-                   :budget-finalization-p t
-                   :response-id (provider-result-response-id result)))
-            (return result))
-          (when (and (null calls)
-                     (not (eq (provider-result-turn-completion result) :continue)))
-            (agent-observer-status
-             observer
-             :turn-completed
-             (list :provider-requests request-number
-                   :tool-rounds tool-rounds
-                   :tool-calls tool-calls
-                   :response-id (provider-result-response-id result)))
-            (return result))
-          (cond
-            ((null calls)
-             (agent-observer-status
-              observer
-              :provider-follow-up
-              (list :request-number request-number)))
-            ((> (+ tool-calls (length calls))
-                (agent-maximum-tool-calls agent))
-             (let ((message
-                     (format nil
-                             "This call was not executed because the turn reached its ~:D-call tool budget."
-                             (agent-maximum-tool-calls agent))))
-               (agent--reject-tool-calls
-                agent calls observer
-                :tool-round (1+ tool-rounds)
-                :message message)
-               (agent--signal-budget-exhausted
-                agent
-                :provider-step request-number
-                :tool-calls tool-calls
-                :reason ':tool-call-limit
-                :message (format nil
-                                 "The turn reached its ~:D-call tool budget."
-                                 (agent-maximum-tool-calls agent)))))
-            (t
-             (incf tool-rounds)
-             (incf tool-calls (length calls))
-             (agent--execute-tool-calls agent calls
-                                        :observer observer
-                                        :tool-round tool-rounds)
-             (agent--apply-steering-input agent observer request-number))))))))
+                 :response-id (provider-result-response-id result)))
+          (return result))
+        (cond
+          ((null calls)
+           (agent-observer-status
+            observer
+            :provider-follow-up
+            (list :request-number request-number)))
+          (t
+           (incf tool-rounds)
+           (incf tool-calls (length calls))
+           (agent--execute-tool-calls agent calls
+                                      :observer observer
+                                      :tool-round tool-rounds)
+           (agent--apply-steering-input agent observer request-number)))))))

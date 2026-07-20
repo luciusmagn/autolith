@@ -23,11 +23,6 @@
     :accessor scripted-provider-tool-schema-counts
     :type list
     :documentation "The number of tool namespaces advertised on each request.")
-   (turn-budget-states
-    :initform nil
-    :accessor scripted-provider-turn-budget-states
-    :type list
-    :documentation "The turn-budget state supplied on each request.")
    (goal-contexts
     :initform nil
     :accessor scripted-provider-goal-contexts
@@ -46,7 +41,6 @@
      &key
        tool-namespaces
        event-callback
-       (turn-budget-state :normal)
        goal-context
        compaction-p)
   "Return PROVIDER's next scripted result after recording request state."
@@ -58,8 +52,6 @@
         (scripted-provider-turn-states provider))
   (push (length tool-namespaces)
         (scripted-provider-tool-schema-counts provider))
-  (push turn-budget-state
-        (scripted-provider-turn-budget-states provider))
   (push goal-context
         (scripted-provider-goal-contexts provider))
   (push compaction-p
@@ -314,9 +306,7 @@
                         :provider provider
                         :conversation conversation
                         :tool-registry (agent-test-registry)
-                        :worker ':unused
-                        :maximum-provider-steps 3
-                        :provider-step-warning nil))
+                        :worker ':unused))
                 (result (agent-run-user-turn agent "continue explicitly")))
            (test-assert (string= (provider-result-response-id result) "response-2")
                         "the agent follows an explicit provider continuation")
@@ -401,9 +391,9 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
-(-> test-agent-bounds-and-tool-failures () null)
-(defun test-agent-bounds-and-tool-failures ()
-  "Test total tool correlation and independent provider and tool round limits."
+(-> test-agent-tool-failures () null)
+(defun test-agent-tool-failures ()
+  "Test successful and failed calls retain independent correlation."
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration)))
     (unwind-protect
@@ -446,110 +436,7 @@
                 (equal (mapcar (lambda (record) (getf (rest record) :status))
                                tool-results)
                        '(:ok :error))
-                "successful and failed calls remain explicitly distinguished")))
-           (let* ((conversation
-                    (conversation-create configuration :identifier "tool-bound"))
-                  (provider
-                    (make-instance
-                     'scripted-provider
-                     :results
-                     (list
-                      (agent-test-result
-                       "tool-overflow"
-                       (list (agent-test-call :call-id "one"
-                                              :arguments "{\"value\":\"one\"}")
-                             (agent-test-call :call-id "two"
-                                              :arguments "{\"value\":\"two\"}"))))))
-                  (agent
-                    (agent-create :configuration configuration
-                                  :provider provider
-                                  :conversation conversation
-                                  :tool-registry (agent-test-registry)
-                                  :worker ':unused
-                                  :maximum-provider-steps 4
-                                  :provider-step-warning nil
-                                  :maximum-tool-calls 1)))
-             (test-assert
-              (handler-case
-                  (progn
-                    (agent-run-user-turn agent "reach tool bound")
-                    nil)
-                (agent-turn-budget-exhausted (condition)
-                  (and (eq (agent-turn-budget-exhausted-reason condition)
-                           :tool-call-limit)
-                       (not (typep condition 'agent-loop-error)))))
-              "the individual call ceiling is expected nonfatal control flow")
-             (test-assert (= (length (conversation-input-items conversation)) 5)
-                          "the rejected over-limit call still receives a failure output"))
-           (let* ((conversation
-                    (conversation-create configuration :identifier "final-step"))
-                  (provider
-                    (make-instance
-                     'scripted-provider
-                     :results
-                     (list
-                      (agent-test-result
-                       "tool-one"
-                       (list (agent-test-call :call-id "final-one"
-                                              :arguments "{\"value\":\"one\"}")))
-                      (agent-test-result "final-text"
-                                         (list (agent-test-message "summary"))))))
-                  (agent
-                    (agent-create :configuration configuration
-                                  :provider provider
-                                  :conversation conversation
-                                  :tool-registry (agent-test-registry)
-                                  :worker ':unused
-                                  :maximum-provider-steps 2
-                                  :provider-step-warning nil)))
-             (test-assert
-              (string= (provider-result-response-id
-                        (agent-run-user-turn agent "finish within the budget"))
-                       "final-text")
-              "the reserved final step returns a text summary normally")
-             (test-assert
-              (equal (nreverse (scripted-provider-turn-budget-states provider))
-                     '(:normal :finalization))
-              "the last provider step is explicitly marked for finalization")
-             (test-assert
-              (equal (nreverse (scripted-provider-tool-schema-counts provider))
-                     '(1 0))
-              "the final provider step advertises no active-image tools"))
-           (let* ((conversation
-                    (conversation-create configuration
-                                         :identifier "ignored-final-tools"))
-                  (provider
-                    (make-instance
-                     'scripted-provider
-                     :results
-                     (list
-                      (agent-test-result
-                       "continue"
-                       (list (agent-test-message "still working"))
-                       :turn-completion :continue)
-                      (agent-test-result
-                       "ignored-call"
-                       (list (agent-test-call :call-id "ignored"
-                                              :arguments "{\"value\":\"no\"}"))))))
-                  (agent
-                    (agent-create :configuration configuration
-                                  :provider provider
-                                  :conversation conversation
-                                  :tool-registry (agent-test-registry)
-                                  :worker ':unused
-                                  :maximum-provider-steps 2
-                                  :provider-step-warning nil)))
-             (test-assert
-              (handler-case
-                  (progn
-                    (agent-run-user-turn agent "ignore tools on final step")
-                    nil)
-                (agent-turn-budget-exhausted (condition)
-                  (eq (agent-turn-budget-exhausted-reason condition)
-                      :tools-requested-during-finalization)))
-              "a model that ignores disabled tools stops through an expected condition")
-             (test-assert (= (length (conversation-input-items conversation)) 4)
-                          "an ignored final-step call receives a correlated failure output")))
+                "successful and failed calls remain explicitly distinguished"))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -596,6 +483,54 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-agent-unbounded-tool-calls () null)
+(defun test-agent-unbounded-tool-calls ()
+  "Test one turn may exceed the former cumulative tool-call ceiling."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration :identifier "unbounded-tools"))
+         (tool-results
+           (loop for index from 1 to 257
+                 collect
+                 (agent-test-result
+                  (format nil "tool-~D" index)
+                  (list
+                   (agent-test-call
+                    :call-id (format nil "call-~D" index)
+                    :arguments (format nil "{\"value\":\"~D\"}" index))))))
+         (provider
+           (make-instance
+            'scripted-provider
+            :results
+            (append tool-results
+                    (list
+                     (agent-test-result
+                      "large-tool-final"
+                      (list (agent-test-message "done")))))))
+         (agent
+           (agent-create :configuration configuration
+                         :provider provider
+                         :conversation conversation
+                         :tool-registry (agent-test-registry)
+                         :worker ':unused)))
+    (unwind-protect
+         (progn
+           (test-assert
+            (string= (provider-result-response-id
+                     (agent-run-user-turn agent "run every requested tool"))
+                     "large-tool-final")
+            "a turn exceeding 256 calls reaches its normal completion")
+           (test-assert
+            (= (count-if (lambda (record)
+                           (eq (first record) :tool-result))
+                         (conversation--read-records
+                          (conversation-pathname conversation)))
+               257)
+            "every call above the former ceiling receives a durable result"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-agent-default-turn-has-no-step-guillotine () null)
 (defun test-agent-default-turn-has-no-step-guillotine ()
   "Test the default turn may keep working beyond the former provider-step limit."
@@ -637,10 +572,6 @@
                       (agent-run-user-turn agent "finish a long task"))
                      "step-65-final")
             "the default turn continues past provider step 64")
-           (test-assert
-            (every (lambda (state) (eq state :normal))
-                   (scripted-provider-turn-budget-states provider))
-            "the default turn never enters forced finalization")
            (test-assert
             (every #'plusp
                    (scripted-provider-tool-schema-counts provider))
@@ -735,8 +666,9 @@
   (test-agent-steering)
   (test-agent-explicit-continuation)
   (test-agent-invalid-call-history)
-  (test-agent-bounds-and-tool-failures)
+  (test-agent-tool-failures)
   (test-agent-long-tool-turn)
+  (test-agent-unbounded-tool-calls)
   (test-agent-default-turn-has-no-step-guillotine)
   (test-agent-compaction)
   t)

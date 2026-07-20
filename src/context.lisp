@@ -51,11 +51,6 @@
     :reader request-context-tool-namespaces
     :type vector
     :documentation "The provider-visible local tool namespaces.")
-   (turn-budget-state
-    :initarg :turn-budget-state
-    :reader request-context-turn-budget-state
-    :type turn-budget-state
-    :documentation "The current provider-step budget phase.")
    (goal-context
     :initarg :goal-context
     :initform nil
@@ -638,19 +633,17 @@ same evaluation behavior as DEFUN."
 
 (-> context-resolve-request
     (configuration conversation vector
-     &key (:turn-budget-state turn-budget-state)
-          (:goal-context (option string)) (:compaction-p boolean))
+     &key (:goal-context (option string)) (:compaction-p boolean))
     context-delivery)
 (defun context-resolve-request
     (configuration conversation tool-namespaces
-     &key (turn-budget-state :normal) goal-context compaction-p)
+     &key goal-context compaction-p)
   "Resolve, stack, budget, and render ephemeral context for one provider request."
   (let* ((request
            (make-instance 'request-context
                           :configuration configuration
                           :conversation conversation
                           :tool-namespaces tool-namespaces
-                          :turn-budget-state turn-budget-state
                           :goal-context goal-context
                           :compaction-p compaction-p))
          (registrations (context-contributor-registrations))

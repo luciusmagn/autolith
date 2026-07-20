@@ -234,11 +234,11 @@ application run and is never captured in a retained generation.
 
 Coordinates one turn at a time: persist user input, stream a response, append
 completed output items, execute tools, append their results, and continue
-until the provider completes without outstanding calls. A long turn receives a
-model-visible warning at provider step 48. Step 64 advertises no tools and asks
-for a text-only completion. A separate 256-call ceiling bounds unusually large
-tool batches. Exhausting either guard is expected turn control, not a reason to
-boot recovery.
+until the provider completes without outstanding calls. Context pressure causes
+an inline durable compaction, after which the same active turn resumes. Provider
+steps, tool batches, and individual tool calls have no arbitrary count ceiling;
+user interruption and unrecoverable provider or agent errors remain the stopping
+boundaries.
 
 ** =generations.lisp=
 

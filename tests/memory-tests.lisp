@@ -191,8 +191,7 @@
                         (make-instance 'request-context
                                        :configuration configuration
                                        :conversation conversation
-                                       :tool-namespaces #()
-                                       :turn-budget-state :normal))
+                                       :tool-namespaces #()))
                       (contribution (memory-related-context request))
                       (evidence
                         (and contribution

@@ -181,14 +181,12 @@
     (model-provider conversation
      &key (:tool-namespaces vector)
           (:event-callback function)
-          (:turn-budget-state turn-budget-state)
           (:goal-context (option string))
           (:compaction-p boolean))
     provider-result)
 (defgeneric provider-stream-turn
     (provider conversation
-     &key tool-namespaces event-callback turn-budget-state goal-context
-       compaction-p)
+     &key tool-namespaces event-callback goal-context compaction-p)
   (:documentation
    "Stream one model response for CONVERSATION using TOOL-NAMESPACES and EVENT-CALLBACK."))
 
@@ -221,27 +219,6 @@
    "type" "additional_tools"
    "role" "developer"
    "tools" tool-namespaces))
-
-(define-constant +turn-budget-warning-instructions+
-  "This turn is approaching its step budget. Finish the task efficiently. Avoid redundant inspection, combine independent work where practical, and preserve enough time to verify and summarize the result."
-  :test #'string=
-  :documentation "The model-visible reminder added late in a long agent turn.")
-
-(define-constant +turn-budget-finalization-instructions+
-  "This is the final step available for the current user turn. Tools are disabled. Respond with text only, stating what was completed, what remains, and the safest next action. Do not request or describe a tool call as completed."
-  :test #'string=
-  :documentation "The text-only instruction used for the final provider step.")
-
-(-> responses-lite-budget-message (turn-budget-state) (option json-object))
-(defun responses-lite-budget-message (state)
-  "Return the transient developer message for turn-budget STATE, if any."
-  (case state
-    (:warning
-     (responses-lite-developer-message +turn-budget-warning-instructions+))
-    (:finalization
-     (responses-lite-developer-message +turn-budget-finalization-instructions+))
-    (t
-     nil)))
 
 ;; Modeled on the Codex context checkpoint compaction instructions at
 ;; reference commit 5c19155c, restated for Autolith.
@@ -320,13 +297,12 @@ at reference commit 5c19155c."
 ;; 5c19155c filters its explicit "default" sentinel out of requests too).
 (-> provider-request-object
     (codex-subscription-provider conversation vector
-     &key (:turn-budget-state turn-budget-state)
-          (:goal-context (option string))
+     &key (:goal-context (option string))
           (:compaction-p boolean))
     (values json-object (option context-delivery)))
 (defun provider-request-object
     (provider conversation tool-namespaces
-     &key (turn-budget-state :normal) goal-context compaction-p)
+     &key goal-context compaction-p)
   "Build the complete stateless Sol Responses Lite request for CONVERSATION.
 
 The request never carries a service_tier, keeping Autolith on the standard path.
@@ -336,13 +312,11 @@ builds a tool-free summarization request whose trailing developer message asks
 for a context checkpoint handoff. The second value is the context delivery that
 the transport consumes only after a completed response."
   (let* ((configuration (provider-configuration provider))
-         (finalization-p (eq turn-budget-state :finalization))
-         (web-search-tool (and (not finalization-p)
-                               (not compaction-p)
+         (web-search-tool (and (not compaction-p)
                                (provider-web-search-tool configuration)))
          (effective-tools
            (cond
-             ((or finalization-p compaction-p)
+             (compaction-p
               #())
              (web-search-tool
               (concatenate 'vector
@@ -350,8 +324,6 @@ the transport consumes only after a completed response."
                            (vector web-search-tool)))
              (t
               tool-namespaces)))
-         (budget-message (and (not compaction-p)
-                              (responses-lite-budget-message turn-budget-state)))
          (reasoning
            (json-object
             "effort" (configuration-wire-effort configuration)
@@ -361,18 +333,14 @@ the transport consumes only after a completed response."
                         (responses-lite-developer-message
                          (system-prompt configuration)))
                   (when (and goal-context
-                             (not finalization-p)
                              (not compaction-p))
-                    (list (responses-lite-developer-message goal-context)))
-                  (when budget-message
-                    (list budget-message))))
+                    (list (responses-lite-developer-message goal-context)))))
          (delivery
            (unless compaction-p
              (context-resolve-request
               configuration
               conversation
               effective-tools
-              :turn-budget-state turn-budget-state
               :goal-context goal-context)))
          (context-message
            (and delivery
@@ -781,14 +749,12 @@ the transport consumes only after a completed response."
      &key (:tool-namespaces vector)
           (:event-callback function)
           (:force-refresh boolean)
-          (:turn-budget-state turn-budget-state)
           (:goal-context (option string))
           (:compaction-p boolean))
     provider-result)
 (defgeneric provider-attempt-turn
     (provider conversation
-     &key tool-namespaces event-callback force-refresh turn-budget-state
-       goal-context compaction-p)
+     &key tool-namespaces event-callback force-refresh goal-context compaction-p)
   (:documentation
    "Perform one normalized provider attempt, optionally forcing credential refresh."))
 
@@ -799,7 +765,6 @@ the transport consumes only after a completed response."
        tool-namespaces
        event-callback
        force-refresh
-       (turn-budget-state :normal)
        goal-context
        compaction-p)
   "Perform one direct request and normalize every HTTP boundary condition."
@@ -814,7 +779,6 @@ the transport consumes only after a completed response."
              provider
              conversation
              tool-namespaces
-             :turn-budget-state turn-budget-state
              :goal-context goal-context
              :compaction-p compaction-p)
           (multiple-value-bind (stream status headers)
@@ -856,7 +820,6 @@ the transport consumes only after a completed response."
      &key
        tool-namespaces
        event-callback
-       (turn-budget-state :normal)
        goal-context
        compaction-p)
   "Stream one Sol turn with one credential reload and one bounded refresh attempt."
@@ -871,7 +834,6 @@ the transport consumes only after a completed response."
                                         :tool-namespaces tool-namespaces
                                         :event-callback event-callback
                                         :force-refresh force-refresh
-                                        :turn-budget-state turn-budget-state
                                         :goal-context goal-context
                                         :compaction-p compaction-p))
              (provider-unauthorized ()

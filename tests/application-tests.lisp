@@ -33,11 +33,10 @@
 (defmethod provider-stream-turn :before
     ((provider cursor-observing-provider)
      (conversation conversation)
-     &key tool-namespaces event-callback turn-budget-state goal-context
-       compaction-p)
+     &key tool-namespaces event-callback goal-context compaction-p)
   "Record cursor visibility immediately before PROVIDER starts streaming."
   (declare (ignore conversation tool-namespaces event-callback
-                   turn-budget-state goal-context compaction-p))
+                   goal-context compaction-p))
   (setf (cursor-observing-provider-visible-during-request-p provider)
         (funcall (cursor-observing-provider-visibility-function provider))))
 
@@ -72,11 +71,10 @@
 (defmethod provider-stream-turn :around
     ((provider gated-provider)
      (conversation conversation)
-     &key tool-namespaces event-callback turn-budget-state goal-context
-       compaction-p)
+     &key tool-namespaces event-callback goal-context compaction-p)
   "Hold PROVIDER's first request until its deterministic input gate opens."
   (declare (ignore conversation tool-namespaces event-callback
-                   turn-budget-state goal-context compaction-p))
+                   goal-context compaction-p))
   (let ((first-request-p nil))
     (with-lock-held ((gated-provider-lock provider))
       (incf (gated-provider-request-count provider))
@@ -1764,10 +1762,7 @@
                                      :provider provider
                                      :conversation conversation
                                      :tool-registry registry
-                                     :worker worker
-                                     :maximum-provider-steps 7
-                                     :provider-step-warning 3
-                                     :maximum-tool-calls 9))
+                                     :worker worker))
                 (terminal (make-instance 'scripted-terminal :columns 60))
                 (ui (terminal-ui-create :terminal terminal))
                 (application
@@ -1826,10 +1821,6 @@
                         "effort switching preserves the latest rate snapshot")
            (test-assert (typep (application-agent application) 'agent)
                         "switching effort reconnects the agent")
-           (test-assert (= (agent-maximum-provider-steps
-                            (application-agent application))
-                           7)
-                        "effort switching preserves the active turn budget")
            (let ((items (application--model-items application)))
              (test-assert (= (length items) (length +supported-models+))
                           "every 5.6 family model is offered")

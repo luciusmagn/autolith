@@ -375,7 +375,6 @@
   (let* ((active-conversation (or conversation
                                   (application-conversation application)))
          (previous-provider (application-provider application))
-         (previous-agent (application-agent application))
          (provider
            (if previous-provider
                (provider-with-configuration previous-provider configuration)
@@ -385,19 +384,7 @@
                               :conversation active-conversation
                               :tool-registry (application-tool-registry
                                               application)
-                              :worker (application-worker application)
-                              :maximum-provider-steps
-                              (if previous-agent
-                                  (agent-maximum-provider-steps previous-agent)
-                                  +default-maximum-provider-steps+)
-                              :provider-step-warning
-                              (if previous-agent
-                                  (agent-provider-step-warning previous-agent)
-                                  +default-provider-step-warning+)
-                              :maximum-tool-calls
-                              (if previous-agent
-                                  (agent-maximum-tool-calls previous-agent)
-                                  +default-maximum-tool-calls+))))
+                              :worker (application-worker application))))
     (setf (application-configuration application) configuration
           (application-conversation application) active-conversation
           (application-provider application) provider

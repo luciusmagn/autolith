@@ -216,10 +216,10 @@ when the conversation is durable, shutdown prints the exact
 resume instruction.
 
 Long agent turns are allowed to continue well beyond eight tool batches. Autolith
-warns the model as provider step 48 approaches, reserves step 64 for a
-tools-disabled text summary, and separately caps a turn at 256 individual tool
-calls. Reaching a spending guard leaves the application and conversation usable;
-it does not invoke image recovery.
+continues provider and tool rounds until the model finishes, the user interrupts,
+or an unrecoverable provider or agent error occurs. Context compaction happens
+within the active turn and resumes work without imposing a provider-step or
+tool-call ceiling.
 
 Typing =/= opens command suggestions under the prompt. Arrow keys move the
 selection, Tab cycles and previews options, and Enter runs the selected command,

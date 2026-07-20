@@ -206,8 +206,7 @@
                    (make-instance 'request-context
                                   :configuration configuration
                                   :conversation conversation
-                                  :tool-namespaces #()
-                                  :turn-budget-state :normal)))
+                                  :tool-namespaces #())))
              (test-assert
               (string= (request-context-latest-user-text request)
                        "inspect this request")

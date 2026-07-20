@@ -177,7 +177,6 @@
            #:request-context-goal-context
            #:request-context-latest-user-text
            #:request-context-tool-namespaces
-           #:request-context-turn-budget-state
            #:release-server-main
            #:run-tests
            #:unregister-context-contributor
