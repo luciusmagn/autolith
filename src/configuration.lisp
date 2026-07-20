@@ -376,30 +376,6 @@ Selecting a different model recomputes the context window for that model."
                             +supported-models+)))
   (configuration--clone configuration :model model))
 
-(-> configuration--migrate-state-file (configuration string) null)
-(defun configuration--migrate-state-file (configuration name)
-  "Move legacy configuration NAME from state root when no new copy exists."
-  (let ((legacy (merge-pathnames name (configuration-state-root configuration)))
-        (current (merge-pathnames name (configuration-config-root configuration))))
-    (when (and (probe-file legacy) (not (probe-file current)))
-      (handler-case
-          (progn
-            (uiop:rename-file-overwriting-target legacy current)
-            (sb-posix:chmod (namestring current) #o600))
-        (error (rename-cause)
-          (handler-case
-              (progn
-                (uiop:copy-file legacy current)
-                (delete-file legacy)
-                (sb-posix:chmod (namestring current) #o600))
-            (error (copy-cause)
-              (error 'configuration-error
-                     :message
-                     (format nil
-                             "Could not migrate ~A to ~A: ~A; fallback copy failed: ~A"
-                             legacy current rename-cause copy-cause)))))))
-    nil))
-
 (-> configuration-ensure-directories (configuration) configuration)
 (defun configuration-ensure-directories (configuration)
   "Create CONFIGURATION's private config, data, state, and cache directories."
@@ -408,9 +384,7 @@ Selecting a different model recomputes the context window for that model."
                             (configuration-state-root configuration)
                             (configuration-cache-root configuration)))
     (ensure-directories-exist directory))
-    (dolist (name '("auth.sexp" "permissions.sexp" "preferences.sexp"))
-      (configuration--migrate-state-file configuration name))
-    configuration)
+  configuration)
 
 (-> configuration-conversation-root (configuration) pathname)
 (defun configuration-conversation-root (configuration)
@@ -462,12 +436,12 @@ Selecting a different model recomputes the context window for that model."
 (-> configuration-preferences-path (configuration) pathname)
 (defun configuration-preferences-path (configuration)
   "Return the atomic global preferences pathname."
-  (merge-pathnames "preferences.sexp" (configuration-config-root configuration)))
+  (merge-pathnames "preferences.sexp" (configuration-state-root configuration)))
 
 (-> configuration-permissions-path (configuration) pathname)
 (defun configuration-permissions-path (configuration)
   "Return the atomic persistent command-permission pathname."
-  (merge-pathnames "permissions.sexp" (configuration-config-root configuration)))
+  (merge-pathnames "permissions.sexp" (configuration-state-root configuration)))
 
 (-> configuration-later-path (configuration) pathname)
 (defun configuration-later-path (configuration)
@@ -477,7 +451,7 @@ Selecting a different model recomputes the context window for that model."
 (-> configuration-auth-path (configuration) pathname)
 (defun configuration-auth-path (configuration)
   "Return Autolith's private OAuth credential pathname."
-  (merge-pathnames "auth.sexp" (configuration-config-root configuration)))
+  (merge-pathnames "auth.sexp" (configuration-state-root configuration)))
 
 (-> configuration-journal-path (configuration) pathname)
 (defun configuration-journal-path (configuration)

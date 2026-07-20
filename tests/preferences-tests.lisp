@@ -21,15 +21,17 @@
 
 (-> test-preferences () null)
 (defun test-preferences ()
-  "Test atomic global preferences, migration, and malformed-file recovery."
+  "Test atomic global preferences, version compatibility, and malformed recovery."
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
-         (pathname (configuration-preferences-path configuration))
-         (legacy-path
-           (merge-pathnames "preferences.sexp"
-                            (configuration-state-root configuration))))
+         (pathname (configuration-preferences-path configuration)))
     (unwind-protect
          (progn
+           (test-assert
+            (equal pathname
+                   (merge-pathnames "preferences.sexp"
+                                    (configuration-state-root configuration)))
+            "global preferences live under the state root")
            (let ((preferences (preferences-load configuration)))
              (test-assert
               (not (preference-state-reasoning-traces-p preferences))
@@ -42,19 +44,6 @@
              (test-assert
               (preference-state-compact-view-p preferences)
               "missing preferences default to compact tool presentation"))
-           (ensure-directories-exist legacy-path)
-           (with-open-file (stream legacy-path
-                                   :direction :output
-                                   :if-exists :supersede
-                                   :if-does-not-exist :create
-                                   :external-format :utf-8)
-             (write-string "(:preferences :version 1 :reasoning-traces-p t)"
-                           stream))
-           (configuration-ensure-directories configuration)
-           (test-assert (not (probe-file legacy-path))
-                        "legacy preferences move out of the state root")
-           (test-assert (probe-file pathname)
-                        "preferences migrate into the config root")
            (ensure-directories-exist pathname)
            (with-open-file (stream pathname
                                    :direction :output

@@ -103,13 +103,13 @@ drafted and queued while AL is responding. Type =/help= for commands.
 
 * Persistent paths
 
-Autolith keeps credentials, preferences, exact command approvals, and static
-agent configuration under =${XDG_CONFIG_HOME:-~/.config}/autolith/=. Deferred
-inputs, live-mutation journals, and atomic selections belong under
-=${XDG_STATE_HOME:-~/.local/state}/autolith/=, including a private Git history
-of durable mutation snapshots. Conversations, canonical image commits,
-memories, generations, runtimes, matching implementation source, and worker
-images live under =${XDG_DATA_HOME:-~/.local/share}/autolith/=. Credentials
+Autolith keeps user-authored Lisp and child-agent definitions under
+=${XDG_CONFIG_HOME:-~/.config}/autolith/=. Credentials, preferences, exact
+command approvals, deferred inputs, live-mutation journals, and atomic
+selections belong under =${XDG_STATE_HOME:-~/.local/state}/autolith/=, including
+a private Git history of durable mutation snapshots. Conversations, canonical
+image commits, memories, generations, runtimes, matching implementation source,
+and worker images live under =${XDG_DATA_HOME:-~/.local/share}/autolith/=. Credentials
 never belong in Git, conversation files, memories, journals, manifests, or
 saved cores.
 

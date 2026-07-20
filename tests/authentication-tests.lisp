@@ -18,6 +18,11 @@
                                      :source-path (configuration-auth-path configuration))))
     (unwind-protect
          (progn
+           (test-assert
+            (equal (configuration-auth-path configuration)
+                   (merge-pathnames "auth.sexp"
+                                    (configuration-state-root configuration)))
+            "private credentials live under the state root")
            (credential-source-save source credentials)
            (let* ((loaded (credential-source-load source))
                   (mode (sb-posix:stat-mode

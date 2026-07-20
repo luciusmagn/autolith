@@ -214,7 +214,6 @@
     application)
 (defun application-create (configuration &key conversation-id)
   "Create a connected application, loading CONVERSATION-ID when supplied."
-  (configuration-ensure-directories configuration)
   (let ((preferred-configuration
           (preferences-apply-model-selection configuration)))
     (context-runtime-reset)

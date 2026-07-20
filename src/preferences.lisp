@@ -153,7 +153,7 @@
 
 (-> preferences--write (configuration preference-state) null)
 (defun preferences--write (configuration preferences)
-  "Atomically write PREFERENCES under CONFIGURATION's private config root."
+  "Atomically write PREFERENCES under CONFIGURATION's private state root."
   (let ((pathname (configuration-preferences-path configuration)))
     (handler-case
         (snapshot-write
