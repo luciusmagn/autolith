@@ -8,6 +8,9 @@
 (define-constant +task-maximum-concurrency+ 32 :documentation
                  "The largest supported child-agent worker pool.")
 
+(define-constant +task-default-maximum-runtime-milliseconds+ 1800000
+  :documentation "The default 30-minute wall-clock cap for one child agent.")
+
 (define-constant +task-maximum-batch-size+ 16 :documentation
                  "The largest task batch accepted atomically.")
 

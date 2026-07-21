@@ -32,8 +32,10 @@
                                             +task-default-maximum-depth+
                                             :minimum 1)
                  :maximum-runtime-milliseconds
-                 (task--environment-integer "AUTOLITH_TASK_MAX_RUNTIME_MS" 0
-                                            :minimum 0)))
+                 (task--environment-integer
+                  "AUTOLITH_TASK_MAX_RUNTIME_MS"
+                  +task-default-maximum-runtime-milliseconds+
+                  :minimum 0)))
 
 (-> task-orchestrator--reap-dead-threads-locked
     (task-orchestrator)
@@ -79,8 +81,10 @@
           (task--environment-integer "AUTOLITH_TASK_MAX_DEPTH"
                                      +task-default-maximum-depth+ :minimum 1)
           (task-orchestrator-maximum-runtime-milliseconds orchestrator)
-          (task--environment-integer "AUTOLITH_TASK_MAX_RUNTIME_MS" 0
-                                     :minimum 0)
+          (task--environment-integer
+           "AUTOLITH_TASK_MAX_RUNTIME_MS"
+           +task-default-maximum-runtime-milliseconds+
+           :minimum 0)
           (task-orchestrator-shutdown-p orchestrator) nil)
     (task--condition-broadcast
      (task-orchestrator-condition-variable orchestrator)))

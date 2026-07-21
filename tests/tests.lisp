@@ -126,6 +126,7 @@
     (test-task-orchestration)
     (test-task-child-shared-agent-loop)
     (test-task-running-cancellation)
+    (test-task-runtime-deadline)
     (test-task-nested-parent-cancellation)
     (test-task-admission-cancellation-barrier)
     (test-task-publication-coherence)

@@ -94,6 +94,135 @@
                                          :if-does-not-exist :ignore))))
   nil)
 
+(-> test-task-runtime-deadline () null)
+(defun test-task-runtime-deadline ()
+  "Test the finite default and timeout of a stalled synchronous child."
+  (let ((previous-runtime
+          (uiop:getenv "AUTOLITH_TASK_MAX_RUNTIME_MS")))
+    (unwind-protect
+         (progn
+           (sb-posix:unsetenv "AUTOLITH_TASK_MAX_RUNTIME_MS")
+           (let ((orchestrator (task-orchestrator-create)))
+             (test-assert
+              (and
+               (plusp
+                (task-orchestrator-maximum-runtime-milliseconds orchestrator))
+               (= (task-orchestrator-maximum-runtime-milliseconds orchestrator)
+                  +task-default-maximum-runtime-milliseconds+))
+              "task children have a finite default runtime deadline"))
+           (sb-posix:setenv "AUTOLITH_TASK_MAX_RUNTIME_MS" "1000" 1)
+           (let* ((configuration (test-configuration))
+                  (root          (test-configuration-root configuration))
+                  (registry      (make-default-tool-registry))
+                  (blocking-tool
+                    (make-instance
+                     'task-test-blocking-tool
+                     :namespace "test"
+                     :name "block"
+                     :description
+                     "Wait until the deadline test releases this call."
+                     :parameters (tool-object-schema (json-object) nil)))
+                  (runner nil)
+                  (run-result nil)
+                  (run-condition nil))
+             (tool-registry-register registry blocking-tool)
+             (task-augment-tool-registry registry)
+             (let* ((provider
+                      (make-instance 'task-test-provider
+                                     :mode :blocking-tool))
+                    (conversation (conversation-create configuration))
+                    (primary
+                      (agent-create :configuration configuration
+                                    :provider provider
+                                    :conversation conversation
+                                    :tool-registry registry
+                                    :worker nil))
+                    (run-tool (tool-registry-find registry "task" "run"))
+                    (orchestrator (task-run-tool-orchestrator run-tool))
+                    (context
+                      (make-instance
+                       'tool-context
+                       :configuration configuration
+                       :worker nil
+                       :conversation conversation
+                       :registry registry
+                       :agent primary
+                       :call-id "runtime-deadline")))
+               (unwind-protect
+                    (progn
+                      (setf runner
+                            (make-thread
+                             (lambda ()
+                               (handler-case
+                                   (setf run-result
+                                         (tool-execute
+                                          run-tool
+                                          context
+                                          (json-object
+                                           "name" "stalled-child"
+                                           "agent" "task"
+                                           "task"
+                                           "Enter the blocking ordinary tool.")))
+                                 (serious-condition (condition)
+                                   (setf run-condition condition))))
+                             :name "Autolith task deadline test"))
+                      (test-assert
+                       (task-tests--wait-until
+                        (lambda ()
+                          (with-lock-held
+                              ((task-test-blocking-tool-lock blocking-tool))
+                            (task-test-blocking-tool-started-p blocking-tool)))
+                        2)
+                       "the child stalls inside a real ordinary tool call")
+                      (test-assert
+                       (task-tests--wait-until
+                        (lambda () (not (thread-alive-p runner)))
+                        3)
+                       "the runtime deadline releases synchronous task.run")
+                      (join-thread runner)
+                      (setf runner nil)
+                      (let* ((jobs
+                               (task-orchestrator-list-jobs orchestrator))
+                             (snapshot
+                               (and (= (length jobs) 1)
+                                    (task-job-snapshot (first jobs)))))
+                        (test-assert
+                         (and (null run-condition)
+                              (typep run-result 'tool-result)
+                              (not (tool-result-success-p run-result))
+                              snapshot
+                              (eq (getf snapshot :state) :aborted)
+                              (eq (getf snapshot :cancellation-reason)
+                                  :timeout)
+                              (eq (getf (getf snapshot :result) :status)
+                                  :aborted)
+                              (task-tests--wait-until
+                               (lambda ()
+                                 (with-lock-held
+                                     ((task-orchestrator-lock orchestrator))
+                                   (and
+                                    (zerop
+                                     (task-orchestrator-active-count
+                                      orchestrator))
+                                    (zerop
+                                     (task-orchestrator-live-count
+                                      orchestrator)))))
+                               2))
+                         "a deadline publishes one timeout result and releases scheduler accounting")))
+                 (task-tests--release-blocking-tool blocking-tool)
+                 (when runner
+                   (join-thread runner))
+                 (ignore-errors
+                   (tool-registry-close-runtime-state registry))
+                 (uiop:delete-directory-tree root :validate t
+                                                  :if-does-not-exist
+                                                  :ignore)))))
+      (if previous-runtime
+          (sb-posix:setenv "AUTOLITH_TASK_MAX_RUNTIME_MS"
+                          previous-runtime 1)
+          (sb-posix:unsetenv "AUTOLITH_TASK_MAX_RUNTIME_MS"))))
+  nil)
+
 (-> test-task-nested-parent-cancellation () null)
 (defun test-task-nested-parent-cancellation ()
   "Test parent cancellation while its synchronous descendant is running."
