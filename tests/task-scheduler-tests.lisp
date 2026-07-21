@@ -1287,6 +1287,10 @@
                  (length (task-test-provider-threads provider))
                  :provider-maximum-active
                  (task-test-provider-maximum-active-count provider)
+                 :provider-conversation-identifiers
+                 (with-lock-held ((task-test-provider-lock provider))
+                   (copy-list
+                    (task-test-provider-conversation-identifiers provider)))
                  :provider-request-count
                  (task-test-provider-request-count provider)
                  :scheduler-idle-p idle-p
@@ -1449,6 +1453,13 @@
                           "four children reuse the bounded worker pair")
              (test-assert (= (getf observation :provider-maximum-active) 2)
                           "the pool executes up to its configured concurrency")
+             (let ((identifiers
+                     (getf observation :provider-conversation-identifiers)))
+               (test-assert
+                (and (= (length identifiers) 4)
+                     (= (length (remove-duplicates identifiers :test #'string=))
+                        4))
+                "parallel children use distinct provider thread identities"))
              (test-assert (getf observation :artifacts-exist-p)
                           "every terminal child publishes one unique artifact")
              (test-assert (getf observation :private-transcripts-p)

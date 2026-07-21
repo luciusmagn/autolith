@@ -161,6 +161,11 @@
     :accessor task-test-provider-request-count
     :type (integer 0)
     :documentation "The total scripted requests observed.")
+   (conversation-identifiers
+    :initform nil
+    :accessor task-test-provider-conversation-identifiers
+    :type list
+    :documentation "The child conversation identifiers observed by the provider.")
    (threads
     :initform nil
     :accessor task-test-provider-threads
@@ -179,11 +184,13 @@
      (conversation conversation)
      &key tool-namespaces event-callback goal-context compaction-p)
   "Return a deterministic yield or nested task call for PROVIDER."
-  (declare (ignore conversation tool-namespaces goal-context compaction-p))
+  (declare (ignore tool-namespaces goal-context compaction-p))
   (let ((request-number nil))
     (with-lock-held ((task-test-provider-lock provider))
       (incf (task-test-provider-request-count provider))
       (incf (task-test-provider-active-count provider))
+      (push (conversation-identifier conversation)
+            (task-test-provider-conversation-identifiers provider))
       (pushnew (current-thread) (task-test-provider-threads provider) :test #'eq)
       (setf request-number (task-test-provider-request-count provider)
             (task-test-provider-maximum-active-count provider)
