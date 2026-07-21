@@ -28,8 +28,9 @@ authority must not be given to the HTTP process.
 
 The GitHub tag workflow does not build or host binaries. It waits until the
 checksum is reachable from this service, then creates a metadata-only GitHub
-release. That compatibility record lets launchers from before version 0.11.2
-continue to discover new releases through GitHub.
+release from the required =docs/releases/TAG.md= changelog. That compatibility
+record lets launchers from before version 0.11.2 continue to discover new
+releases through GitHub.
 
 * Filesystem layout
 

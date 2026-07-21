@@ -19,6 +19,7 @@ jobs:
         run: |
           version=$(sed -n 's/^  :version "\([0-9][0-9.]*\)"$/\1/p' autolith.asd)
           test "v$version" = "$GITHUB_REF_NAME"
+          test -s "docs/releases/$GITHUB_REF_NAME.md"
 
       - name: Wait for the release service
         shell: bash
@@ -43,6 +44,6 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" \
               --verify-tag \
-              --generate-notes \
+              --notes-file "docs/releases/$GITHUB_REF_NAME.md" \
               --title "Autolith ${GITHUB_REF_NAME#v}"
           fi

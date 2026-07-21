@@ -2,7 +2,7 @@
 
 ;;;; -- Defaults --
 
-(define-constant +autolith-version+ "0.11.1"
+(define-constant +autolith-version+ "0.12.0"
   :test #'string=
   :documentation "The user-visible Autolith version.")
 
