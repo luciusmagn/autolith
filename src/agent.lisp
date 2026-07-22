@@ -319,6 +319,14 @@
   "Return a provider callback that forwards streaming presentation events to OBSERVER."
   (lambda (event)
     (typecase event
+      (provider-retry-event
+       (agent-observer-status
+        observer
+        :provider-retrying
+        (list :attempt (provider-retry-event-attempt event)
+              :maximum-attempts
+              (provider-retry-event-maximum-attempts event)
+              :delay (provider-retry-event-delay event))))
       (assistant-delta-event
        (agent-observer-status observer :provider-progress nil)
        (agent-observer-text observer (assistant-delta-event-text event)))

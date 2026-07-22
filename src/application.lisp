@@ -1025,6 +1025,34 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
                   stream-text ""
                   activity-label (application-thinking-label))
             (terminal-ui-set-status ui activity-label))
+           (:provider-retrying
+            (let ((partial-output-p
+                    (or stream-open-p
+                        (plusp (length reasoning-text)))))
+              (stream-flush)
+              (terminal-ui-set-preview-rows ui nil)
+              (when partial-output-p
+                (application-present
+                 application
+                 (list
+                  (terminal-span
+                   ':hint
+                   (format nil
+                           "∙ provider stream interrupted; retrying ~D/~D"
+                           (getf details :attempt)
+                           (getf details :maximum-attempts))))))
+              (setf reasoning-text ""
+                    presented-reasoning-text nil
+                    stream-text ""
+                    stream-pending ""
+                    stream-open-p nil
+                    stream-renderer nil)
+              (terminal-ui-set-status
+               ui
+               (format nil "reconnecting ~D/~D in ~Ds"
+                       (getf details :attempt)
+                       (getf details :maximum-attempts)
+                       (getf details :delay)))))
            (:provider-request-completed
             (reasoning-flush)
             (let ((completed-stream-text (and stream-open-p stream-text))

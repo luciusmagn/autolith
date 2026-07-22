@@ -54,6 +54,24 @@
     :documentation "Whether the provider explicitly ended or continued the turn."))
   (:documentation "The successful terminal event for one provider request."))
 
+(defclass provider-retry-event (provider-event)
+  ((attempt
+    :initarg :attempt
+    :reader provider-retry-event-attempt
+    :type (integer 1)
+    :documentation "The one-based reconnect attempt about to begin.")
+   (maximum-attempts
+    :initarg :maximum-attempts
+    :reader provider-retry-event-maximum-attempts
+    :type (integer 1)
+    :documentation "The maximum number of reconnect attempts allowed.")
+   (delay
+    :initarg :delay
+    :reader provider-retry-event-delay
+    :type real
+    :documentation "Seconds to wait before reconnecting."))
+  (:documentation "A transient provider stream is about to be retried."))
+
 (defclass provider-result ()
   ((response-id
     :initarg :response-id
@@ -123,6 +141,14 @@
     :type list
     :documentation "The most recent portable rate limit snapshot from response headers."))
   (:documentation "A direct ChatGPT subscription client for the Codex Responses service."))
+
+(define-constant +provider-stream-retry-delays+
+    '(1 2 4 8 16)
+  :test #'equal
+  :documentation "Backoff seconds for bounded provider stream reconnects.")
+
+(defparameter *provider-stream-retry-sleep-function* #'sleep
+  "Function used to wait between provider stream reconnect attempts.")
 
 (defmethod provider-rate-limits ((provider model-provider))
   "Return no rate limit snapshot for providers that do not report one."
@@ -649,6 +675,35 @@ the transport consumes only after a completed response."
       (t
        nil))))
 
+(-> provider--signal-stream-interruption (t string) null)
+(defun provider--signal-stream-interruption (headers message)
+  "Signal a retryable provider stream interruption described by MESSAGE."
+  (error 'response-stream-error
+         :message message
+         :status nil
+         :request-id (response-header headers "x-request-id")
+         :response nil))
+
+(-> provider--read-sse-data (stream t) t)
+(defun provider--read-sse-data (stream headers)
+  "Read one SSE payload and normalize transport EOF into a provider condition."
+  (handler-case
+      (read-sse-data stream)
+    (end-of-file ()
+      (provider--signal-stream-interruption
+       headers
+       "The provider connection closed during an SSE event."))))
+
+(-> provider--decode-sse-data (string t) t)
+(defun provider--decode-sse-data (data headers)
+  "Decode one SSE DATA payload, normalizing truncation into a provider condition."
+  (handler-case
+      (json-decode data)
+    (end-of-file ()
+      (provider--signal-stream-interruption
+       headers
+       "The provider connection closed during an SSE event."))))
+
 (-> provider--consume-stream (stream t function) provider-result)
 (defun provider--consume-stream (stream headers event-callback)
   "Consume STREAM into a provider result while invoking EVENT-CALLBACK."
@@ -659,15 +714,13 @@ the transport consumes only after a completed response."
         (reasoning-summary-key nil)
         (completed-p nil))
     (loop until completed-p
-          for data = (read-sse-data stream)
+          for data = (provider--read-sse-data stream headers)
           do (when (eq data +sse-end-of-stream+)
-               (error 'response-stream-error
-                      :message "The provider stream closed before a terminal event."
-                      :status nil
-                      :request-id nil
-                      :response nil))
+               (provider--signal-stream-interruption
+                headers
+                "The provider stream closed before a terminal event."))
              (unless (string= data "[DONE]")
-               (let* ((event (json-decode data))
+               (let* ((event (provider--decode-sse-data data headers))
                       (type (and (json-object-p event)
                                  (json-get event "type"))))
                  (cond
@@ -822,24 +875,45 @@ the transport consumes only after a completed response."
        event-callback
        goal-context
        compaction-p)
-  "Stream one Sol turn with one credential reload and one bounded refresh attempt."
+  "Stream one Sol turn with bounded authentication and transport retries."
   (declare (type vector tool-namespaces)
            (type function event-callback))
-  (loop for attempt-number from 1 to 3
-        for force-refresh = (= attempt-number 3)
-        do (handler-case
-               (return-from provider-stream-turn
-                 (provider-attempt-turn provider
-                                        conversation
-                                        :tool-namespaces tool-namespaces
-                                        :event-callback event-callback
-                                        :force-refresh force-refresh
-                                        :goal-context goal-context
-                                        :compaction-p compaction-p))
-             (provider-unauthorized ()
-               (when (= attempt-number 3)
-                 (error 'authentication-error
-                        :message
-                        "ChatGPT rejected Autolith's credentials after a bounded refresh.")))))
-  (error 'authentication-error
-         :message "ChatGPT authentication retry ended unexpectedly."))
+  (labels ((attempt-with-authentication ()
+             "Perform one stream attempt with bounded credential recovery."
+             (loop for attempt-number from 1 to 3
+                   for force-refresh = (= attempt-number 3)
+                   do (handler-case
+                          (return-from attempt-with-authentication
+                            (provider-attempt-turn
+                             provider
+                             conversation
+                             :tool-namespaces tool-namespaces
+                             :event-callback event-callback
+                             :force-refresh force-refresh
+                             :goal-context goal-context
+                             :compaction-p compaction-p))
+                        (provider-unauthorized ()
+                          (when (= attempt-number 3)
+                            (error 'authentication-error
+                                   :message
+                                   "ChatGPT rejected Autolith's credentials after a bounded refresh.")))))
+             (error 'authentication-error
+                    :message "ChatGPT authentication retry ended unexpectedly.")))
+    (loop for retry-number from 0
+          do (handler-case
+                 (return-from provider-stream-turn
+                   (attempt-with-authentication))
+               (response-stream-error (condition)
+                 (when (= retry-number
+                          (length +provider-stream-retry-delays+))
+                   (error condition))
+                 (let ((delay
+                         (nth retry-number +provider-stream-retry-delays+)))
+                   (funcall event-callback
+                            (make-instance
+                             'provider-retry-event
+                             :attempt (1+ retry-number)
+                             :maximum-attempts
+                             (length +provider-stream-retry-delays+)
+                             :delay delay))
+                   (funcall *provider-stream-retry-sleep-function* delay)))))))

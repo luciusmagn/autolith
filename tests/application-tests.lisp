@@ -1131,6 +1131,57 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-provider-retry-presentation () null)
+(defun test-provider-retry-presentation ()
+  "Test reconnect presentation closes and labels interrupted streamed output."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation
+                  (conversation-create configuration
+                                       :identifier "retry-presentation"))
+                (terminal (make-instance 'recording-terminal :columns 50))
+                (application
+                  (make-instance 'application
+                                 :configuration configuration
+                                 :conversation conversation
+                                 :reasoning-traces-p t
+                                 :ui (terminal-ui-create :terminal terminal)))
+                (observer (application-agent-observer application))
+                (send-text (callback-agent-observer-text-callback observer))
+                (send-reasoning
+                  (callback-agent-observer-reasoning-callback observer))
+                (send-status
+                  (callback-agent-observer-status-callback observer)))
+           (terminal-ui-start (application-ui application))
+           (funcall send-status :provider-request-started nil)
+           (funcall send-reasoning "Partial reasoning")
+           (funcall send-text "Partial answer")
+           (recording-terminal-reset terminal)
+           (funcall send-status
+                    :provider-retrying
+                    (list :attempt 1 :maximum-attempts 5 :delay 1))
+           (let ((output (recording-terminal-output terminal))
+                 (ui (application-ui application)))
+             (test-assert
+              (and (search "Partial answer" output)
+                   (search "provider stream interrupted; retrying 1/5" output)
+                   (string= (terminal-ui-status ui)
+                            "reconnecting 1/5 in 1s")
+                   (null (terminal-ui-preview-rows ui))
+                   (null (terminal-ui-stream-tail ui)))
+              "a reconnect closes and labels the partial presentation attempt"))
+           (recording-terminal-reset terminal)
+           (funcall send-text "Replacement answer")
+           (let ((output (recording-terminal-output terminal)))
+             (test-assert
+              (and (search "● autolith" output)
+                   (search "Replacement answer" output))
+              "the replacement attempt starts a distinct assistant block"))
+           (terminal-ui-stop (application-ui application)))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-turn-cursor-visibility () null)
 (defun test-turn-cursor-visibility ()
   "Test model turns retain the editable cursor while updates hide motion atomically."
@@ -2231,6 +2282,7 @@
   (test-interrupt-resume-instruction)
   (test-transcript-entries)
   (test-streaming-presentation)
+  (test-provider-retry-presentation)
   (test-turn-cursor-visibility)
   (test-responsive-model-input)
   (test-input-reader-quiescence)

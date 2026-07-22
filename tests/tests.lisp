@@ -100,6 +100,7 @@
     (test-provider-stream-decoding)
     (test-provider-stream-failures)
     (test-provider-authentication-retries)
+    (test-provider-stream-retries)
     (test-tool-registry)
     (test-workspace-tools)
     (test-search-tools)

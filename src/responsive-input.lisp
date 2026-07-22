@@ -882,7 +882,6 @@
           (error condition))
         ((or agent-loop-error
              conversation-invariant-error
-             response-stream-error
              active-image-corruption)
          (condition)
           (application-raise-fatal application condition signal-backtrace))
@@ -907,7 +906,6 @@
           (error condition))
         ((or agent-loop-error
              conversation-invariant-error
-             response-stream-error
              active-image-corruption)
          (condition)
           (application-raise-fatal application condition signal-backtrace))

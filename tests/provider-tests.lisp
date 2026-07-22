@@ -396,7 +396,8 @@
              (json-object "type" "response.failed"
                           "response" (json-object "id" "failed-response")))
             (test-sse-event-string
-             (json-object "type" "response.output_text.delta" "delta" "partial"))))
+             (json-object "type" "response.output_text.delta" "delta" "partial"))
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial"))
     (test-assert
      (handler-case
          (progn
@@ -445,6 +446,12 @@
        (error 'provider-unauthorized
               :message "Injected unauthorized response."
               :status 401
+              :request-id nil
+              :response nil))
+      ((eq outcome :stream-error)
+       (error 'response-stream-error
+              :message "Injected stream interruption."
+              :status nil
               :request-id nil
               :response nil))
       (t
@@ -516,5 +523,66 @@
                 (authentication-error ()
                   t))
               "a third unauthorized response becomes a typed authentication failure")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-provider-stream-retries () null)
+(defun test-provider-stream-retries ()
+  "Test bounded stream reconnection, observer events, and final failure."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration :identifier "provider-stream-retry"))
+         (result
+           (make-instance 'provider-result
+                          :response-id "stream-retry-success"
+                          :output-items nil
+                          :tool-calls nil
+                          :usage nil
+                          :turn-state nil)))
+    (unwind-protect
+         (let ((*provider-stream-retry-sleep-function*
+                 (lambda (seconds)
+                   (declare (ignore seconds)))))
+           (let ((events nil)
+                 (provider
+                   (test-codex-provider-create
+                    configuration
+                    (list :stream-error result))))
+             (test-assert
+              (eq (provider-stream-turn
+                   provider
+                   conversation
+                   :tool-namespaces #()
+                   :event-callback (lambda (event) (push event events)))
+                  result)
+              "a transient stream interruption retries the same provider turn")
+             (let ((retry-event (find-if (lambda (event)
+                                           (typep event 'provider-retry-event))
+                                         events)))
+               (test-assert
+                (and retry-event
+                     (= (provider-retry-event-attempt retry-event) 1)
+                     (= (provider-retry-event-maximum-attempts retry-event)
+                        (length +provider-stream-retry-delays+))
+                     (= (provider-retry-event-delay retry-event) 1))
+                "stream retries expose their attempt and delay to the observer")))
+           (let ((provider
+                   (test-codex-provider-create
+                    configuration
+                    (make-list
+                     (1+ (length +provider-stream-retry-delays+))
+                     :initial-element :stream-error))))
+             (test-assert
+              (handler-case
+                  (progn
+                    (provider-stream-turn provider
+                                          conversation
+                                          :tool-namespaces #()
+                                          :event-callback #'identity)
+                    nil)
+                (response-stream-error ()
+                  t))
+              "exhausting the stream retry budget remains a typed provider failure")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
