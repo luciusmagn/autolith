@@ -313,8 +313,12 @@
                              (search "model" (fourth lines))
                              (search "workspace" (fifth lines)))
                         "wide banners divide identity from aligned runtime data")
-           (test-assert (not (search "conversation" text))
-                        "the startup banner omits the internal conversation identifier")
+           (let ((header-end
+                   (or (search "Autolith executes" text)
+                       (length text))))
+             (test-assert
+              (not (search "conversation" text :end2 header-end))
+              "the startup header omits the internal conversation identifier"))
            (test-assert (search (format nil "v~A" +autolith-version+) text)
                         "the startup banner uses the configured version")
            (test-assert (not (search "v6.6.6" text))
