@@ -1054,10 +1054,10 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
              (application--git-branch
               (configuration-working-directory configuration))))
       (append
-       (list (terminal-span ':status-dim "  model ")
+       (list (terminal-span ':status-dim "  ")
              (terminal-span ':status-model
                             (configuration-model configuration))
-             (terminal-span ':status-dim " · effort ")
+             (terminal-span ':status-dim " · ")
              (terminal-span ':status-effort
                             (configuration-reasoning-effort configuration)))
        (when branch

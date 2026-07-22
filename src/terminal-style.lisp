@@ -69,7 +69,7 @@
            (:status-dim :white ())
            (:status-accent :bright-magenta (:bold t))
            (:status-model :bright-cyan (:bold t))
-           (:status-effort :bright-yellow (:bold t))
+           (:status-effort :bright-red (:bold t))
            (:status-branch :bright-green (:bold t)))
          collect (cons name
                        (apply #'make-style

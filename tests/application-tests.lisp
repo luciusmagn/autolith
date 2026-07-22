@@ -425,9 +425,9 @@
                 (string= (application--git-branch nested) "chromatic")
                 "Git branch discovery walks up from a nested workspace")
                (test-assert
-                (search "model gpt-5.6-sol · effort ultra · git chromatic"
+                (search "gpt-5.6-sol · ultra · git chromatic"
                         text)
-                "activity metadata contains current model, effort, and branch")
+                "activity metadata compactly contains model, effort, and branch")
                (test-assert
                 (eq (terminal-span-style (first (last details)))
                     ':status-branch)

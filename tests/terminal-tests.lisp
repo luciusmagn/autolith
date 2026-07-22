@@ -553,9 +553,9 @@
   "Test status metadata, indexed background, padding, and plain fallback."
   (let* ((columns 96)
          (details
-           (list (terminal-span ':status-dim "  model ")
+           (list (terminal-span ':status-dim "  ")
                  (terminal-span ':status-model "gpt-5.6-sol")
-                 (terminal-span ':status-dim " · effort ")
+                 (terminal-span ':status-dim " · ")
                  (terminal-span ':status-effort "ultra")
                  (terminal-span ':status-dim " · git ")
                  (terminal-span ':status-branch "chromatic")))
@@ -578,9 +578,9 @@
                   (second (uiop:split-string text :separator '(#\Newline)))))
             (test-assert (= (text-cell-width status-row) columns)
                          "a styled status background spans the terminal width")
-            (test-assert (search "model gpt-5.6-sol · effort ultra · git chromatic"
+            (test-assert (search "gpt-5.6-sol · ultra · git chromatic"
                                  status-row)
-                         "status metadata names the model, effort, and branch"))
+                         "status metadata compactly shows model, effort, and branch"))
           (test-assert
            (search (terminal-style-sequence ':status-model t) display)
            "the styled status row uses its indexed neutral background")
