@@ -11,80 +11,83 @@
            :recovery-gradient-4 :recovery-gradient-5 :recovery-gradient-6
            :user :tool :success :failure :notice :dim :hint :selected
            :strong :emphasis :code
+           :status-plain :status-dim :status-accent
+           :status-model :status-effort :status-branch
            :syntax-comment :syntax-keyword :syntax-string :syntax-escape
            :syntax-number :syntax-type :syntax-function :syntax-property
            :syntax-heading :syntax-link))
 
 ;; General interface styles use the basic ANSI palette so Autolith follows the
 ;; terminal theme. Only the startup mark opts into the indexed brand gradient.
+(define-constant +terminal-status-background+
+  (indexed-color 236 :fallback ':black)
+  :test #'equalp
+  :documentation "Neutral dark status background with a basic black fallback.")
+
 (define-constant +terminal-style-table+
-  '((:brand    . "1;35")
-    (:user     . "1;36")
-    (:tool     . "1;33")
-    (:success  . "32")
-    (:failure  . "1;31")
-    (:notice   . "33")
-    (:dim      . "2")
-    (:hint     . "2;3")
-    (:selected . "7")
-    (:strong   . "1")
-    (:emphasis . "3")
-    (:code     . "36")
-    (:syntax-comment  . "2")
-    (:syntax-keyword  . "35")
-    (:syntax-string   . "32")
-    (:syntax-escape   . "33")
-    (:syntax-number   . "33")
-    (:syntax-type     . "36")
-    (:syntax-function . "34")
-    (:syntax-property . "36")
-    (:syntax-heading  . "1;35")
-    (:syntax-link     . "4;36"))
-  :test #'equal
-  :documentation "Select-graphic-rendition parameters for each semantic style.")
-
-(define-constant +terminal-brand-gradient-table+
-  '((:brand-gradient-1 . 193)
-    (:brand-gradient-2 . 157)
-    (:brand-gradient-3 . 121)
-    (:brand-gradient-4 . 85)
-    (:brand-gradient-5 . 84)
-    (:brand-gradient-6 . 83))
-  :test #'equal
-  :documentation "Light-green xterm-256 colors for successive startup-mark rows.")
-
-(define-constant +terminal-recovery-gradient-table+
-  '((:recovery-gradient-1 . 224)
-    (:recovery-gradient-2 . 217)
-    (:recovery-gradient-3 . 210)
-    (:recovery-gradient-4 . 203)
-    (:recovery-gradient-5 . 197)
-    (:recovery-gradient-6 . 196))
-  :test #'equal
-  :documentation "Light-red xterm-256 colors for recovered startup-mark rows.")
+  (append
+   (loop for (name arguments) in
+         '((:plain ())
+           (:brand (:foreground :magenta :bold t))
+           (:user (:foreground :cyan :bold t))
+           (:tool (:foreground :yellow :bold t))
+           (:success (:foreground :green))
+           (:failure (:foreground :red :bold t))
+           (:notice (:foreground :yellow))
+           (:dim (:faint t))
+           (:hint (:faint t :italic t))
+           (:selected (:reverse t))
+           (:strong (:bold t))
+           (:emphasis (:italic t))
+           (:code (:foreground :cyan))
+           (:syntax-comment (:faint t))
+           (:syntax-keyword (:foreground :magenta))
+           (:syntax-string (:foreground :green))
+           (:syntax-escape (:foreground :yellow))
+           (:syntax-number (:foreground :yellow))
+           (:syntax-type (:foreground :cyan))
+           (:syntax-function (:foreground :blue))
+           (:syntax-property (:foreground :cyan))
+           (:syntax-heading (:foreground :magenta :bold t))
+           (:syntax-link (:foreground :cyan :underline t)))
+         collect (cons name (apply #'make-style arguments)))
+   (loop for name in '(:brand-gradient-1 :brand-gradient-2 :brand-gradient-3
+                       :brand-gradient-4 :brand-gradient-5 :brand-gradient-6)
+         for index in '(193 157 121 85 84 83)
+         collect (cons name (make-style
+                             :foreground (indexed-color index :fallback ':green)
+                             :bold t)))
+   (loop for name in '(:recovery-gradient-1 :recovery-gradient-2
+                       :recovery-gradient-3 :recovery-gradient-4
+                       :recovery-gradient-5 :recovery-gradient-6)
+         for index in '(224 217 210 203 197 196)
+         collect (cons name (make-style
+                             :foreground (indexed-color index :fallback ':red)
+                             :bold t)))
+   (loop for (name foreground arguments) in
+         '((:status-plain :bright-white ())
+           (:status-dim :white (:faint t))
+           (:status-accent :bright-magenta (:bold t))
+           (:status-model :bright-cyan (:bold t))
+           (:status-effort :bright-yellow (:bold t))
+           (:status-branch :bright-green (:bold t)))
+         collect (cons name
+                       (apply #'make-style
+                              :foreground foreground
+                              :background +terminal-status-background+
+                              arguments))))
+  :test #'equalp
+  :documentation "Colorist style objects for Autolith's semantic styles.")
 
 (define-constant +terminal-style-reset+
-  (format nil "~C[0m" +terminal-escape-character+)
+  (reset-sequence :level ':basic)
   :test #'string=
   :documentation "The trusted control that restores default terminal rendition.")
-
-(-> terminal-indexed-color-environment-p
-    ((option string) (option string))
-    boolean)
-(defun terminal-indexed-color-environment-p (term color-term)
-  "Return true when TERM or COLOR-TERM advertises indexed-color support."
-  (not
-   (null
-    (or (and term (search "256color" term :test #'char-equal))
-        (and color-term
-             (member color-term '("truecolor" "24bit")
-                     :test #'string-equal))))))
 
 (-> terminal-environment-indexed-color-p () boolean)
 (defun terminal-environment-indexed-color-p ()
   "Return true when the process environment advertises indexed colors."
-  (terminal-indexed-color-environment-p (uiop:getenv "TERM")
-                                        (uiop:getenv "COLORTERM")))
+  (eq (effective-color-level) ':indexed))
 
 (-> terminal-style-sequence
     (terminal-style &optional boolean)
@@ -92,29 +95,15 @@
 (defun terminal-style-sequence
     (style &optional (indexed-color-p (terminal-environment-indexed-color-p)))
   "Return STYLE's trusted control, using INDEXED-COLOR-P for brand gradients."
-  (let* ((brand-color
-           (rest (assoc style +terminal-brand-gradient-table+)))
-         (recovery-color
-           (rest (assoc style +terminal-recovery-gradient-table+)))
-         (indexed-color (or brand-color recovery-color))
-         (parameters
-           (cond
-             ((and indexed-color indexed-color-p)
-              (format nil "1;38;5;~D" indexed-color))
-             (brand-color
-              "1;32")
-             (recovery-color
-              "1;31")
-             (t
-              (rest (assoc style +terminal-style-table+))))))
-    (and parameters
-         (format nil "~C[~Am" +terminal-escape-character+ parameters))))
+  (let ((sequence
+          (sgr-sequence (rest (assoc style +terminal-style-table+))
+                        :level (if indexed-color-p ':indexed ':basic))))
+    (and (plusp (length sequence)) sequence)))
 
 (-> terminal-environment-styling-p () boolean)
 (defun terminal-environment-styling-p ()
   "Return true when the process environment permits color and emphasis output."
-  (and (not (non-empty-string-p (uiop:getenv "NO_COLOR")))
-       (not (string= (or (uiop:getenv "TERM") "") "dumb"))))
+  (not (eq (effective-color-level) ':none)))
 
 
 ;;;; -- Styled Spans --

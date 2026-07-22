@@ -6,6 +6,12 @@
                 #:base64-string-to-usb8-array
                 #:base64-string-to-string
                 #:usb8-array-to-base64-string)
+  (:import-from #:cl-colorist
+                #:effective-color-level
+                #:indexed-color
+                #:make-style
+                #:reset-sequence
+                #:sgr-sequence)
   (:import-from #:cl-exec-sandbox
                 #:external-sandbox-policy
                 #:run-sandboxed

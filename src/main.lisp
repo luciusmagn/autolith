@@ -166,7 +166,7 @@
 (-> application-handle-expected-error (application autolith-error) null)
 (defun application-handle-expected-error (application condition)
   "Present expected CONDITION without abandoning APPLICATION's active path."
-  (terminal-ui-set-status (application-ui application) nil)
+  (application-set-activity application nil)
   (application-render-records application)
   (application-present
    application

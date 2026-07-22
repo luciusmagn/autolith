@@ -565,13 +565,13 @@
         (3 (values "LOOP " 3)))
     (remove nil
             (list (and (plusp bright-index)
-                       (terminal-span ':dim
+                       (terminal-span ':status-dim
                                       (subseq text 0 bright-index)))
-                  (terminal-span ':plain
+                  (terminal-span ':status-plain
                                  (subseq text bright-index
                                          (1+ bright-index)))
                   (and (< (1+ bright-index) (length text))
-                       (terminal-span ':dim
+                       (terminal-span ':status-dim
                                       (subseq text (1+ bright-index))))))))
 
 (-> terminal-ui--status-signature-at (terminal-ui real) list)
@@ -596,6 +596,26 @@
         (format nil "~A · ~A"
                 (terminal-ui-status ui)
                 (terminal-ui--duration-text elapsed)))))
+
+(-> terminal-ui--status-row-at (terminal-ui real integer) list)
+(defun terminal-ui--status-row-at (ui now row-width)
+  "Return UI's clipped status spans padded across ROW-WIDTH cells."
+  (let* ((content
+           (append
+            (terminal-ui--status-spinner-spans-at ui now)
+            (list (terminal-span ':status-accent " ∙ ")
+                  (terminal-span ':status-dim
+                                 (terminal-ui--status-text-at ui now)))
+            (terminal-ui-status-details ui)))
+         (clipped (terminal--clip-spans content row-width))
+         (padding (and (terminal-styled-p (terminal-ui-terminal ui))
+                       (- row-width (terminal--spans-width clipped)))))
+    (if (and padding (plusp padding))
+        (append clipped
+                (list (terminal-span ':status-plain
+                                     (make-string padding
+                                                  :initial-element #\Space))))
+        clipped)))
 
 (-> terminal-ui--rows-content
     (terminal list &key (:cursor-row integer) (:cursor-offset integer))
@@ -661,14 +681,7 @@
             (append rows
                     (list
                      nil
-                     (terminal--clip-spans
-                      (append
-                       (terminal-ui--status-spinner-spans-at ui status-now)
-                       (list (terminal-span ':brand " ∙ ")
-                             (terminal-span ':dim
-                                            (terminal-ui--status-text-at
-                                             ui status-now))))
-                      row-width)))))
+                     (terminal-ui--status-row-at ui status-now row-width)))))
     (let ((steering-inputs (terminal-ui-steering-input-previews ui)))
       (when steering-inputs
         (setf rows
@@ -992,9 +1005,16 @@ when no resize needs to be applied."
       (terminal-ui--paint-live ui)))
   ui)
 
-(-> terminal-ui-set-status (terminal-ui (option string)) terminal-ui)
-(defun terminal-ui-set-status (ui status)
-  "Begin or clear UI's timed one-row STATUS activity phase."
+(-> terminal-ui-set-status
+    (terminal-ui (option string) &key (:details terminal-styled-text))
+    terminal-ui)
+(defun terminal-ui-set-status (ui status &key details)
+  "Begin or clear UI's timed one-row STATUS activity phase with DETAILS."
+  (unless (terminal-styled-text-p details)
+    (error 'terminal-error
+           :message "Terminal status details must contain styled spans."
+           :operation ':set-status
+           :cause nil))
   (with-terminal-ui-locked (ui)
     (let ((safe-status (and status
                             (sanitize-text status :single-line-p t))))
@@ -1002,11 +1022,13 @@ when no resize needs to be applied."
         (safe-status
          (let ((now (funcall (terminal-ui-clock-function ui))))
            (setf (terminal-ui-status ui) safe-status
+                 (terminal-ui-status-details ui) details
                  (terminal-ui-status-started-at ui) now
                  (terminal-ui-status-progress-at ui) now)
            (terminal-ui--paint-live ui now)))
         ((terminal-ui-status ui)
          (setf (terminal-ui-status ui) nil
+               (terminal-ui-status-details ui) nil
                (terminal-ui-status-started-at ui) nil
                (terminal-ui-status-progress-at ui) nil
                (terminal-ui-status-rendered-signature ui) nil)

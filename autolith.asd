@@ -5,6 +5,7 @@
   :serial t
   :depends-on (#:alexandria
                #:cl-base64
+               #:cl-colorist
                #:cl-exec-sandbox
                #:clifff
                #:clinedi

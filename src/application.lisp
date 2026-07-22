@@ -921,6 +921,50 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
   '("pondering" "exploring" "untangling" "crafting" "verifying" "connecting")
   "One-word activity labels sampled while the model prepares its next action.")
 
+(-> application--git-branch (pathname) (option string))
+(defun application--git-branch (directory)
+  "Return the enclosing Git worktree branch for DIRECTORY, when attached."
+  (handler-case
+      (let ((branch
+              (string-trim
+               '(#\Space #\Tab #\Newline #\Return)
+               (uiop:run-program
+                (list "git" "-C" (namestring directory)
+                      "symbolic-ref" "--quiet" "--short" "HEAD")
+                :output :string
+                :error-output :string
+                :ignore-error-status t))))
+        (and (non-empty-string-p branch) branch))
+    (error ()
+      nil)))
+
+(-> application--status-details (application) terminal-styled-text)
+(defun application--status-details (application)
+  "Return cached-phase model, effort, and repository status spans."
+  (when (slot-boundp application 'configuration)
+    (let* ((configuration (application-configuration application))
+           (branch
+             (application--git-branch
+              (configuration-working-directory configuration))))
+      (append
+       (list (terminal-span ':status-dim "  model ")
+             (terminal-span ':status-model
+                            (configuration-model configuration))
+             (terminal-span ':status-dim " · effort ")
+             (terminal-span ':status-effort
+                            (configuration-reasoning-effort configuration)))
+       (when branch
+         (list (terminal-span ':status-dim " · git ")
+               (terminal-span ':status-branch branch)))))))
+
+(-> application-set-activity (application (option string)) terminal-ui)
+(defun application-set-activity (application status)
+  "Set APPLICATION's live STATUS and snapshot its contextual details once."
+  (terminal-ui-set-status
+   (application-ui application)
+   status
+   :details (and status (application--status-details application))))
+
 (-> application-thinking-label () string)
 (defun application-thinking-label ()
   "Return one interesting activity word for the next provider step."
@@ -968,7 +1012,7 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
                      (setf stream-open-p t
                            stream-renderer (application--markdown-renderer
                                             application))
-                     (terminal-ui-set-status ui "receiving response")
+                     (application-set-activity application "receiving response")
                      (push (list (terminal-span ':brand "● autolith")) rows))
                    (loop for newline = (position #\Newline stream-pending)
                          while newline
@@ -1024,7 +1068,7 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
                   presented-reasoning-text nil
                   stream-text ""
                   activity-label (application-thinking-label))
-            (terminal-ui-set-status ui activity-label))
+            (application-set-activity application activity-label))
            (:provider-retrying
             (let ((partial-output-p
                     (or stream-open-p
@@ -1047,8 +1091,8 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
                     stream-pending ""
                     stream-open-p nil
                     stream-renderer nil)
-              (terminal-ui-set-status
-               ui
+              (application-set-activity
+               application
                (format nil "reconnecting ~D/~D in ~Ds"
                        (getf details :attempt)
                        (getf details :maximum-attempts)
@@ -1063,23 +1107,23 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
                :streamed-assistant-text completed-stream-text
                :streamed-reasoning-text completed-reasoning-text)))
            (:tool-call-started
-            (terminal-ui-set-status
-             ui
+            (application-set-activity
+             application
              (format nil "running ~A" (getf details :tool))))
            (:tool-call-completed
             (application-render-records application)
-            (terminal-ui-set-status ui activity-label))
+            (application-set-activity application activity-label))
            (:steering-applied
             (application-render-records application)
-            (terminal-ui-set-status ui activity-label))
+            (application-set-activity application activity-label))
            (:compaction-started
-            (terminal-ui-set-status ui "compacting the conversation"))
+            (application-set-activity application "compacting the conversation"))
            (:compaction-completed
             (application-render-records application)
-            (terminal-ui-set-status ui activity-label))
+            (application-set-activity application activity-label))
            (:turn-completed
             (terminal-ui-set-preview-rows ui nil)
-            (terminal-ui-set-status ui nil))))
+            (application-set-activity application nil))))
        :steering-callback steering-function
        :command-authorization-callback
        (lambda (command directory)
@@ -1147,7 +1191,7 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
                                                (user-message-input-preview
                                                 submission))))
            (setf (application-rendered-sequence application) sequence)
-           (terminal-ui-set-status ui (application-thinking-label))
+           (application-set-activity application (application-thinking-label))
            (application--note-goal-turn
             application
             (agent-run-user-turn
@@ -1158,7 +1202,7 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
                         :steering-function steering-function)
              :goal-context (application-goal-context application))))
       (terminal-ui-set-preview-rows ui nil)
-      (terminal-ui-set-status ui nil)
+      (application-set-activity application nil)
       (terminal-ui-stream-update ui :tail nil)
       (application-render-records application)))
   nil)

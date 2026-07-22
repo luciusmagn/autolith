@@ -315,6 +315,48 @@
                  "an empty exploratory word set retains a safe fallback"))
   nil)
 
+(-> test-application-status-details () null)
+(defun test-application-status-details ()
+  "Test model, effort, and enclosing Git branch activity metadata."
+  (let* ((base (test-configuration))
+         (root (test-configuration-root base))
+         (repository (merge-pathnames "status-repository/" root))
+         (nested (merge-pathnames "nested/workspace/" repository)))
+    (unwind-protect
+         (progn
+           (ensure-directories-exist nested)
+           (uiop:run-program (list "git" "init" "--quiet"
+                                   (namestring repository)))
+           (uiop:run-program
+            (list "git" "-C" (namestring repository)
+                  "symbolic-ref" "HEAD" "refs/heads/chromatic"))
+           (let* ((configuration
+                    (configuration-with-working-directory base nested))
+                  (ui (terminal-ui-create
+                       :terminal (make-instance 'recording-terminal
+                                                :columns 120)))
+                  (application
+                    (make-instance 'application
+                                   :configuration configuration
+                                   :ui ui)))
+             (application-set-activity application "working")
+             (let* ((details (terminal-ui-status-details ui))
+                    (text (format nil "~{~A~}"
+                                  (mapcar #'terminal-span-text details))))
+               (test-assert
+                (string= (application--git-branch nested) "chromatic")
+                "Git branch discovery walks up from a nested workspace")
+               (test-assert
+                (search "model gpt-5.6-sol · effort ultra · git chromatic"
+                        text)
+                "activity metadata contains current model, effort, and branch")
+               (test-assert
+                (eq (terminal-span-style (first (last details)))
+                    ':status-branch)
+                "the branch remains last so narrow status rows clip it first"))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-reasoning-trace-command () null)
 (defun test-reasoning-trace-command ()
   "Test persistent control of provider-visible reasoning summaries."
@@ -2276,6 +2318,7 @@
   "Run focused application presentation tests and return true on success."
   (test-application-banner-version)
   (test-thinking-label-selection)
+  (test-application-status-details)
   (test-reasoning-trace-command)
   (test-compact-view-command)
   (test-command-permission-modes)

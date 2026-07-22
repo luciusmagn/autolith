@@ -492,7 +492,7 @@
                (agent-compact-conversation
                 agent
                 (application-agent-observer application))
-            (terminal-ui-set-status (application-ui application) nil))
+            (application-set-activity application nil))
           (application-render-records application)
           (application-present
            application
@@ -673,8 +673,7 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
 (-> application-checkpoint (application) null)
 (defun application-checkpoint (application)
   "Begin a non-stopping retained generation for APPLICATION."
-  (terminal-ui-set-status (application-ui application)
-                          "checking source before checkpoint")
+  (application-set-activity application "checking source before checkpoint")
   (unwind-protect
        (let ((generation
                (checkpoint-create
@@ -687,7 +686,7 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
           (format nil "Checkpoint ~A is publishing in process ~D."
                   (generation-identifier generation)
                   (generation-coordinator-pid generation))))
-    (terminal-ui-set-status (application-ui application) nil))
+    (application-set-activity application nil))
   nil)
 
 

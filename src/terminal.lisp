@@ -154,6 +154,11 @@
     :accessor terminal-ui-status
     :type (option string)
     :documentation "The optional unfinished activity shown above the prompt.")
+   (status-details
+    :initform nil
+    :accessor terminal-ui-status-details
+    :type list
+    :documentation "Styled model, effort, and repository details beside the activity.")
    (status-started-at
     :initform nil
     :accessor terminal-ui-status-started-at

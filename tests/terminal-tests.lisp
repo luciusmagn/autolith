@@ -517,8 +517,8 @@
          (equal (terminal-ui--status-spinner-spans-at
                  active-ui
                  (terminal-ui-status-started-at active-ui))
-                (list (terminal-span ':plain "R")
-                      (terminal-span ':dim "EAD ")))
+                (list (terminal-span ':status-plain "R")
+                      (terminal-span ':status-dim "EAD ")))
          "the spinner dims every character except its cycling highlight"))
       (recording-terminal-reset terminal)
       (terminal-ui-append-finalized
@@ -546,6 +546,89 @@
                                     (list (terminal-span :brand "autolith"))))
     (test-assert (not (search "[1;35m" (recording-terminal-output plain-terminal)))
                  "styling is omitted when the terminal does not permit it"))
+  nil)
+
+(-> test-terminal-status-bar () null)
+(defun test-terminal-status-bar ()
+  "Test status metadata, indexed background, padding, and plain fallback."
+  (let* ((columns 96)
+         (details
+           (list (terminal-span ':status-dim "  model ")
+                 (terminal-span ':status-model "gpt-5.6-sol")
+                 (terminal-span ':status-dim " · effort ")
+                 (terminal-span ':status-effort "ultra")
+                 (terminal-span ':status-dim " · git ")
+                 (terminal-span ':status-branch "chromatic")))
+         (terminal (make-instance 'recording-terminal
+                                  :columns columns
+                                  :styled-p t))
+         (ui (terminal-ui-create :terminal terminal)))
+    (let ((cl-colorist:*color-level* ':indexed))
+      (with-terminal-ui (active-ui ui)
+        (recording-terminal-reset terminal)
+        (terminal-ui-set-status active-ui "working" :details details)
+        (test-assert (= (length (recording-terminal-chunks terminal)) 1)
+                     "one status change is one buffered live-region frame")
+        (multiple-value-bind (text display cursor)
+            (terminal-ui--live-content
+             active-ui
+             (terminal-ui-status-started-at active-ui))
+          (declare (ignore cursor))
+          (let ((status-row
+                  (second (uiop:split-string text :separator '(#\Newline)))))
+            (test-assert (= (text-cell-width status-row) columns)
+                         "a styled status background spans the terminal width")
+            (test-assert (search "model gpt-5.6-sol · effort ultra · git chromatic"
+                                 status-row)
+                         "status metadata names the model, effort, and branch"))
+          (test-assert
+           (search (terminal-style-sequence ':status-model t) display)
+           "the styled status row uses its indexed neutral background")))))
+  (let* ((columns 96)
+         (terminal (make-instance 'recording-terminal :columns columns))
+         (ui (terminal-ui-create :terminal terminal)))
+    (with-terminal-ui (active-ui ui)
+      (terminal-ui-set-status
+       active-ui
+       "working"
+       :details (list (terminal-span ':status-model "model")))
+      (multiple-value-bind (text display cursor)
+          (terminal-ui--live-content
+           active-ui
+           (terminal-ui-status-started-at active-ui))
+        (declare (ignore display cursor))
+        (let ((status-row
+                (second (uiop:split-string text :separator '(#\Newline)))))
+          (test-assert (< (text-cell-width status-row) columns)
+                       "an unstyled status row omits invisible trailing padding")))))
+  (dolist (columns '(1 2 39 40 41))
+    (let* ((terminal (make-instance 'recording-terminal
+                                    :columns columns
+                                    :styled-p t))
+           (ui (terminal-ui-create :terminal terminal)))
+      (with-terminal-ui (active-ui ui)
+        (terminal-ui-set-status active-ui "working")
+        (multiple-value-bind (text display cursor)
+            (terminal-ui--live-content
+             active-ui
+             (terminal-ui-status-started-at active-ui))
+          (declare (ignore display))
+          (test-assert
+           (= (text-cell-width
+               (second (uiop:split-string text :separator '(#\Newline))))
+              columns)
+           (format nil "status rows fit a ~D-column terminal" columns))
+          (multiple-value-bind (cursor-row cursor-column pending-wrap)
+              (screen-position text :columns columns :end cursor)
+            (declare (ignore pending-wrap))
+            (test-assert
+             (and (= (terminal-ui-live-cursor-row active-ui) cursor-row)
+                  (= (live-region-cursor-column
+                      (terminal-ui-live-region active-ui))
+                     cursor-column))
+             (format nil
+                     "status geometry tracks the prompt at ~D columns"
+                     columns)))))))
   nil)
 
 (-> test-terminal-narrow-live-region () null)
@@ -1075,10 +1158,21 @@
             (format nil "~C[1;31m" +terminal-escape-character+))
    "the recovery gradient falls back to solid bold red")
   (test-assert
-   (and (terminal-indexed-color-environment-p "xterm-256color" nil)
-        (terminal-indexed-color-environment-p "xterm" "truecolor")
-        (not (terminal-indexed-color-environment-p "xterm" nil)))
-   "terminal capability detection recognizes indexed-color environments")
+   (and (string= (terminal-style-sequence :status-model t)
+                 (format nil "~C[1;96;48;5;236m"
+                         +terminal-escape-character+))
+        (string= (terminal-style-sequence :status-model nil)
+                 (format nil "~C[1;96;40m" +terminal-escape-character+)))
+   "status text keeps a base color over indexed and basic neutral backgrounds")
+  (test-assert
+   (let ((cl-colorist:*color-level* ':indexed))
+     (and (terminal-environment-indexed-color-p)
+          (terminal-environment-styling-p)))
+   "terminal capability detection accepts an indexed Colorist environment")
+  (test-assert
+   (let ((cl-colorist:*color-level* ':none))
+     (not (terminal-environment-styling-p)))
+   "terminal capability detection honors disabled Colorist presentation")
   (test-assert
    (terminal-styled-text-p (list (terminal-span :brand "autolith")
                                  (terminal-span :plain " ready")))
@@ -1173,6 +1267,7 @@
   (test-terminal-image-attachments)
   (test-terminal-input-decoding)
   (test-terminal-live-region-layout)
+  (test-terminal-status-bar)
   (test-terminal-narrow-live-region)
   (test-terminal-bounded-editor-repaint)
   (test-terminal-preview-rows)

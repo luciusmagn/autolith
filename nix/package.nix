@@ -5,15 +5,27 @@ let
   expectedSbclVersion = lib.removeSuffix "\n" (builtins.readFile "${src}/sbcl.version");
   expectedSbclSourceHash = lib.removeSuffix "\n" (builtins.readFile "${src}/sbcl-source.sha256");
 
+  clColorist = pkgs.sbcl.buildASDFSystem {
+    pname = "cl-colorist";
+    version = "0.1.0";
+    src = pkgs.fetchFromGitHub {
+      owner = "luciusmagn";
+      repo = "cl-colorist";
+      rev = "91041f50af55fa82f7f099b7be222055624b20af";
+      hash = "sha256-a6ITI24TPXsy6AkRbuZlu/0NC6w2QwDBS4NJIQ4hotc=";
+    };
+  };
+
   clinedi = pkgs.sbcl.buildASDFSystem {
     pname = "clinedi";
     version = "0.1.0";
     src = pkgs.fetchFromGitHub {
       owner = "luciusmagn";
       repo = "clinedi";
-      rev = "e6f115e5bf2f225f985cf7314ffcadbd938fcbaf";
-      hash = "sha256-SUFSTnT2PIuEIFkdnF6aJN6fg6+sqxEz89sfVNcu90o=";
+      rev = "ce2fbed15eeb5189b470bc1405f29ce3c2911f37";
+      hash = "sha256-NmfUxyb3nvUSHdVg+w+CbrhufRYKjP3yTzvbTwUzdMw=";
     };
+    lispLibs = [ clColorist ];
   };
 
   colorlispSource = pkgs.fetchFromGitHub {
@@ -173,6 +185,7 @@ let
       quri
       serapeum
       yason
+      clColorist
       clinedi
       clExecSandbox
       clifff
@@ -341,7 +354,7 @@ pkgs.writeShellApplication {
   };
 
   passthru = {
-    inherit autolithSystem clExecSandbox clifff clinedi colorlisp
+    inherit autolithSystem clColorist clExecSandbox clifff clinedi colorlisp
       colorlispNativeLibrary fffLibrary runtime sandboxHelper sbclSource
       sbclWorkers sexpStore;
   };
