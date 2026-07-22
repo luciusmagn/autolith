@@ -60,6 +60,11 @@ The launcher is small, stable, and outside the mutable agent image. It:
 - Starts the pristine recovery image when =--recovery= is present.
 - Forwards all remaining command-line arguments.
 - Detects fatal exits from the active image.
+- Treats a completed update-request exit as a normal handoff, never as damage
+  requiring recovery.
+- For a structurally selected packaged release, performs an explicitly requested
+  verified update only after the active interface has restored the terminal,
+  then restarts the newly selected release with the original arguments.
 - Passes available crash context to the recovery image.
 - Restores terminal state after an abnormal exit.
 
@@ -920,6 +925,41 @@ its separately validated pristine runtime and core.
 
 Autolith should not generate ad hoc Python or shell files unless a
 non-Lisp dependency genuinely requires them.
+
+** 11.1 Release Availability and Attended Updates
+
+Release availability is installation-aware. A source checkout performs no
+release request and shows no release notice. Nix installations may show cached
+availability as advice to update the providing flake or profile, but Autolith
+must never modify a Nix installation. A packaged release is update-capable only
+when its immutable release record, bundled source location, versioned directory,
+and selected installation link agree. Mutable environment variables alone must
+not grant update authority.
+
+Availability state is one private, atomically replaced, readable S-expression
+snapshot under the state root. It records the last attempt, last success, newest
+valid semantic release tag, and exact skipped tag. A malformed snapshot degrades
+to empty state. A failed request records its attempt while preserving the last
+valid result. The normal startup path must not wait for the network: it renders
+only previously cached availability, then starts a bounded background refresh
+when the cache is due. A refresh never installs software.
+
+A newer nondismissed packaged release is announced below the startup banner.
+Before ordinary interactive input, the user receives =Not now=, =Update now=,
+and =Skip this version= choices with the non-mutating choice first. Not now has
+no durable effect. Skip this version suppresses only that exact tag, and any
+newer tag remains eligible. Initial command or prefilled-input paths do not open
+the modal picker.
+
+Update now requests a distinct normal process status. The active application
+must quiesce its runtime resources and restore terminal state before returning
+that status. The stable source launcher must pass it through without crash
+recovery. The selected binary-release launcher then performs a fresh bounded
+availability check, calls only its own bundled installer, verifies the archive,
+atomically replaces the selected release link, preserves custom installation and
+command prefixes, and restarts with the original arguments. A release-service
+network failure is nonfatal and continues with the previous selected release.
+No background path may perform an unattended update.
 
 * 12. Terminal Interface
 

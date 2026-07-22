@@ -46,6 +46,13 @@ sequences, source editing, or subprocess protocols.
 Defines immutable runtime choices and paths. Configuration contains credential
 locations, never credential values.
 
+** =updates.lisp=
+
+Owns structurally validated source, Nix, and selected-release provenance; the
+atomic readable availability cache; exact-tag dismissal; and bounded background
+refresh. Startup reads only cached state. The background thread may publish a
+later result for a future start, but it has no installation authority.
+
 ** =sexp-store= and =readable-state.lisp=
 
 The pinned =sexp-store= dependency owns strict one-form reading, atomic private
@@ -297,6 +304,14 @@ source provenance and boot-probe each temporary image. The launcher repeats the
 versioned probes before use. An interactive missing-image path offers to run the
 bootstrap in place, while declining or a non-interactive launch uses source.
 =--from-source= bypasses the image probe and prompt entirely.
+The selected packaged-release launcher gives the active application validated
+release provenance. An accepted cached update restores the terminal and crosses
+back through a dedicated non-recovery status. Only then does that outer launcher
+fresh-check the release service, run its bundled verified installer against the
+derived installation root, and restart the newly selected launcher with the
+original arguments. Source starts cannot enter that path, and Nix starts receive
+advice only.
+
 Recovery reports
 sanitized crash and mutation context, creates private exact-commit checkouts,
 and boots retained cores without loading damaged active source. A failed

@@ -60,9 +60,27 @@ tree, fff, and the private command sandbox helper. It does not require a source
 checkout, Quicklisp, Cargo, or a compiler. Its first launch automatically builds
 machine-specific pristine recovery and active images from those bundled inputs.
 
-The release launcher checks the newest published host-built release at most once
-per day on an interactive start. It asks before installing a newer version and
-records versions that were already offered. =autolith --update= performs an explicit check.
+Autolith uses the installation layout, not a user-controlled environment marker
+alone, to distinguish source, Nix, and selected binary-release starts. Source
+checkouts do not contact the release service. Nix starts may show a cached
+advisory to update the flake or profile, but Autolith never changes a Nix
+installation itself.
+
+For a selected binary release, Autolith reads only the previous cached result
+during startup. A newer nondismissed release appears below the banner and offers
+=Not now=, =Update now=, and =Skip this version=. Not now affects only that
+startup. Skipping suppresses the exact tag, so a later release appears normally.
+After the interface is ready, a bounded background request refreshes the private
+readable cache when its last attempt is at least 20 hours old. Failure is
+nonfatal, preserves the last valid result, and never triggers an installation.
+
+Update now first restores the terminal and exits the active application through
+a dedicated non-recovery status. The stable outer release launcher then checks
+the newest tag again, invokes the installer bundled in the trusted selected
+release, verifies the downloaded archive against its SHA-256 record, atomically
+selects it, and restarts with the original arguments. The updater derives and
+preserves a custom installation root and does not replace the user's command
+link. =autolith --update= requests the same verified launcher path explicitly.
 Running the installer again is also an update and keeps older versioned releases
 available under the installation root.
 

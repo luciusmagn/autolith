@@ -116,3 +116,10 @@ Update the service implementation by pulling the source checkout, running
 =./script/bootstrap= when dependencies or the runtime change, and restarting
 both services. Release artifacts remain immutable across implementation
 updates.
+
+Installed clients use the =latest= redirect only for bounded availability
+requests and again after an attended update choice. The background request
+updates private cached metadata but cannot install anything. After the terminal
+interface exits cleanly for an accepted update, the selected release launcher
+uses its own bundled installer to fetch the archive and checksum from this
+service, verify them, atomically select the release, and restart.
