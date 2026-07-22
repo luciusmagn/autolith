@@ -23,8 +23,9 @@
   :documentation "The mask used by the specified unsigned 32-bit mixer.")
 
 (defvar *conversation-identifier-random-index-function*
-  (lambda (limit) (random limit))
-  "Return a random nonnegative integer below LIMIT for the first seed probe.")
+  (lambda (limit)
+    (random limit (sb-ext:seed-random-state t)))
+  "Return an operating-system-seeded index below LIMIT for the first probe.")
 
 (defvar *conversation-identifier-reservations*
   (make-hash-table :test #'equal)
