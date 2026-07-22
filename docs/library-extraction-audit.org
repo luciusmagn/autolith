@@ -89,11 +89,12 @@ net Autolith reduction: 874 source lines across the two worker files.
 
 * Later Candidate
 
-Autolith still contains general terminal presentation code in =src/layout.lisp=,
-=src/terminal-style.lisp=, =src/markdown.lisp=, =src/terminal.lisp=,
-=src/stream-terminal.lisp=, and =src/terminal-ui.lisp=. This should move in
-coherent slices to Clinedi rather than create another terminal library. The
-likely slices are cell-aware layout and styled spans, optional terminal
+Autolith still contains higher-level terminal presentation code in
+=src/layout.lisp=, =src/terminal-style.lisp=, =src/markdown.lisp=,
+=src/terminal.lisp=, =src/stream-terminal.lisp=, and =src/terminal-ui.lisp=.
+Low-level color capability detection, style encoding, and ANSI parsing now live
+in the focused =cl-colorist= library shared with Clinedi. Remaining coherent
+Clinedi candidates are cell-aware layout and semantic spans, optional terminal
 Markdown rendering, and a transcript plus live-editor session component.
 
 * Keep In Autolith
@@ -134,6 +135,8 @@ Each extraction must satisfy all of the following:
 3. Implement =sbcl-workers= and replace the in-tree worker runtime and image
    machinery.
 4. Extend =self.source= to inspect pinned dependency source where required.
+5. Implement =cl-colorist= and replace duplicated ANSI color encoding in
+   Autolith and Clinedi.
 
 * Remaining Sequence
 

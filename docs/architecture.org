@@ -204,8 +204,10 @@ elapsed time and identifies how long no provider progress has arrived after a
 bounded idle interval. Clinedi owns Unicode-aware editor state, input decoding,
 screen geometry, candidate navigation and arrangement,
 and the scrollback-safe live-region mechanics. Autolith owns candidate data,
-command filtering, semantic styling, terminal mode, and application event
-policy. Kernel TTY rows and columns take precedence over environment hints.
+command filtering, its semantic palette, terminal mode, and application event
+policy. cl-colorist owns ANSI color capability detection, basic and indexed
+style encoding, and ANSI control-sequence parsing shared with Clinedi. Kernel
+TTY rows and columns take precedence over environment hints.
 Long drafts use a cursor-following viewport capped below the terminal height,
 and each replacement is emitted as one hidden-cursor update.
 The startup identity uses a
@@ -214,7 +216,10 @@ while a process started by recovery uses a red gradient with bold basic-red
 fallback. One leading blank row and a divider separate its identity from model
 and workspace metadata. Internal conversation identifiers are omitted. Other
 semantic styles resolve to basic terminal palette colors and emphasis. Untrusted
-text is sanitized before trusted styling controls are added around it. Ctrl-C at
+text is sanitized before trusted styling controls are added around it. During
+an active turn, a neutral full-width status background carries the current
+model, effort, and enclosing Git branch. The branch is captured at activity
+transitions and never queried by the animation repaint loop. Ctrl-C at
 an empty prompt exits and leaves a paste-ready resume command in scrollback only
 when the active conversation is durable.
 

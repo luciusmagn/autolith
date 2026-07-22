@@ -31,7 +31,8 @@ and the user can grant commands full access for a session.
 * Highlights
 
 - A responsive primary-screen terminal interface with ordinary scrollback.
-- Multiline editing and reusable completion widgets provided by Clinedi.
+- Multiline editing and reusable completion widgets from Clinedi, with shared
+  terminal styling from cl-colorist.
 - Input remains editable while model responses and tools are running.
 - Local PNG, JPEG, GIF, and WebP input with numbered composer labels.
 - Persistent, opt-in provider-visible reasoning summaries with =/trace on=.
