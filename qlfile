@@ -11,7 +11,7 @@ ql yason 2026-01-01
 
 git clinedi https://github.com/luciusmagn/clinedi.git :ref e6f115e5bf2f225f985cf7314ffcadbd938fcbaf
 git cl-exec-sandbox https://github.com/luciusmagn/cl-exec-sandbox.git :ref 8c47a1dadb64eba1629742ef6b43789ed7d73b36
-git clifff https://github.com/luciusmagn/clifff.git :ref a57058ba3ffd222af57513e412a1d01508b4d1b3
+git clifff https://github.com/luciusmagn/clifff.git :ref 29c19b6bdb1d19e1ceb3ed5279eed5b81b0872d8
 git colorlisp https://github.com/luciusmagn/colorlisp.git :ref dc0666fdfa79c7377067f42b0524e026650f0afa
 git sexp-store https://github.com/luciusmagn/sexp-store.git :ref 92a2ad458e92ecf4526ccb9bb387f89283c4dcc3
 git sbcl-workers https://github.com/luciusmagn/sbcl-workers.git :ref fff2bc4bbeb8eec93a963c5ad1f7af85bbf7a6a3

@@ -146,6 +146,27 @@
                                               (tool-result-content result))))
              "search.multi-content honors separate file constraints"))
              (let* ((worker (search-tool-engine files-tool))
+                    (watched-process (worker-process worker))
+                    (watched-pid (uiop:process-info-pid watched-process)))
+               (sleep 0.25)
+               (search-tests--write-file
+                (merge-pathnames "src/model-selection.lisp" workspace-root)
+                (format nil
+                        "first context line~%AUTOLITH_FFF_WATCHED~%last context line~%"))
+               (sleep 0.5)
+               (let ((result (search-tests--call registry context
+                                                 "search" "content"
+                                                 "query" "AUTOLITH_FFF_WATCHED")))
+                 (test-assert
+                  (and (tool-result-success-p result)
+                       (search "src/model-selection.lisp"
+                               (tool-result-content result))
+                       (eq watched-process (worker-process worker))
+                       (uiop:process-alive-p watched-process)
+                       (= watched-pid
+                          (uiop:process-info-pid (worker-process worker))))
+                  "a watched file update keeps the same native helper alive")))
+             (let* ((worker (search-tool-engine files-tool))
                     (failed-process (worker-process worker))
                     (failed-pid (uiop:process-info-pid failed-process))
                     (frecency-marker
