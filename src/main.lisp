@@ -178,7 +178,62 @@
        (format nil "~%Autolith executes model-generated code with your user ~
                     privileges.~%Sandboxing is no substitute for human oversight")))
      (application--command-tip-spans
-      (application--startup-command-entry)))))
+     (application--startup-command-entry)))))
+
+(-> application--update-notice (application) (option list))
+(defun application--update-notice (application)
+  "Return the cached update notice appropriate to APPLICATION's installation."
+  (let ((availability (application-update-availability application)))
+    (when availability
+      (let ((current-version +autolith-version+)
+            (latest-version (subseq (update-availability-tag availability) 1)))
+        (list
+         (terminal-span
+          ':notice
+          (format nil "Update available: Autolith ~A -> ~A.~%"
+                  current-version latest-version))
+         (terminal-span
+          ':dim
+          (if (eq (update-availability-method availability) ':nix)
+              "Installed through Nix. Update the flake or profile that provides Autolith."
+              "Choose whether to install it before continuing.")))))))
+
+(-> application--update-choice-items () list)
+(defun application--update-choice-items ()
+  "Return the explicit user choices for a packaged release update."
+  '((:name "Not now" :argument nil
+     :description "continue with the installed release")
+    (:name "Update now" :argument nil
+     :description "install the verified release and restart")
+    (:name "Skip this version" :argument nil
+     :description "hide this exact release until a newer one appears")))
+
+(-> application--offer-startup-update (application) null)
+(defun application--offer-startup-update (application)
+  "Offer an attended update for APPLICATION's validated packaged release."
+  (let ((availability (application-update-availability application)))
+    (when (and availability
+               (eq (update-availability-method availability) ':release))
+      (let* ((tag (update-availability-tag availability))
+             (choice
+               (terminal-ui-select
+                (application-ui application)
+                :title (format nil "Autolith ~A is available" (subseq tag 1))
+                :items (application--update-choice-items)
+                :resize-callback #'application-pending-terminal-size)))
+        (cond
+          ((string= (or choice "") "Update now")
+           (error 'update-requested
+                  :message (format nil "Update to Autolith ~A." (subseq tag 1))
+                  :tag tag))
+          ((string= (or choice "") "Skip this version")
+           (update-state-dismiss (application-configuration application) tag)
+           (setf (application-update-availability application) nil)
+           (application-present
+            application
+            (list (terminal-span ':dim
+                                 (format nil "Skipped Autolith ~A." (subseq tag 1))))))))))
+  nil)
 
 (-> application-handle-expected-error (application autolith-error) null)
 (defun application-handle-expected-error (application condition)
@@ -282,6 +337,18 @@
                   (progn
                     (application-present application
                                          (application-banner application))
+                    (let ((update-notice
+                            (application--update-notice application)))
+                      (when update-notice
+                        (application-present application update-notice)))
+                    (when (and (null initial-command) (null initial-input))
+                      (application--offer-startup-update application))
+                    (let ((provenance
+                            (application-installation-provenance application)))
+                      (when provenance
+                        (update-check-start
+                         (application-configuration application)
+                         provenance)))
                     (dolist (failure
                              (application-overlay-failures application))
                       (application-present
@@ -353,6 +420,9 @@
 
 (defconstant +main-rollback-recovery-status+ 75
   "The process status asking the stable launcher to start a selected rollback.")
+
+(defconstant +main-update-request-status+ 76
+  "The process status asking a packaged outer launcher to perform an update.")
 
 (-> main-usage () string)
 (defun main-usage ()
@@ -493,6 +563,11 @@
                       "Autolith is rolling back to retained generation ~A.~%"
                       (rollback-requested-generation-id condition))
               (uiop:quit +main-rollback-recovery-status+))
+            (update-requested (condition)
+              (format *error-output*
+                      "Autolith will update to ~A after restoring the terminal.~%"
+                      (subseq (update-requested-tag condition) 1))
+              (uiop:quit +main-update-request-status+))
             (fatal-control-path-error (condition)
               (format *error-output*
                       "Autolith entered recovery after a fatal error. Capsule: ~A~%"

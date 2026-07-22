@@ -425,6 +425,97 @@
                  "an empty exploratory word set retains a safe fallback"))
   nil)
 
+(-> test-startup-update-choice () null)
+(defun test-startup-update-choice ()
+  "Test cached update notices, attended release choices, and Nix advice."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (tag "v99.0.0")
+         (release-provenance
+           (make-instance 'installation-provenance
+                          :method ':release
+                          :current-tag (format nil "v~A" +autolith-version+)))
+         (release-availability
+           (make-instance 'update-availability :tag tag :method ':release)))
+    (labels ((make-application (events)
+               "Return a release application scripted with EVENTS."
+               (make-instance
+                'application
+                :configuration configuration
+                :installation-provenance release-provenance
+                :update-availability release-availability
+                :ui (terminal-ui-create
+                     :terminal (make-instance 'scripted-terminal
+                                              :columns 72
+                                              :events events)))))
+      (unwind-protect
+           (progn
+             (let* ((application (make-application (list :submit)))
+                    (ui (application-ui application))
+                    (notice (application--update-notice application))
+                    (text (format nil "~{~A~}"
+                                  (mapcar #'terminal-span-text notice))))
+               (test-assert
+                (and (search "Update available: Autolith" text)
+                     (search "Choose whether to install" text))
+                "a packaged release receives the cached banner warning")
+               (with-terminal-ui (active-ui ui)
+                 (declare (ignore active-ui))
+                 (application--offer-startup-update application))
+               (test-assert
+                (application-update-availability application)
+                "Not now continues without dismissing the cached version"))
+
+             (let* ((application
+                      (make-application (list :history-next :submit)))
+                    (ui (application-ui application)))
+               (test-assert
+                (handler-case
+                    (with-terminal-ui (active-ui ui)
+                      (declare (ignore active-ui))
+                      (application--offer-startup-update application)
+                      nil)
+                  (update-requested (condition)
+                    (string= (update-requested-tag condition) tag)))
+                "Update now requests launcher handoff only after UI unwind")
+               (test-assert (not (terminal-started-p
+                                  (terminal-ui-terminal ui)))
+                            "update handoff restores the terminal first"))
+
+             (let* ((application
+                      (make-application
+                       (list :history-next :history-next :submit)))
+                    (ui (application-ui application)))
+               (with-terminal-ui (active-ui ui)
+                 (declare (ignore active-ui))
+                 (application--offer-startup-update application))
+               (test-assert
+                (and (null (application-update-availability application))
+                     (string= (update-state-dismissed-tag
+                               (update-state-load configuration))
+                              tag))
+                "Skip this version atomically dismisses only the selected tag"))
+
+             (let* ((availability
+                      (make-instance 'update-availability
+                                     :tag tag
+                                     :method ':nix))
+                    (application
+                      (make-instance 'application
+                                     :configuration configuration
+                                     :update-availability availability))
+                    (notice (application--update-notice application))
+                    (text (format nil "~{~A~}"
+                                  (mapcar #'terminal-span-text notice))))
+               (test-assert
+                (and (search "Installed through Nix" text)
+                     (search "flake or profile" text))
+                "Nix receives package-manager advice without an update action")))
+        (uiop:delete-directory-tree root
+                                    :validate t
+                                    :if-does-not-exist :ignore))))
+  nil)
+
 (-> test-application-status-details () null)
 (defun test-application-status-details ()
   "Test model, effort, and enclosing Git branch activity metadata."
@@ -2601,6 +2692,7 @@
   "Run focused application presentation tests and return true on success."
   (test-application-command-tips)
   (test-application-banner-version)
+  (test-startup-update-choice)
   (test-thinking-label-selection)
   (test-application-status-details)
   (test-reasoning-trace-command)

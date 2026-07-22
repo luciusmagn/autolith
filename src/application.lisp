@@ -55,6 +55,18 @@
     :accessor application-compact-view-p
     :type boolean
     :documentation "Whether successful routine tool results are hidden.")
+   (installation-provenance
+    :initarg :installation-provenance
+    :initform nil
+    :accessor application-installation-provenance
+    :type (option installation-provenance)
+    :documentation "The structurally validated installation method for this run.")
+   (update-availability
+    :initarg :update-availability
+    :initform nil
+    :accessor application-update-availability
+    :type (option update-availability)
+    :documentation "The newer nondismissed release cached before startup.")
    (permission-state
     :initarg :permission-state
     :initform (make-instance 'permission-state)
@@ -348,6 +360,10 @@ completion or help output."
              (application--configuration-for-conversation
               preferred-configuration
               conversation))
+           (installation-provenance
+             (installation-provenance-detect configuration))
+           (update-availability
+             (update-availability-current configuration installation-provenance))
            (provider (provider-create
                       configuration
                       :reasoning-summaries-p reasoning-traces-p))
@@ -372,7 +388,11 @@ completion or help output."
                                        :ui ui
                                        :permission-state permission-state
                                        :reasoning-traces-p reasoning-traces-p
-                                       :compact-view-p compact-view-p)))
+                                       :compact-view-p compact-view-p
+                                       :installation-provenance
+                                       installation-provenance
+                                       :update-availability
+                                       update-availability)))
       (declare (ignore user-init-pathname))
       (setf (application-overlay-failures application) overlay-failures)
       (application--load-goal application)
@@ -434,6 +454,10 @@ completion or help output."
            (application--configuration-for-conversation
             prepared-configuration
             conversation))
+         (installation-provenance
+           (installation-provenance-detect configuration))
+         (update-availability
+           (update-availability-current configuration installation-provenance))
          (provider (provider-create
                     configuration
                     :reasoning-summaries-p reasoning-traces-p))
@@ -466,6 +490,9 @@ completion or help output."
           (application-input-controller application) nil
           (application-reasoning-traces-p application) reasoning-traces-p
           (application-compact-view-p application) compact-view-p
+          (application-installation-provenance application)
+          installation-provenance
+          (application-update-availability application) update-availability
           (application-rendered-sequence application)
           (if (and recovery-rendered-sequence
                    (string= (conversation-identifier conversation)
