@@ -61,7 +61,7 @@
 (defun release-script-tests--fixture-curl ()
   "Return a curl substitute serving files from the test fixture root."
   (format nil
-          "#!/bin/sh~%set -eu~%output=~%write_out=~%url=~%while [ \"$#\" -gt 0 ]; do~%  case $1 in~%    --output) output=$2; shift 2 ;;~%    --write-out) write_out=$2; shift 2 ;;~%    --retry|--proto|--max-time) shift 2 ;;~%    --*) shift ;;~%    *) url=$1; shift ;;~%  esac~%done~%case $url in~%  */latest)~%    [ -n \"$write_out\" ]~%    printf \"%s\" https://example.invalid/releases/v0.11.0~%    exit 0~%    ;;~%esac~%cp \"$AUTOLITH_TEST_RELEASE_FIXTURE/${url##*/}\" \"$output\"~%"))
+          "#!/bin/sh~%set -eu~%output=~%write_out=~%url=~%while [ \"$#\" -gt 0 ]; do~%  case $1 in~%    --output) output=$2; shift 2 ;;~%    --write-out) write_out=$2; shift 2 ;;~%    --retry|--proto|--max-time) shift 2 ;;~%    --*) shift ;;~%    *) url=$1; shift ;;~%  esac~%done~%case $url in~%  */latest)~%    [ -n \"$write_out\" ]~%    printf \"%s\" \"https://example.invalid/releases/${AUTOLITH_TEST_LATEST_TAG:-v0.11.0}\"~%    exit 0~%    ;;~%esac~%cp \"$AUTOLITH_TEST_RELEASE_FIXTURE/${url##*/}\" \"$output\"~%"))
 
 (-> release-script-tests--readlink (pathname) string)
 (defun release-script-tests--readlink (pathname)
@@ -89,6 +89,7 @@
   "Create a minimal packaged release fixture below RELEASE-ROOT."
   (dolist (relative '("libexec/autolith/.qlot/setup.lisp"
                       "libexec/autolith/autolith.asd"
+                      "libexec/autolith/script/install"
                       "libexec/sbcl-source/version.lisp-expr"
                       "lib/libfff_c.so"
                       "lib/libcolorlisp-tree-sitter.so"
@@ -102,6 +103,11 @@
     (uiop:copy-file (merge-pathnames "bin/autolith-release" source-root)
                     launcher)
     (release-script-tests--chmod "755" launcher))
+  (uiop:copy-file
+   (merge-pathnames "script/install" source-root)
+   (merge-pathnames "libexec/autolith/script/install" release-root))
+  (release-script-tests--chmod
+   "755" (merge-pathnames "libexec/autolith/script/install" release-root))
   (release-script-tests--chmod
    "755" (merge-pathnames "runtime/bin/sbcl" release-root))
   (release-script-tests--chmod
@@ -198,6 +204,9 @@ if [ \"$probe\" = true ]; then
   exit 0
 fi
 printf '%s %s\\n' \"$mode\" \"$*\"
+case \" $* \" in
+  *\" fixture-update \"*) exit 76 ;;
+esac
 ")
     (release-script-tests--write-file
      bootstrap
@@ -225,6 +234,15 @@ printf '(:ACTIVE-IMAGE :VERSION 1\\n)\\n' > \"$active/manifest.sexp\"
             (not (search "fast startup image" source-output))
             (not (search "--from-source" (uiop:read-file-string log))))
        "--from-source quietly bypasses images and is not forwarded")
+      (multiple-value-bind (output error-output status)
+          (release-script-tests--run
+           (list (namestring launcher) "--from-source" "fixture-update")
+           :environment environment
+           :ignore-error-status t
+           :output nil)
+        (declare (ignore output error-output))
+        (test-assert (= status 76)
+                     "update handoff bypasses crash recovery unchanged"))
       (release-script-tests--write-file log "")
       (let* ((command
                (format nil
@@ -343,6 +361,7 @@ printf '(:ACTIVE-IMAGE :VERSION 1\\n)\\n' > \"$active/manifest.sexp\"
   "Exercise versioned installer publication, repeatability, and latest lookup."
   (let* ((version +release-script-tests-version+)
          (tag (format nil "v~A" version))
+         (next-tag "v0.12.0")
          (release-name (format nil "autolith-~A-x86_64-linux" tag))
          (release-root
            (merge-pathnames (format nil "autolith-v~A/" version) root))
@@ -416,6 +435,39 @@ printf '(:ACTIVE-IMAGE :VERSION 1\\n)\\n' > \"$active/manifest.sexp\"
        (list (namestring installer) "--version" tag)
        :environment base-environment
        :output nil)
+      (let ((next-target (merge-pathnames (format nil "releases/~A/" next-tag)
+                                           install-root)))
+        (release-script-tests--run
+         (list "cp" "-a"
+               (namestring (merge-pathnames (format nil "releases/~A/" tag)
+                                             install-root))
+               (namestring next-target))
+         :output nil)
+        (release-script-tests--run
+         (list "chmod" "-R" "u+w" (namestring next-target))
+         :output nil)
+        (release-script-tests--write-file
+         (merge-pathnames "RELEASE" next-target)
+         (format nil "version=~A~%tag=~A~%commit=~A~%"
+                 (subseq next-tag 1)
+                 next-tag
+                 +release-script-tests-commit+))
+        (release-script-tests--run
+         (list (namestring installer)
+               "--without-command-link" "--version" next-tag)
+         :environment base-environment
+         :output nil))
+      (test-assert
+       (string= (release-script-tests--readlink
+                 (merge-pathnames "current" install-root))
+                (format nil "releases/~A" next-tag))
+       "the installer replaces an existing selected release link")
+      (test-assert
+       (string= (release-script-tests--readlink
+                 (merge-pathnames "autolith" bin-directory))
+                (namestring (merge-pathnames "current/bin/autolith"
+                                             install-root)))
+       "no-link publication preserves the existing command prefix")
       (release-script-tests--run
        (list (namestring installer))
        :environment
@@ -425,6 +477,141 @@ printf '(:ACTIVE-IMAGE :VERSION 1\\n)\\n' > \"$active/manifest.sexp\"
         '("AUTOLITH_RELEASE_BASE_URL=https://example.invalid/releases"
           "AUTOLITH_RELEASE_LATEST_URL=https://example.invalid/releases/latest"))
        :output nil)))
+  nil)
+
+(-> release-script-tests--update-handoff (pathname pathname) null)
+(defun release-script-tests--update-handoff (source-root root)
+  "Exercise clean update handoff and preservation of a custom installation prefix."
+  (let* ((tag (format nil "v~A" +release-script-tests-version+))
+         (next-tag "v0.12.0")
+         (fixture-root (merge-pathnames "update-handoff/" root))
+         (install-root (merge-pathnames "custom-installation/" fixture-root))
+         (release-root (merge-pathnames (format nil "releases/~A/" tag)
+                                        install-root))
+         (packaged-source (merge-pathnames "libexec/autolith/" release-root))
+         (inner-launcher (merge-pathnames "bin/autolith" packaged-source))
+         (bundled-installer (merge-pathnames "script/install" packaged-source))
+         (launcher (merge-pathnames "bin/autolith" release-root))
+         (bin-directory (merge-pathnames "custom-bin/" fixture-root))
+         (command-link (merge-pathnames "autolith" bin-directory))
+         (data-home (merge-pathnames "data/" fixture-root))
+         (state-home (merge-pathnames "state/" fixture-root))
+         (fixture-bin (merge-pathnames "fixture-bin/" fixture-root))
+         (curl (merge-pathnames "curl" fixture-bin))
+         (updated-launcher (merge-pathnames "updated-autolith" fixture-root))
+         (log (merge-pathnames "handoff.log" fixture-root)))
+    (release-script-tests--make-release source-root release-root)
+    (uiop:ensure-all-directories-exist
+     (list bin-directory data-home state-home fixture-bin))
+    (uiop:run-program
+     (list "ln" "-s" (format nil "releases/~A" tag)
+           (namestring (merge-pathnames "current" install-root))))
+    (uiop:run-program
+     (list "ln" "-s" (namestring (merge-pathnames "current/bin/autolith"
+                                                   install-root))
+           (namestring command-link)))
+    (release-script-tests--write-file
+     inner-launcher
+     "#!/bin/sh
+set -eu
+printf 'INNER_KIND=%s\\n' \"${AUTOLITH_INSTALLATION_KIND:-}\" >> \"$AUTOLITH_TEST_LOG\"
+printf 'INNER_ROOT=%s\\n' \"${AUTOLITH_RELEASE_ROOT:-}\" >> \"$AUTOLITH_TEST_LOG\"
+printf 'INNER_ARGS=%s\\n' \"$*\" >> \"$AUTOLITH_TEST_LOG\"
+exit 76
+")
+    (release-script-tests--write-file
+     updated-launcher
+     "#!/bin/sh
+set -eu
+printf 'UPDATED_ARGS=%s\\n' \"$*\" >> \"$AUTOLITH_TEST_LOG\"
+")
+    (release-script-tests--write-file
+     bundled-installer
+     "#!/bin/sh
+set -eu
+without=false
+requested=
+while [ \"$#\" -gt 0 ]; do
+  case $1 in
+    --without-command-link) without=true; shift ;;
+    --version) requested=$2; shift 2 ;;
+    *) exit 91 ;;
+  esac
+done
+[ \"$without\" = true ]
+[ \"$requested\" = \"$AUTOLITH_TEST_LATEST_TAG\" ]
+printf 'INSTALL_ROOT=%s\\n' \"$AUTOLITH_INSTALL_ROOT\" >> \"$AUTOLITH_TEST_LOG\"
+printf 'INSTALL_ARGS=without-command-link,%s\\n' \"$requested\" >> \"$AUTOLITH_TEST_LOG\"
+target=$AUTOLITH_INSTALL_ROOT/releases/$requested
+mkdir -p \"$target/bin\"
+cp \"$AUTOLITH_TEST_UPDATED_LAUNCHER\" \"$target/bin/autolith\"
+chmod 755 \"$target/bin/autolith\"
+temporary=$AUTOLITH_INSTALL_ROOT/.current.$$
+ln -s \"releases/$requested\" \"$temporary\"
+mv -Tf \"$temporary\" \"$AUTOLITH_INSTALL_ROOT/current\"
+")
+    (release-script-tests--write-file
+     curl (release-script-tests--fixture-curl))
+    (dolist (pathname (list inner-launcher bundled-installer updated-launcher
+                            curl))
+      (release-script-tests--chmod "755" pathname))
+    (let* ((active-root (merge-pathnames "autolith/active/" data-home))
+           (recovery-root (merge-pathnames "autolith/recovery/" data-home)))
+      (dolist (pathname (list (merge-pathnames "autolith-active.core" active-root)
+                              (merge-pathnames "autolith-recovery.core"
+                                               recovery-root)))
+        (release-script-tests--write-file pathname "core"))
+      (release-script-tests--write-file
+       (merge-pathnames "manifest.sexp" active-root)
+       "(:ACTIVE-IMAGE :VERSION 1)\n")
+      (release-script-tests--write-file
+       (merge-pathnames "manifest.sexp" recovery-root)
+       "(:RECOVERY-IMAGE :VERSION 2)\n")
+      (release-script-tests--write-file
+       (merge-pathnames "autolith/release-images" data-home)
+       (format nil "~A~%" tag)))
+    (let ((path (format nil "~A:~A"
+                        (string-right-trim "/" (namestring fixture-bin))
+                        (or (uiop:getenv "PATH") ""))))
+      (release-script-tests--run
+       (list (namestring launcher) "resume" "fixture-conversation")
+       :environment
+       (list (format nil "PATH=~A" path)
+             (format nil "XDG_DATA_HOME=~A" (namestring data-home))
+             (format nil "XDG_STATE_HOME=~A" (namestring state-home))
+             (format nil "AUTOLITH_TEST_LOG=~A" (namestring log))
+             (format nil "AUTOLITH_TEST_UPDATED_LAUNCHER=~A"
+                     (namestring updated-launcher))
+             (format nil "AUTOLITH_TEST_LATEST_TAG=~A" next-tag)
+             "AUTOLITH_RELEASE_LATEST_URL=https://example.invalid/releases/latest")
+       :output nil))
+    (let ((events (uiop:read-file-string log)))
+      (test-assert
+       (and (search "INNER_KIND=release" events)
+            (search (format nil "INNER_ROOT=~A"
+                            (string-right-trim "/" (namestring release-root)))
+                    events))
+       "only the selected packaged topology receives release provenance")
+      (test-assert
+       (and (search (format nil "INSTALL_ROOT=~A"
+                            (string-right-trim "/" (namestring install-root)))
+                    events)
+            (search (format nil "INSTALL_ARGS=without-command-link,~A" next-tag)
+                    events))
+       "the bundled installer receives the derived custom root and no-link mode")
+      (test-assert
+       (and (search "INNER_ARGS=resume fixture-conversation" events)
+            (search "UPDATED_ARGS=resume fixture-conversation" events))
+       "the restarted release receives the original command arguments"))
+    (test-assert
+     (string= (release-script-tests--readlink command-link)
+              (namestring (merge-pathnames "current/bin/autolith" install-root)))
+     "a custom command prefix remains untouched across an update")
+    (test-assert
+     (string= (release-script-tests--readlink
+               (merge-pathnames "current" install-root))
+              (format nil "releases/~A" next-tag))
+     "the verified updater atomically selects the new release"))
   nil)
 
 (-> test-release-scripts () null)
@@ -441,6 +628,7 @@ printf '(:ACTIVE-IMAGE :VERSION 1\\n)\\n' > \"$active/manifest.sexp\"
            (release-script-tests--syntax source-root)
            (release-script-tests--source-launcher source-root root)
            (release-script-tests--launcher source-root root)
+           (release-script-tests--update-handoff source-root root)
            (release-script-tests--installer source-root root))
       (release-script-tests--cleanup root)))
   nil)

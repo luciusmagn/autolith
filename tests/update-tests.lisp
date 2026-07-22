@@ -48,6 +48,12 @@
                           :release-root (namestring root))))
              (test-assert (eq (installation-provenance-method source) ':source)
                           "a release environment marker alone remains source"))
+           (test-assert
+            (and (installation--nix-store-directory-p
+                  #p"/nix/store/0123456789-autolith/")
+                 (not (installation--nix-store-directory-p
+                       #p"/tmp/nix/store/0123456789-autolith/")))
+            "Nix provenance accepts only concrete paths below the Nix store")
 
            (ensure-directories-exist (merge-pathnames ".keep" packaged-source))
            (update-tests--write-release-record

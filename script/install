@@ -10,6 +10,7 @@ install_root=${AUTOLITH_INSTALL_ROOT:-$data_home/autolith/installation}
 bin_directory=${AUTOLITH_BIN_DIR:-$home/.local/bin}
 requested_tag=
 temporary_root=
+publish_command_p=true
 
 fail()
 {
@@ -61,11 +62,13 @@ publish_links()
   if [ -d "$install_root/current" ] && [ ! -L "$install_root/current" ]; then
     fail "$install_root/current is a directory, not an installation link."
   fi
-  mkdir -p -- "$bin_directory"
   ln -s "releases/$publish_tag" "$current_temporary"
-  mv -f -- "$current_temporary" "$install_root/current"
-  ln -s "$install_root/current/bin/autolith" "$command_temporary"
-  mv -f -- "$command_temporary" "$bin_directory/autolith"
+  mv -Tf -- "$current_temporary" "$install_root/current"
+  if [ "$publish_command_p" = true ]; then
+    mkdir -p -- "$bin_directory"
+    ln -s "$install_root/current/bin/autolith" "$command_temporary"
+    mv -f -- "$command_temporary" "$bin_directory/autolith"
+  fi
 }
 
 while [ "$#" -gt 0 ]; do
@@ -75,9 +78,13 @@ while [ "$#" -gt 0 ]; do
       requested_tag=$2
       shift 2
       ;;
+    --without-command-link)
+      publish_command_p=false
+      shift
+      ;;
     --help)
       printf '%s\n' \
-        'usage: install [--version vMAJOR.MINOR.PATCH]' \
+        'usage: install [--version vMAJOR.MINOR.PATCH] [--without-command-link]' \
         '' \
         'Install or update the Autolith Linux x86-64 binary release.'
       exit 0
@@ -161,11 +168,15 @@ else
   printf 'Installed Autolith %s.\n' "${requested_tag#v}"
 fi
 
-case :${PATH:-}: in
-  *:"$bin_directory":*) ;;
-  *)
-    printf 'Add %s to PATH to run Autolith:\n' "$bin_directory"
-    printf '  export PATH="%s:$PATH"\n' "$bin_directory"
-    ;;
-esac
-printf 'Run: autolith\n'
+if [ "$publish_command_p" = true ]; then
+  case :${PATH:-}: in
+    *:"$bin_directory":*) ;;
+    *)
+      printf 'Add %s to PATH to run Autolith:\n' "$bin_directory"
+      printf '  export PATH="%s:$PATH"\n' "$bin_directory"
+      ;;
+  esac
+fi
+if [ "$publish_command_p" = true ]; then
+  printf 'Run: autolith\n'
+fi

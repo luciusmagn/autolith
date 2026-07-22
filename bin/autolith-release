@@ -2,9 +2,7 @@
 
 set -euo pipefail
 
-installer_url=${AUTOLITH_INSTALLER_URL:-https://sh.lambda-symbolics.com/autolith}
 release_latest_url=${AUTOLITH_RELEASE_LATEST_URL:-https://sh.lambda-symbolics.com/releases/latest}
-update_interval=${AUTOLITH_UPDATE_INTERVAL_SECONDS:-86400}
 launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
 release_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
 release_record=$release_root/RELEASE
@@ -17,7 +15,6 @@ fff_library=$release_root/lib/libfff_c.so
 colorlisp_library=$release_root/lib/libcolorlisp-tree-sitter.so
 home=${HOME:-}
 data_home=${XDG_DATA_HOME:-$home/.local/share}
-state_home=${XDG_STATE_HOME:-$home/.local/state}
 active_core=$data_home/autolith/active/autolith-active.core
 recovery_core=$data_home/autolith/recovery/autolith-recovery.core
 image_marker=$data_home/autolith/release-images
@@ -76,66 +73,45 @@ release_latest_tag()
 release_update()
 {
   local requested_tag=${1:-}
-  local install_root
   local updated_launcher
 
   if [[ -z $requested_tag ]]; then
-    requested_tag=$(release_latest_tag) ||
-      fail "the latest release tag could not be discovered."
+    if ! requested_tag=$(release_latest_tag); then
+      printf 'Autolith could not check the latest release. Continuing with %s.\n' \
+        "$release_version" >&2
+      release_restart
+    fi
   fi
   release_tag_valid_p "$requested_tag" ||
     fail "the requested release tag is malformed."
-  curl --fail --silent --show-error --location \
-    --proto '=https' --tlsv1.2 "$installer_url" |
-    sh -s -- --version "$requested_tag"
+  if ! semantic_version_newer_p "${requested_tag#v}" "$release_version"; then
+    printf 'Autolith %s is already the newest release.\n' "$release_version" >&2
+    release_restart
+  fi
+  if ! AUTOLITH_INSTALL_ROOT="$install_root" \
+       "$source_root/script/install" \
+       --without-command-link --version "$requested_tag"; then
+    printf 'Autolith could not install %s. Continuing with %s.\n' \
+      "${requested_tag#v}" "$release_version" >&2
+    release_restart
+  fi
 
-  install_root=$(CDPATH= cd -- "$release_root/../.." && pwd)
   updated_launcher=$install_root/current/bin/autolith
   [[ -x $updated_launcher ]] ||
     fail "the updater did not publish a runnable release."
   export AUTOLITH_NO_UPDATE_CHECK=1
+  export AUTOLITH_SUPPRESS_UPDATE_OFFER=1
   exec "$updated_launcher" "${remaining_arguments[@]}"
 }
 
-release_update_check()
+release_restart()
 {
-  local check_root=$state_home/autolith/update
-  local checked_path=$check_root/checked-at
-  local offered_path=$check_root/offered-tag
-  local now checked_at=0 offered_tag= latest_tag latest_version answer
+  local launcher=$install_root/current/bin/autolith
 
-  [[ ${AUTOLITH_NO_UPDATE_CHECK:-0} != 1 ]] || return 0
-  [[ -t 0 && -t 2 && -r /dev/tty && -w /dev/tty ]] || return 0
-  [[ $update_interval =~ ^[0-9]+$ ]] || return 0
-  now=$(date +%s)
-  if [[ -r $checked_path ]]; then
-    IFS= read -r checked_at < "$checked_path" || checked_at=0
-  fi
-  if [[ $checked_at =~ ^[0-9]+$ ]] &&
-     ((now - checked_at < update_interval)); then
-    return 0
-  fi
-
-  mkdir -p -- "$check_root"
-  chmod 700 -- "$check_root"
-  printf '%s\n' "$now" > "$checked_path"
-  latest_tag=$(release_latest_tag) || return 0
-  latest_version=${latest_tag#v}
-  semantic_version_newer_p "$latest_version" "$release_version" || return 0
-  if [[ -r $offered_path ]]; then
-    IFS= read -r offered_tag < "$offered_path" || offered_tag=
-  fi
-  [[ $offered_tag != "$latest_tag" ]] || return 0
-  printf '%s\n' "$latest_tag" > "$offered_path"
-
-  printf 'Autolith %s is available. Update now? [y/N] ' \
-    "$latest_version" > /dev/tty
-  IFS= read -r answer < /dev/tty || answer=
-  case $answer in
-    y|Y|yes|YES|Yes)
-      release_update "$latest_tag"
-      ;;
-  esac
+  [[ -x $launcher ]] || fail "the selected release launcher is unavailable."
+  export AUTOLITH_NO_UPDATE_CHECK=1
+  export AUTOLITH_SUPPRESS_UPDATE_OFFER=1
+  exec "$launcher" "${remaining_arguments[@]}"
 }
 
 release_images_usable_p()
@@ -193,11 +169,28 @@ semantic_version_valid_p "$release_version" || fail "RELEASE has an invalid vers
   fail "the bundled SBCL source is missing."
 [[ -f $source_root/autolith.asd && -f $source_root/.qlot/setup.lisp ]] ||
   fail "the bundled Autolith source or dependencies are missing."
+[[ -x $source_root/script/install ]] || fail "the bundled installer is missing."
 [[ -x $sandbox_helper ]] || fail "the private sandbox helper is missing."
 [[ -f $fff_library ]] || fail "the private search library is missing."
 [[ -f $colorlisp_library ]] || fail "the private syntax library is missing."
 command -v git >/dev/null 2>&1 || fail "Git is required."
 command -v bwrap >/dev/null 2>&1 || fail "Bubblewrap is required."
+
+releases_root=$(CDPATH= cd -- "$release_root/.." && pwd)
+install_root=$(CDPATH= cd -- "$releases_root/.." && pwd)
+selected_release_p=false
+if [[ ${release_root##*/} == "$release_tag" &&
+      ${releases_root##*/} == releases &&
+      $(readlink -f -- "$install_root/current" 2>/dev/null || true) == \
+        "$release_root" ]]; then
+  selected_release_p=true
+fi
+
+unset AUTOLITH_INSTALLATION_KIND AUTOLITH_RELEASE_ROOT
+if [[ $selected_release_p == true ]]; then
+  export AUTOLITH_INSTALLATION_KIND=release
+  export AUTOLITH_RELEASE_ROOT=$release_root
+fi
 
 export AUTOLITH_SBCL=$sbcl_command
 export AUTOLITH_SBCL_SOURCE_ROOT=$runtime_source_root
@@ -219,12 +212,21 @@ if [[ ${1:-} == --autolith-release-probe ]]; then
 fi
 if [[ ${1:-} == --update ]]; then
   remaining_arguments=("${@:2}")
+  [[ $selected_release_p == true ]] ||
+    fail "only the selected packaged release can update itself."
   release_update
 fi
 
-release_update_check
 if ! release_images_usable_p; then
   release_images_build
 fi
 
-exec "$source_root/bin/autolith" "$@"
+if "$source_root/bin/autolith" "$@"; then
+  status=0
+else
+  status=$?
+fi
+if [[ $status -eq 76 && $selected_release_p == true ]]; then
+  release_update
+fi
+exit "$status"

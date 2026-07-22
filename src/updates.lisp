@@ -426,7 +426,10 @@
          (current-tag (installation-provenance-current-tag provenance))
          (state (update-state-load configuration))
          (latest-tag (update-state-latest-tag state)))
-    (when (and (member method '(:nix :release))
+    (when (and (not (string= (or (uiop:getenv
+                                  "AUTOLITH_SUPPRESS_UPDATE_OFFER") "")
+                             "1"))
+               (member method '(:nix :release))
                current-tag
                latest-tag
                (release-tag< current-tag latest-tag)

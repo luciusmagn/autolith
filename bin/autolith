@@ -227,7 +227,8 @@ fi
 
 restore_terminal
 
-if [[ "$status" -ne 64 && "$status" -ne 130 && "$status" -ne 143 ]]; then
+if [[ "$status" -ne 64 && "$status" -ne 76 &&
+      "$status" -ne 130 && "$status" -ne 143 ]]; then
   capsule=
   if [[ -f "$crash_pointer" ]]; then
     IFS= read -r capsule < "$crash_pointer" || capsule=

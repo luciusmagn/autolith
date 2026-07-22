@@ -312,6 +312,7 @@ pkgs.writeShellApplication {
     mkdir -p "$asdf_cache"
     export AUTOLITH_ASDF_CACHE="$asdf_cache"
     export AUTOLITH_NIX_SOURCE_ROOT="${autolithSystem}/"
+    export AUTOLITH_INSTALLATION_KIND=nix
 
     if [ "$(readlink "$runtime_root/source" 2>/dev/null || true)" != "${sbclSource}" ]; then
       rm -rf "$runtime_root/source"
