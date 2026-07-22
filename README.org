@@ -37,6 +37,7 @@ and the user can grant commands full access for a session.
 - Local PNG, JPEG, GIF, and WebP input with numbered composer labels.
 - Persistent, opt-in provider-visible reasoning summaries with =/trace on=.
 - Append-only portable conversation files with exact resume commands.
+- Optional root =AUTOLITH.org= notes for documented project adaptations.
 - Workspace and global persistent memories with ranked request-local recall.
 - Short workspace agendas with memory links and repository transport.
 - Warm in-process fff path, glob, plain, regex, fuzzy, and multi-pattern search.

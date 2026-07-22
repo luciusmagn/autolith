@@ -19,6 +19,7 @@
     :type t
     :documentation "The main and reader thread wakeup condition.")
    (work-items
+    :initarg :work-items
     :initform nil
     :accessor application-input-controller-work-items
     :type list
@@ -206,7 +207,7 @@
              (not
               (null
                (member command
-                       '("/resume" "/effort" "/rollback" "/permissions")
+                       '("/effort" "/rollback" "/permissions")
                        :test #'string=)))))))
 
 (-> application-input-controller--publish-counts
@@ -827,9 +828,10 @@
   nil)
 
 (-> application-input-controller-create
-    (application)
+    (application &key (:initial-work-items list))
     application-input-controller)
-(defun application-input-controller-create (application)
+(defun application-input-controller-create
+    (application &key initial-work-items)
   "Create CONTROLLER for APPLICATION and start its terminal reader."
   (let* ((configuration
            (and (slot-boundp application 'configuration)
@@ -841,6 +843,7 @@
          (controller
            (make-instance 'application-input-controller
                           :application application
+                          :work-items (copy-tree initial-work-items)
                           :later-state later-state
                           :pending-later-entries
                           (copy-list (later-state-entries later-state))
@@ -1062,6 +1065,8 @@
                     (application--run-command-input application input))))
          (when (eq result ':quit)
            (application-input-controller--request-exit controller ':quit))))
+      (:project-adaptation-offer
+       (application-maybe-offer-project-adaptation application))
       (:later
        (application-input-controller--run-later controller (second work)))))
   nil)

@@ -225,6 +225,11 @@ when the active conversation is durable. The input reader remains available
 during graceful interruption so another Ctrl-C can restore the terminal and
 force process status 130 without waiting for the main agent thread.
 
+Command-line resume may open one project-adaptation picker after selecting a
+qualifying conversation. Its decisions are atomic S-expression state keyed by
+canonical project root. A five-day deferral makes cancellation non-nagging, and
+a permanent refusal remains local to that repository or workspace path.
+
 ** =responsive-input.lisp=
 
 Owns the ephemeral terminal-reader thread and FIFO submitted-message queue.

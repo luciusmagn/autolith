@@ -221,11 +221,26 @@
                                    (application--resume-command application)))))))
         nil)))
 
+(-> application--initial-work-items
+    ((option string) boolean)
+    list)
+(defun application--initial-work-items (initial-command resume-offer-p)
+  "Return ordered controller work for command-line startup behavior."
+  (cond
+    (initial-command
+     (list (list ':command initial-command)))
+    (resume-offer-p
+     (list (list ':project-adaptation-offer)))
+    (t
+     nil)))
+
 (-> application-run
     (application &key (:initial-command (option string))
-                      (:initial-input (option user-message-input)))
+                      (:initial-input (option user-message-input))
+                      (:resume-offer-p boolean))
     null)
-(defun application-run (application &key initial-command initial-input)
+(defun application-run
+    (application &key initial-command initial-input resume-offer-p)
   "Run APPLICATION with responsive input, always restoring terminal and workers."
   (let ((ui (application-ui application))
         (worker (application-worker application))
@@ -252,11 +267,14 @@
            (application-render-records application)
            (when initial-input
              (terminal-ui-set-input ui initial-input))
+           (setf (application-project-adaptation-offer-p application)
+                 (and resume-offer-p (not (null initial-command))))
            (setf input-controller
-                 (application-input-controller-create application))
-           (when initial-command
-             (application-input-controller--enqueue
-              input-controller ':command initial-command))
+                 (application-input-controller-create
+                  application
+                  :initial-work-items
+                  (application--initial-work-items initial-command
+                                                   resume-offer-p)))
            ;; Entering the interactive debugger would hang the raw terminal,
            ;; so any debugger entry becomes the fatal recovery path instead.
            (let ((*checkpoint-thread-quiescer*
@@ -442,7 +460,8 @@
                :initial-command (and resume-requested-p
                                      (null resume-id)
                                      "/resume")
-               :initial-input (main--initial-image-input arguments))
+               :initial-input (main--initial-image-input arguments)
+               :resume-offer-p resume-requested-p)
             (rollback-requested (condition)
               (format *error-output*
                       "Autolith is rolling back to retained generation ~A.~%"

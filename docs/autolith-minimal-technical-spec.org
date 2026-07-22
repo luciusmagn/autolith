@@ -212,6 +212,16 @@ reported and omitted without preventing unrelated provider work.
 form: exploratory installation registers it, discard restores both its function
 binding and prior registration, and private commit replay reconstructs both.
 
+An optional =AUTOLITH.org= at the nearest Git project root is a
+human-readable, non-executable project adaptation ledger. It supplements but
+never overrides =AGENTS.md=, current user instructions, or capability
+boundaries. Its bounded contents are rebuilt into request-local project context
+and never enter conversation history or compaction. While it exists, a built-in
+context contributor reminds the model to consider a small project-scoped
+self-modification only when repeated Autolith-side friction or a stable
+improvement is evident, and to keep the ledger accurate. The reminder must not
+become a mutation quota.
+
 * 5. Tool Model
 
 Tools are registered internally. MCP-compatible exposure may be added,
@@ -556,7 +566,7 @@ with a distinguished recovery status.
 
 * 8. Persistence
 
-Autolith persists nine kinds of state:
+Autolith persists ten kinds of state:
 
 - Source in Git.
 - Conversations as S-expression files.
@@ -567,6 +577,7 @@ Autolith persists nine kinds of state:
 - Working generations as saved Lisp cores and reconstruction scripts.
 - Worker images as immutable SBCL cores with manifests and durable notes.
 - User-authored executable configuration under the XDG config root.
+- Per-project =AUTOLITH.org= offer decisions under the state root.
 
 ** 8.1 Conversation Files
 
@@ -912,6 +923,15 @@ has durable records, shutdown displays the exact command that resumes its
 identifier. An empty conversation has no resume command. While graceful
 cancellation is pending, another Ctrl-C restores the terminal, prints the
 durable resume command when one exists, and forces exit with status 130.
+
+Only command-line =autolith resume= may offer to create a missing root
+=AUTOLITH.org=. A resumed conversation qualifies when its recorded activity
+spans at least one hour, or when the current project has at least two such
+conversations. Legacy records without usable times use twelve completed user
+turns as the conservative equivalent. The choices create the file, defer the
+offer for five days, or suppress it permanently for the canonical repository
+root or non-repository workspace path. Cancelling the offer also receives the
+five-day deferral. Ordinary =/resume= never initiates this offer.
 
 The startup mark uses a green gradient during ordinary startup and a red
 gradient when the recovery component starts the active process. Terminals

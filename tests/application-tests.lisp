@@ -1533,6 +1533,8 @@
   (test-assert (application--command-needs-terminal-owner-p
                 "/model gpt-5.6-luna")
                "explicit model changes own the terminal for the effort picker")
+  (test-assert (not (application--command-needs-terminal-owner-p "/resume"))
+               "resume pauses input only while its modal selector is active")
   (test-assert (not (application--command-needs-terminal-owner-p "/compact"))
                "nonmodal model commands retain responsive input")
   (test-assert (application--command-needs-terminal-owner-p "/auth")
@@ -1543,9 +1545,20 @@
          (controller nil))
     (with-terminal-ui (active-ui ui)
       (declare (ignore active-ui))
-      (setf controller (application-input-controller-create application))
+      (setf controller
+            (application-input-controller-create
+             application
+             :initial-work-items
+             (list (list ':project-adaptation-offer))))
       (unwind-protect
            (progn
+             (let ((work
+                     (application-input-controller--next-work controller)))
+               (test-assert
+                (and (equal work (list ':project-adaptation-offer))
+                     (application-input-controller-active-p controller))
+                "startup adaptation work enters the interruptible active path")
+               (application-input-controller--finish-work controller))
              (test-assert
               (thread-alive-p
                (application-input-controller-reader-thread controller))
@@ -1560,6 +1573,14 @@
                (application-input-controller-reader-thread controller))
               "the terminal reader restarts after single-threaded work"))
         (application-input-controller-stop controller))))
+  (test-assert
+   (equal (application--initial-work-items nil t)
+          (list (list ':project-adaptation-offer)))
+   "explicit command-line resume queues interruptible adaptation work")
+  (test-assert
+   (equal (application--initial-work-items "/resume" t)
+          (list (list ':command "/resume")))
+   "bare command-line resume qualifies only after its picker selection")
   nil)
 
 (-> test-late-steering-promotion () null)

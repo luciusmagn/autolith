@@ -268,6 +268,14 @@ an explicit conversation identifier.
 Conversations remember the directory they were started in, and the picker
 shows it.
 
+Command-line resume may occasionally offer to create =AUTOLITH.org= at the
+current project root. It does this only after resuming a conversation whose
+recorded activity spans at least an hour, or after the project accumulates two
+such conversations. For legacy records without usable times, twelve user turns
+is the conservative fallback. =not-now= defers the offer for five days and
+=never= suppresses it permanently for that canonical repository or workspace
+path. The in-session =/resume= command never initiates the offer.
+
 =/cwd PATH= changes the workspace for the current Autolith process. Relative
 paths resolve from the current workspace, =~/= expands to the home directory,
 and spaces need no quoting because the complete command remainder is the path.
@@ -588,6 +596,15 @@ from the workspace to the nearest =.git= project root, then includes every
 =AGENTS.md= from the root down to the workspace, root first, bounded and
 refreshed on every request. Without a project root only the workspace file
 is considered.
+
+An optional =AUTOLITH.org= lives only at that project root. It is a voluntary
+adaptation ledger describing recurring project friction, active Autolith
+adaptations, their scope and verification, and when they should be removed.
+Its bounded contents supplement =AGENTS.md= as request-local advisory context;
+they are never executed as Lisp and never override repository policy. Presence
+also activates a short observable context contribution encouraging useful,
+project-scoped self-improvement when concrete evidence warrants it. The ledger
+and reminder never enter durable conversation history, memory, or compaction.
 
 The =lisp.*= tools manage named persistent SBCL REPLs through a small readable
 S-expression protocol. =eval=, =compile=, =load-system=, =describe=, =source=,

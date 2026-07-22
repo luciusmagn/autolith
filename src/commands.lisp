@@ -613,11 +613,18 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
       (unless items
         (application-present application empty-notice)
         (return nil))
-      (terminal-ui-select
-       ui
-       :title title
-       :items items
-       :resize-callback #'application-pending-terminal-size))))
+      (labels ((pick ()
+                 "Run the modal selector with sole ownership of terminal input."
+                 (terminal-ui-select
+                  ui
+                  :title title
+                  :items items
+                  :resize-callback #'application-pending-terminal-size)))
+        (let ((controller (application-input-controller application)))
+          (if controller
+              (application-input-controller-call-with-reader-paused
+               controller #'pick)
+              (pick)))))))
 
 (-> application--pick-reasoning-effort (application) (option string))
 (defun application--pick-reasoning-effort (application)
@@ -628,6 +635,73 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
    :items (application--effort-items application)
    :usage "Usage: /effort LEVEL"
    :empty-notice "No supported reasoning efforts exist."))
+
+(-> application--project-adaptation-offer-items () list)
+(defun application--project-adaptation-offer-items ()
+  "Return the AUTOLITH.org creation choices for an eligible resumed project."
+  (list
+   (list :name "create"
+         :argument nil
+         :description "create a documented project adaptation ledger")
+   (list :name "not-now"
+         :argument nil
+         :description "ask again after five days")
+   (list :name "never"
+         :argument nil
+         :description "never ask again for this repository or path")))
+
+(-> application-maybe-offer-project-adaptation (application) null)
+(defun application-maybe-offer-project-adaptation (application)
+  "Offer voluntary AUTOLITH.org creation after a qualifying command-line resume."
+  (let* ((configuration (application-configuration application))
+         (ui (application-ui application))
+         (project-root
+           (workspace-project-root
+            (configuration-working-directory configuration))))
+    (when (terminal-interactive-p (terminal-ui-terminal ui))
+      (handler-case
+          (when (and (project-adaptation-offer-due-p
+                      configuration project-root)
+                     (project-adaptation-resume-qualifies-p
+                      configuration
+                      (application-conversation application)))
+            ;; Persist the ordinary dismissal before opening the modal selector,
+            ;; so Escape, Ctrl-C, or a lost terminal cannot cause resume-time nagging.
+            (project-adaptation-offer-defer configuration project-root)
+            (application-present
+             application
+             "This project has enough Autolith history to benefit from AUTOLITH.org, a voluntary ledger for project-specific adaptations.")
+            (let ((choice
+                    (application--pick-identifier
+                     application
+                     :title "create AUTOLITH.org?"
+                     :items (application--project-adaptation-offer-items)
+                     :usage "Choose create, not-now, or never."
+                     :empty-notice "")))
+              (cond
+                ((and choice (string= choice "create"))
+                 (handler-case
+                     (let ((pathname
+                             (project-adaptation-notes-create project-root)))
+                       (application-present
+                        application
+                        (format nil "Created ~A" (namestring pathname))))
+                   (project-adaptation-error (condition)
+                     (project-adaptation--offer-retry
+                      configuration project-root)
+                     (error condition))))
+                ((and choice (string= choice "never"))
+                 (project-adaptation-offer-refuse configuration project-root)
+                 (application-present
+                  application
+                  "AUTOLITH.org offers are disabled permanently for this path."))
+                ((and choice (string= choice "not-now"))
+                 (application-present
+                  application
+                  "The AUTOLITH.org offer is deferred for five days.")))))
+        (project-adaptation-error (condition)
+          (application-handle-expected-error application condition)))))
+  nil)
 
 
 ;;;; -- Working Directory Command --
@@ -891,7 +965,9 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
                  (application-conversation application))))
        :continue)
       ((string= command "/resume")
-       (let ((identifier
+       (let ((startup-offer-p
+               (application-project-adaptation-offer-p application))
+             (identifier
                (or argument
                    (application--pick-identifier
                     application
@@ -899,11 +975,14 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
                     :items (application--conversation-items application)
                     :usage "Usage: /resume ID"
                     :empty-notice "No saved conversations exist."))))
+         (setf (application-project-adaptation-offer-p application) nil)
          (when identifier
            (application-install-conversation
             application
             (conversation-load-by-id configuration identifier))
-           (application-render-records application)))
+           (application-render-records application)
+           (when startup-offer-p
+             (application-maybe-offer-project-adaptation application))))
        :continue)
       ((string= command "/conversations")
        (application-present application

@@ -40,38 +40,12 @@ The current date is ~A.~@[~2%~A~]"
 (define-constant +workspace-instructions-limit+ 16000
   :documentation "The characters of workspace AGENTS.md included in the prompt.")
 
-(define-constant +workspace-instructions-depth-limit+ 64
-  :documentation "The most directory levels walked while locating AGENTS.md files.")
-
-(-> system-prompt--project-root (pathname) pathname)
-(defun system-prompt--project-root (working-directory)
-  "Return the nearest ancestor holding a .git marker, or WORKING-DIRECTORY.
-
-Mirrors the Codex AGENTS.md discovery at reference commit 5c19155c: the walk
-never continues past the project root, and a missing marker keeps discovery
-inside the working directory alone."
-  (labels ((marker-p (directory)
-             "Return true when DIRECTORY contains a .git entry."
-             (and (or (uiop:directory-exists-p
-                       (merge-pathnames ".git/" directory))
-                      (uiop:file-exists-p (merge-pathnames ".git" directory)))
-                  t)))
-    (loop repeat +workspace-instructions-depth-limit+
-          for directory = working-directory
-            then (uiop:pathname-parent-directory-pathname directory)
-          for parent = (uiop:pathname-parent-directory-pathname directory)
-          when (marker-p directory)
-            return directory
-          when (equal directory parent)
-            return working-directory
-          finally (return working-directory))))
-
 (-> system-prompt--instruction-paths (pathname) list)
 (defun system-prompt--instruction-paths (working-directory)
   "Return AGENTS.md paths from the project root down to WORKING-DIRECTORY."
-  (let* ((root (system-prompt--project-root working-directory))
+  (let* ((root (workspace-project-root working-directory))
          (directories
-           (loop repeat +workspace-instructions-depth-limit+
+           (loop repeat +workspace-project-depth-limit+
                  for directory = working-directory
                    then (uiop:pathname-parent-directory-pathname directory)
                  collect directory

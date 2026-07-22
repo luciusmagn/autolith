@@ -88,6 +88,7 @@
     (test-later-reset-selection)
     (test-system-prompt-context)
     (test-request-local-context)
+    (test-project-adaptations)
     (test-conversation-persistence)
     (test-conversation-private-storage)
     (test-conversation-origin-directory)

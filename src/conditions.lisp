@@ -239,6 +239,25 @@
                      (preferences-load-warning-pathname condition)
                      (preferences-load-warning-cause condition)))))
 
+(define-condition project-adaptation-error (autolith-error)
+  ((pathname
+    :initarg :pathname
+    :reader project-adaptation-error-pathname
+    :type pathname
+    :documentation "The project-adaptation file or state file involved.")
+   (operation
+    :initarg :operation
+    :reader project-adaptation-error-operation
+    :type keyword
+    :documentation "The project-adaptation operation that failed.")
+   (cause
+    :initarg :cause
+    :initform nil
+    :reader project-adaptation-error-cause
+    :type t
+    :documentation "The underlying failure, when available."))
+  (:documentation "Project adaptation notes or offer state could not be handled."))
+
 (define-condition permissions-error (autolith-error)
   ((pathname
     :initarg :pathname

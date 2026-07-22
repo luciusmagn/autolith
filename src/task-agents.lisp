@@ -770,7 +770,7 @@
 (defun task--project-agents-directory (configuration)
   "Return the nearest project .autolith/agents directory, or NIL."
   (let* ((start (configuration-working-directory configuration))
-         (root (system-prompt--project-root start)))
+         (root (workspace-project-root start)))
     (loop repeat 64
           for directory = start
             then (uiop/pathname:pathname-parent-directory-pathname directory)

@@ -66,8 +66,31 @@
     :initform 0
     :accessor conversation-last-total-tokens
     :type (integer 0)
-    :documentation "The total token usage reported by the newest provider step."))
+    :documentation "The total token usage reported by the newest provider step.")
+   (last-activity-at
+    :initform nil
+    :accessor conversation-last-activity-at
+    :type (option timestamp)
+    :documentation "The newest timestamp observed in a durable record.")
+   (user-turn-count
+    :initform 0
+    :accessor conversation-user-turn-count
+    :type (integer 0)
+    :documentation "The number of durable user message records."))
   (:documentation "An append-only conversation and its provider projection."))
+
+(-> conversation--note-activity (conversation list) null)
+(defun conversation--note-activity (conversation record)
+  "Project RECORD's activity metadata into CONVERSATION."
+  (let ((time (and (consp record) (getf (rest record) :time))))
+    (when (typep time 'timestamp)
+      (setf (conversation-last-activity-at conversation)
+            (max (or (conversation-last-activity-at conversation) 0) time))))
+  (when (and (consp record)
+             (eq (first record) ':message)
+             (eq (getf (rest record) :role) ':user))
+    (incf (conversation-user-turn-count conversation)))
+  nil)
 
 (-> conversation--header-record (conversation) list)
 (defun conversation--header-record (conversation)
@@ -167,6 +190,7 @@
                :pathname (conversation-pathname conversation)
                :sequence sequence)))
     (incf (conversation-next-sequence conversation))
+    (conversation--note-activity conversation sequenced)
     sequenced))
 
 (-> conversation--append-input-item (conversation json-object) json-object)
@@ -593,6 +617,7 @@ it described the uncompacted context."
            :sequence nil))
   (let ((sequence (getf (rest record) :seq))
         (wire-json (getf (rest record) :wire-json)))
+    (conversation--note-activity conversation record)
     (when (integerp sequence)
       (setf (conversation-next-sequence conversation)
             (max (conversation-next-sequence conversation) (1+ sequence))))

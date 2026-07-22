@@ -90,7 +90,13 @@
     :initform 0
     :accessor application-presentation-counter
     :type integer
-    :documentation "The identifier source for non-conversation terminal notices."))
+    :documentation "The identifier source for non-conversation terminal notices.")
+   (project-adaptation-offer-p
+    :initform nil
+    :accessor application-project-adaptation-offer-p
+    :type boolean
+    :documentation
+    "Whether command-line resume should offer project adaptation notes."))
   (:documentation "The globally rooted logical state and reconnectable resources of Autolith."))
 
 (defvar *active-application* nil

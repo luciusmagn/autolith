@@ -438,6 +438,12 @@ Selecting a different model recomputes the context window for that model."
   "Return the atomic global preferences pathname."
   (merge-pathnames "preferences.sexp" (configuration-state-root configuration)))
 
+(-> configuration-project-adaptation-offers-path (configuration) pathname)
+(defun configuration-project-adaptation-offers-path (configuration)
+  "Return the atomic per-project AUTOLITH.org offer-state pathname."
+  (merge-pathnames "project-adaptation-offers.sexp"
+                   (configuration-state-root configuration)))
+
 (-> configuration-permissions-path (configuration) pathname)
 (defun configuration-permissions-path (configuration)
   "Return the atomic persistent command-permission pathname."
