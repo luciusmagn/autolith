@@ -66,6 +66,15 @@
     :documentation "The retained generation selected for the next process."))
   (:documentation "A control condition requesting rollback to a retained generation."))
 
+(define-condition update-requested (autolith-error)
+  ((tag
+    :initarg :tag
+    :reader update-requested-tag
+    :type non-empty-string
+    :documentation "The newer release tag explicitly selected by the user."))
+  (:documentation
+   "A control condition requesting an update after the terminal has been restored."))
+
 (define-condition application-turn-cancelled (serious-condition)
   ()
   (:documentation

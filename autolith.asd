@@ -30,6 +30,7 @@
                              (:file "workspace")
                              (:file "image-input")
                              (:file "readable-state")
+                             (:file "updates")
                              (:file "preferences")
                              (:file "permissions")
                              (:file "later")
@@ -108,6 +109,7 @@
                 :serial t
                 :components ((:file "test-support")
                              (:file "memory-tests")
+                             (:file "update-tests")
                              (:file "agenda-tests")
                              (:file "preferences-tests")
                              (:file "permissions-tests")

@@ -110,6 +110,7 @@
                 #:rgba-image
                 #:write-png-file)
   (:import-from #:quri
+                #:uri-path
                 #:url-decode
                 #:url-encode-params)
   (:import-from #:serapeum

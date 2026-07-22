@@ -117,46 +117,6 @@
 
 ;;;; -- Published Releases --
 
-(-> release-tag->version (string) (option list))
-(defun release-tag->version (tag)
-  "Return TAG's three integer semantic-version components, or NIL."
-  (block nil
-    (unless (and (> (length tag) 1)
-                 (char= (char tag 0) #\v))
-      (return nil))
-    (let ((parts (uiop:split-string (subseq tag 1) :separator '(#\.))))
-      (unless (and (= (length parts) 3)
-                   (every (lambda (part)
-                            (and (plusp (length part))
-                                 (every #'digit-char-p part)))
-                          parts))
-        (return nil))
-      (mapcar (lambda (part)
-                (parse-integer part :junk-allowed nil))
-              parts))))
-
-(-> release-tag-valid-p (string) boolean)
-(defun release-tag-valid-p (tag)
-  "Return true when TAG is a strict three-component release tag."
-  (not (null (release-tag->version tag))))
-
-(-> release-tag< (string string) boolean)
-(defun release-tag< (left right)
-  "Return true when semantic release tag LEFT precedes RIGHT."
-  (let ((left-version  (release-tag->version left))
-        (right-version (release-tag->version right)))
-    (unless (and left-version right-version)
-      (error 'type-error
-             :datum (list left right)
-             :expected-type '(cons string (cons string null))))
-    (loop for left-part in left-version
-          for right-part in right-version
-          when (< left-part right-part)
-            return t
-          when (> left-part right-part)
-            return nil
-          finally (return nil))))
-
 (-> release-server--archive-name (string) string)
 (defun release-server--archive-name (tag)
   "Return the Linux x86-64 archive name belonging to TAG."

@@ -450,6 +450,11 @@ Selecting a different model recomputes the context window for that model."
   (merge-pathnames "project-adaptation-offers.sexp"
                    (configuration-state-root configuration)))
 
+(-> configuration-update-state-path (configuration) pathname)
+(defun configuration-update-state-path (configuration)
+  "Return the atomic cached release-availability state pathname."
+  (merge-pathnames "update-state.sexp" (configuration-state-root configuration)))
+
 (-> configuration-permissions-path (configuration) pathname)
 (defun configuration-permissions-path (configuration)
   "Return the atomic persistent command-permission pathname."
