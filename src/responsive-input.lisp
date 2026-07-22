@@ -2,6 +2,14 @@
 
 ;;;; -- Responsive Terminal Input --
 
+(define-constant +application-forced-interrupt-status+ 130
+  :documentation "The process status used when repeated Ctrl-C forces exit.")
+
+(defvar *application-forced-exit-function*
+  (lambda (status)
+    (sb-ext:exit :code status :abort t))
+  "The process termination boundary captured by each input controller.")
+
 (defclass application-input-controller ()
   ((application
     :initarg :application
@@ -74,6 +82,17 @@
     :reader application-input-controller-main-thread
     :type t
     :documentation "The model and command thread interrupted for immediate exit.")
+   (forced-exit-function
+    :initarg :forced-exit-function
+    :initform *application-forced-exit-function*
+    :reader application-input-controller-forced-exit-function
+    :type function
+    :documentation "The process termination boundary captured before the reader starts.")
+   (forced-exit-message
+    :initform "Ctrl-C pressed during shutdown; forcing Autolith to exit."
+    :accessor application-input-controller-forced-exit-message
+    :type string
+    :documentation "The complete plain-text notice emitted by forced shutdown.")
    (failure
     :initform nil
     :accessor application-input-controller-failure
@@ -86,14 +105,6 @@
     :documentation "The reader backtrace captured with FAILURE."))
   (:documentation
    "Ephemeral terminal input and FIFO submission state for one application run."))
-
-(define-constant +application-forced-interrupt-status+ 130
-  :documentation "The process status used when repeated Ctrl-C forces exit.")
-
-(defvar *application-forced-exit-function*
-  (lambda (status)
-    (sb-ext:exit :code status :abort t))
-  "The process termination boundary used after repeated Ctrl-C.")
 
 (-> application--resume-command (application) string)
 (defun application--resume-command (application)
@@ -108,34 +119,69 @@
     (application-input-controller)
     null)
 (defun application-input-controller--force-interrupt-exit (controller)
-  "Restore the terminal, show resumption details, and force CONTROLLER to exit."
+  "Restore the terminal, emit the prepared notice, and force CONTROLLER to exit.
+
+This emergency path deliberately avoids the terminal UI and its presentation
+lock because ordinary shutdown may be blocked while either is unavailable."
   (unwind-protect
-       (ignore-errors
-         (let* ((application
-                  (application-input-controller-application controller))
-                (terminal
-                  (terminal-ui-terminal (application-ui application)))
-                (conversation
-                  (and (slot-boundp application 'conversation)
-                       (application-conversation application)))
-                (resume-command
-                  (and conversation
-                       (conversation-persisted-p conversation)
-                       (application--resume-command application))))
-           (terminal-stop terminal)
+       (let* ((application
+                (application-input-controller-application controller))
+              (terminal
+                (terminal-ui-terminal (application-ui application))))
+         (ignore-errors
+           (terminal-stop terminal))
+         (ignore-errors
            (terminal--write-safe-text
             terminal
-            (if resume-command
-                (format nil
-                        "~%Ctrl-C pressed again; forcing Autolith to exit.~%~
-                         To resume this conversation, run:~%  ~A~%"
-                        resume-command)
-                (format nil
-                        "~%Ctrl-C pressed again; forcing Autolith to exit.~%")))
+            (application-input-controller-forced-exit-message controller))
            (terminal-flush terminal)))
-    (funcall *application-forced-exit-function*
+    (funcall (application-input-controller-forced-exit-function controller)
              +application-forced-interrupt-status+))
   nil)
+
+(-> application-input-controller--forced-exit-message
+    (application-input-controller keyword)
+    string)
+(defun application-input-controller--forced-exit-message (controller reason)
+  "Return CONTROLLER's forced-exit notice for graceful shutdown REASON."
+  (let* ((application
+           (application-input-controller-application controller))
+         (conversation
+           (and (slot-boundp application 'conversation)
+                (application-conversation application)))
+         (resume-command
+           (and conversation
+                (conversation-persisted-p conversation)
+                (application--resume-command application))))
+    (format nil
+            "~%~A~%~@[To resume this conversation, run:~%  ~A~%~]"
+            (if (eq reason ':interrupt)
+                "Ctrl-C pressed again; forcing Autolith to exit."
+                "Ctrl-C pressed during shutdown; forcing Autolith to exit.")
+            resume-command)))
+
+(-> application-input-controller--prepare-shutdown
+    (application-input-controller keyword)
+    boolean)
+(defun application-input-controller--prepare-shutdown (controller reason)
+  "Stop ordinary CONTROLLER work and arm its interrupt-only shutdown reader.
+
+Return true when a model or command turn still needs cancellation."
+  (let ((active-p nil)
+        (message
+          (application-input-controller--forced-exit-message controller reason)))
+    (with-lock-held ((application-input-controller-lock controller))
+      (unless (application-input-controller-exit-reason controller)
+        (setf (application-input-controller-exit-reason controller) reason
+              (application-input-controller-forced-exit-message controller)
+              message))
+      (setf (application-input-controller-stopping-p controller) t
+            (application-input-controller-work-items controller) nil
+            (application-input-controller-steering-items controller) nil
+            active-p (application-input-controller-active-p controller))
+      (condition-notify
+       (application-input-controller-condition-variable controller)))
+    active-p))
 
 (-> application-input--text ((or string user-message-input)) string)
 (defun application-input--text (input)
@@ -340,24 +386,13 @@
     null)
 (defun application-input-controller--request-exit (controller reason)
   "Stop CONTROLLER for REASON, discarding work and cancelling an active turn."
-  (let ((active-p nil))
-    (with-lock-held ((application-input-controller-lock controller))
-      (unless (application-input-controller-exit-reason controller)
-        (setf (application-input-controller-exit-reason controller) reason))
-      (setf (application-input-controller-stopping-p controller) t
-            (application-input-controller-work-items controller) nil
-            (application-input-controller-steering-items controller) nil
-            active-p (application-input-controller-active-p controller))
-      (condition-notify
-       (application-input-controller-condition-variable controller)))
-    (application-input-controller--publish-counts controller)
-    (when active-p
-      (handler-case
-          (application-input-controller--interrupt-main
-           controller
-           (make-condition 'application-turn-cancelled))
-        (error ()
-          nil))))
+  (when (application-input-controller--prepare-shutdown controller reason)
+    (handler-case
+        (application-input-controller--interrupt-main
+         controller
+         (make-condition 'application-turn-cancelled))
+      (error ()
+        nil)))
   nil)
 
 (-> application-input-controller--hold-command
@@ -512,19 +547,16 @@
              (setf signal-backtrace (application-safe-backtrace)))))
       (handler-case
           (loop
-            (multiple-value-bind (stopping-p reader-paused-p exit-reason)
+            (multiple-value-bind (stopping-p reader-paused-p)
                 (with-lock-held
                     ((application-input-controller-lock controller))
                   (values
                    (application-input-controller-stopping-p controller)
-                   (application-input-controller-reader-paused-p controller)
-                   (application-input-controller-exit-reason controller)))
+                   (application-input-controller-reader-paused-p controller)))
               (cond
                 (reader-paused-p
                  (return))
                 (stopping-p
-                 (unless (eq exit-reason ':interrupt)
-                   (return))
                  (let* ((application
                           (application-input-controller-application controller))
                         (terminal
@@ -913,7 +945,7 @@
 
 (-> application-input-controller-stop (application-input-controller) null)
 (defun application-input-controller-stop (controller)
-  "Stop CONTROLLER, discard pending work, and join its terminal reader."
+  "Retire CONTROLLER after shutdown work is complete and join its reader."
   (let ((thread nil))
     (with-lock-held ((application-input-controller-lock controller))
       (setf (application-input-controller-stopping-p controller) t
@@ -925,10 +957,6 @@
             thread (application-input-controller-reader-thread controller))
       (condition-notify
        (application-input-controller-condition-variable controller)))
-    (terminal-ui-set-pending-inputs
-     (application-ui (application-input-controller-application controller))
-     nil
-     nil)
     (when thread
       (join-thread thread)
       (with-lock-held ((application-input-controller-lock controller))
@@ -939,6 +967,20 @@
       (when (eq controller (application-input-controller application))
         (setf (application-input-controller application) nil))))
   nil)
+
+(-> application-input-controller-call-with-shutdown-escape
+    (application-input-controller function)
+    t)
+(defun application-input-controller-call-with-shutdown-escape
+    (controller function)
+  "Call potentially blocking shutdown FUNCTION while Ctrl-C remains effective.
+
+Normal editor input is already disabled while FUNCTION runs. The controller's
+reader stays alive in interrupt-only mode until FUNCTION returns or unwinds."
+  (application-input-controller--prepare-shutdown controller ':shutdown)
+  (unwind-protect
+       (funcall function)
+    (application-input-controller-stop controller)))
 
 (-> application--run-message-input
     (application (or string user-message-input)

@@ -244,80 +244,106 @@
   "Run APPLICATION with responsive input, always restoring terminal and workers."
   (let ((ui (application-ui application))
         (worker (application-worker application))
-        (input-controller nil))
-    (sb-sys:enable-interrupt
-     sb-unix:sigwinch
-     (lambda (signal code context)
-       (declare (ignore signal code context))
-       (setf *terminal-resize-pending-p* t)))
-    (unwind-protect
-         (with-terminal-ui (active-ui ui)
-           (declare (ignore active-ui))
-           (application-present application (application-banner application))
-           (dolist (failure (application-overlay-failures application))
-             (application-present
-              application
-              (application--transcript-entry
-               application
-               :style ':failure
-               :header "✗ mutation replay skipped"
-               :body (format nil "~A~%~A"
-                             (namestring (first failure))
-                             (rest failure)))))
-           (application-render-records application)
-           (when initial-input
-             (terminal-ui-set-input ui initial-input))
-           (setf (application-project-adaptation-offer-p application)
-                 (and resume-offer-p (not (null initial-command))))
-           (setf input-controller
-                 (application-input-controller-create
-                  application
-                  :initial-work-items
-                  (application--initial-work-items initial-command
-                                                   resume-offer-p)))
-           ;; Entering the interactive debugger would hang the raw terminal,
-           ;; so any debugger entry becomes the fatal recovery path instead.
-           (let ((*checkpoint-thread-quiescer*
-                   (lambda (function)
-                     (application-input-controller-call-with-reader-paused
-                      input-controller function)))
-                 (*debugger-hook*
-                   (lambda (condition hook)
-                     (declare (ignore hook))
-                     (application-raise-fatal application
-                                              condition
-                                              (application-safe-backtrace)))))
-             (handler-case
-                 (loop
-                   for work =
-                     (application-input-controller--next-work input-controller)
-                   while work
-                   do (unwind-protect
-                          (application-input-controller--run-work
-                           input-controller work)
-                        (application-input-controller--finish-work
-                         input-controller)))
-               (application-turn-cancelled ()
-                 nil)
-               (application-input-failed (condition)
-                 (application-raise-fatal
-                  application
-                  (application-input-failed-original-condition condition)
-                  (application-input-failed-backtrace condition)))))
-           (let ((exit-reason
-                   (application-input-controller-exit-reason input-controller)))
-             (application-input-controller-stop input-controller)
-             (setf input-controller nil)
-             (when (eq exit-reason ':interrupt)
-               (application--present-resume-instruction application))))
-      (sb-sys:enable-interrupt sb-unix:sigwinch :default)
-      (when input-controller
-        (application-input-controller-stop input-controller))
-      (ignore-errors
-        (tool-registry-close-runtime-state
-         (application-tool-registry application)))
-      (when worker
-        (lisp-worker-manager-stop worker))))
+        (input-controller nil)
+        (tool-runtimes-closed-p nil)
+        (worker-stopped-p nil))
+    (labels ((close-runtime-resources ()
+               "Close APPLICATION's external runtimes at most once."
+               (unless tool-runtimes-closed-p
+                 (unwind-protect
+                      (ignore-errors
+                        (tool-registry-close-runtime-state
+                         (application-tool-registry application)))
+                   (setf tool-runtimes-closed-p t)))
+               (unless worker-stopped-p
+                 (unwind-protect
+                      (when worker
+                        (lisp-worker-manager-stop worker))
+                   (setf worker-stopped-p t)))
+               nil)
+
+             (finish-shutdown ()
+               "Close runtimes while preserving CONTROLLER's Ctrl-C escape."
+               (if input-controller
+                   (progn
+                     (application-input-controller-call-with-shutdown-escape
+                      input-controller #'close-runtime-resources)
+                     (setf input-controller nil))
+                   (close-runtime-resources))))
+      (sb-sys:enable-interrupt
+       sb-unix:sigwinch
+       (lambda (signal code context)
+         (declare (ignore signal code context))
+         (setf *terminal-resize-pending-p* t)))
+      (unwind-protect
+           (with-terminal-ui (active-ui ui)
+             (declare (ignore active-ui))
+             (unwind-protect
+                  (progn
+                    (application-present application
+                                         (application-banner application))
+                    (dolist (failure
+                             (application-overlay-failures application))
+                      (application-present
+                       application
+                       (application--transcript-entry
+                        application
+                        :style ':failure
+                        :header "✗ mutation replay skipped"
+                        :body (format nil "~A~%~A"
+                                      (namestring (first failure))
+                                      (rest failure)))))
+                    (application-render-records application)
+                    (when initial-input
+                      (terminal-ui-set-input ui initial-input))
+                    (setf (application-project-adaptation-offer-p application)
+                          (and resume-offer-p (not (null initial-command))))
+                    (setf input-controller
+                          (application-input-controller-create
+                           application
+                           :initial-work-items
+                           (application--initial-work-items initial-command
+                                                            resume-offer-p)))
+                    ;; Entering the interactive debugger would hang the raw
+                    ;; terminal, so debugger entry becomes fatal recovery.
+                    (let ((*checkpoint-thread-quiescer*
+                            (lambda (function)
+                              (application-input-controller-call-with-reader-paused
+                               input-controller function)))
+                          (*debugger-hook*
+                            (lambda (condition hook)
+                              (declare (ignore hook))
+                              (application-raise-fatal
+                               application
+                               condition
+                               (application-safe-backtrace)))))
+                      (handler-case
+                          (loop
+                            for work =
+                              (application-input-controller--next-work
+                               input-controller)
+                            while work
+                            do (unwind-protect
+                                   (application-input-controller--run-work
+                                    input-controller work)
+                                 (application-input-controller--finish-work
+                                  input-controller)))
+                        (application-turn-cancelled ()
+                          nil)
+                        (application-input-failed (condition)
+                          (application-raise-fatal
+                           application
+                           (application-input-failed-original-condition
+                            condition)
+                           (application-input-failed-backtrace condition)))))
+                    (when (eq
+                           (application-input-controller-exit-reason
+                            input-controller)
+                           ':interrupt)
+                      (application--present-resume-instruction application)))
+               (finish-shutdown)))
+        (sb-sys:enable-interrupt sb-unix:sigwinch :default)
+        (finish-shutdown))))
   nil)
 
 ;;;; -- Command-Line Entry --

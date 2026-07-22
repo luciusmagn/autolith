@@ -187,6 +187,38 @@
   (declare (ignore terminal))
   nil)
 
+(defclass queued-recording-terminal (recording-terminal)
+  ((event-lock
+    :initform (make-lock "Autolith queued terminal")
+    :reader queued-recording-terminal-event-lock
+    :type t
+    :documentation "The lock protecting events submitted by test threads.")
+   (events
+    :initform nil
+    :accessor queued-recording-terminal-events
+    :type list
+    :documentation "FIFO semantic events awaiting the responsive reader."))
+  (:documentation
+   "A recording terminal accepting deterministic events from other threads."))
+
+(defmethod terminal-input-ready-p ((terminal queued-recording-terminal))
+  "Return true when TERMINAL has a thread-safely queued event."
+  (with-lock-held ((queued-recording-terminal-event-lock terminal))
+    (not (null (queued-recording-terminal-events terminal)))))
+
+(defmethod terminal-read-event ((terminal queued-recording-terminal))
+  "Return TERMINAL's next thread-safely queued event."
+  (with-lock-held ((queued-recording-terminal-event-lock terminal))
+    (or (pop (queued-recording-terminal-events terminal)) ':end-of-input)))
+
+(-> queued-recording-terminal-enqueue (queued-recording-terminal t) null)
+(defun queued-recording-terminal-enqueue (terminal event)
+  "Append EVENT to TERMINAL's thread-safe input queue."
+  (with-lock-held ((queued-recording-terminal-event-lock terminal))
+    (setf (queued-recording-terminal-events terminal)
+          (nconc (queued-recording-terminal-events terminal) (list event))))
+  nil)
+
 
 ;;;; -- Focused Presentation Tests --
 
@@ -654,60 +686,154 @@
 
 (-> test-repeated-interrupt-forces-exit () null)
 (defun test-repeated-interrupt-forces-exit ()
-  "Test that another Ctrl-C bypasses a pending graceful interruption."
+  "Test another Ctrl-C bypasses APPLICATION-RUN's blocked runtime cleanup."
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (conversation (conversation-create configuration
                                             :identifier "force-resume"))
-         (terminal (make-instance 'scripted-terminal
-                                  :columns 80
-                                  :events (list :interrupt :interrupt)))
+         (terminal (make-instance 'queued-recording-terminal :columns 80))
          (ui (terminal-ui-create :terminal terminal))
+         (registry (make-instance 'tool-registry))
          (application
            (make-instance 'application
                           :configuration configuration
                           :conversation conversation
                           :provider nil
-                          :tool-registry (make-instance 'tool-registry)
+                          :tool-registry registry
                           :worker nil
                           :agent nil
                           :ui ui))
-         (controller
-           (make-instance 'application-input-controller
-                          :application application
-                          :later-state (make-instance 'later-state)
-                          :pending-later-entries nil
-                          :main-thread (current-thread))))
+         (barrier-lock (make-lock "Autolith shutdown cleanup test"))
+         (barrier (make-condition-variable
+                   :name "Autolith shutdown cleanup test"))
+         (cleanup-entered-p nil)
+         (cleanup-released-p nil)
+         (cleanup-timed-out-p nil)
+         (forced-status nil)
+         (terminal-restored-before-exit-p nil)
+         (first-exit-reason nil)
+         (reader-alive-during-cleanup-p nil)
+         (producer nil))
     (unwind-protect
          (progn
            (conversation-append-user-message conversation "preserve this work")
-           (setf (application-input-controller application) controller)
-           (let ((status
-                   (catch 'forced-exit
-                     (let ((*application-forced-exit-function*
-                             (lambda (value)
-                               (throw 'forced-exit value))))
-                       (with-terminal-ui (active-ui ui)
-                         (declare (ignore active-ui))
-                         (application-input-controller--reader-loop controller)))
-                     nil)))
-             (test-assert (= status +application-forced-interrupt-status+)
-                          "a repeated Ctrl-C forces process status 130")
+           (tool-registry-register
+            registry
+            (make-instance
+             'tool-test-runtime-tool
+             :namespace "test"
+             :name "shutdown"
+             :description "Wait at the shutdown regression barrier."
+             :parameters (json-object "type" "object")
+             :runtime-identity (list ':shutdown-barrier)
+             :close-function
+             (lambda ()
+               ;; Holding the presentation lock proves the emergency path
+               ;; never waits for repaint or ordinary UI serialization.
+               (with-terminal-ui-locked (ui)
+                 (with-lock-held (barrier-lock)
+                   (let ((controller
+                           (application-input-controller application)))
+                     (setf first-exit-reason
+                           (application-input-controller-exit-reason controller)
+                           reader-alive-during-cleanup-p
+                           (thread-alive-p
+                            (application-input-controller-reader-thread
+                             controller))))
+                   (setf cleanup-entered-p t)
+                   (condition-notify barrier)
+                   (unless cleanup-released-p
+                     (condition-wait barrier barrier-lock :timeout 2))
+                   (setf cleanup-timed-out-p
+                         (not cleanup-released-p)))))
+             :detach-function (lambda () nil)))
+           (queued-recording-terminal-enqueue terminal ':interrupt)
+           (setf producer
+                 (make-thread
+                  (lambda ()
+                    (with-lock-held (barrier-lock)
+                      (unless cleanup-entered-p
+                        (condition-wait barrier barrier-lock :timeout 2)))
+                    (queued-recording-terminal-enqueue terminal ':interrupt))
+                  :name "Autolith repeated Ctrl-C test"))
+           (let ((*application-forced-exit-function*
+                   (lambda (status)
+                     (with-lock-held (barrier-lock)
+                       (setf forced-status status
+                             terminal-restored-before-exit-p
+                             (and (not (terminal-started-p terminal))
+                                  (not (terminal-interactive-p terminal)))
+                             cleanup-released-p t)
+                       (condition-notify barrier)))))
+             (application-run application))
+           (join-thread producer)
+           (setf producer nil)
+           (test-assert (eq first-exit-reason ':interrupt)
+                        "the first Ctrl-C remains a graceful interrupt")
+           (test-assert reader-alive-during-cleanup-p
+                        "the interrupt-only reader survives into runtime cleanup")
+           (test-assert (not cleanup-timed-out-p)
+                        "repeated Ctrl-C escapes blocked shutdown cleanup")
+           (test-assert (= forced-status +application-forced-interrupt-status+)
+                        "a repeated Ctrl-C forces process status 130")
+           (test-assert terminal-restored-before-exit-p
+                        "forced interruption restores the terminal before exit")
+           (let ((output (recording-terminal-output terminal)))
              (test-assert
-              (eq (application-input-controller-exit-reason controller)
-                  ':interrupt)
-              "the first Ctrl-C remains the graceful interrupt request")
-             (let ((output (recording-terminal-output terminal)))
-               (test-assert
-                (search "Ctrl-C pressed again; forcing Autolith to exit." output)
-                "forced interruption explains why Autolith is exiting")
-               (test-assert (search "autolith resume force-resume" output)
-                            "forced interruption preserves the exact resume command"))))
-      (ignore-errors (application-input-controller-stop controller))
+              (search "Ctrl-C pressed again; forcing Autolith to exit." output)
+              "forced interruption explains why Autolith is exiting")
+             (test-assert (search "autolith resume force-resume" output)
+                          "forced interruption preserves the exact resume command")))
+      (when producer
+        (ignore-errors (join-thread producer)))
       (ignore-errors (terminal-ui-stop ui))
       (uiop:delete-directory-tree root
                                   :validate t
                                   :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-graceful-shutdown-retains-interrupt-escape () null)
+(defun test-graceful-shutdown-retains-interrupt-escape ()
+  "Test every graceful shutdown reason retains the emergency Ctrl-C reader."
+  (dolist (reason '(:quit :end-of-input))
+    (let* ((terminal (make-instance 'queued-recording-terminal :columns 80))
+           (ui (terminal-ui-create :terminal terminal))
+           (application (make-instance 'application :ui ui))
+           (status-lock (make-lock "Autolith graceful shutdown test"))
+           (forced-status nil)
+           (controller nil))
+      (unwind-protect
+           (with-terminal-ui (active-ui ui)
+             (declare (ignore active-ui))
+             (let ((*application-forced-exit-function*
+                     (lambda (status)
+                       (with-lock-held (status-lock)
+                         (setf forced-status status)))))
+               (setf controller
+                     (application-input-controller-create application)))
+             (application-input-controller--request-exit controller reason)
+             (test-assert
+              (thread-alive-p
+               (application-input-controller-reader-thread controller))
+              "graceful shutdown preserves its interrupt-only reader")
+             (queued-recording-terminal-enqueue terminal ':interrupt)
+             (test-assert
+              (task-tests--wait-until
+               (lambda ()
+                 (with-lock-held (status-lock)
+                   (= (or forced-status -1)
+                      +application-forced-interrupt-status+)))
+               2)
+              "Ctrl-C forces exit while non-interrupt shutdown is pending")
+             (application-input-controller-stop controller)
+             (setf controller nil)
+             (test-assert
+              (search "Ctrl-C pressed during shutdown; forcing Autolith to exit."
+                      (recording-terminal-output terminal))
+              "forced exit distinguishes an interrupt during graceful shutdown"))
+        (when controller
+          (ignore-errors (application-input-controller-stop controller)))
+        (ignore-errors (terminal-ui-stop ui)))))
   nil)
 
 (-> test-transcript-entries () null)
@@ -2482,6 +2608,7 @@
   (test-command-permission-modes)
   (test-interrupt-resume-instruction)
   (test-repeated-interrupt-forces-exit)
+  (test-graceful-shutdown-retains-interrupt-escape)
   (test-transcript-entries)
   (test-streaming-presentation)
   (test-provider-retry-presentation)
