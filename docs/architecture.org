@@ -66,6 +66,16 @@ Codex. Renewable credentials come only from Autolith's own device flow.
 Owns Autolith's browser-assisted device authorization, polling, PKCE exchange, and
 publication into Autolith's private credential store.
 
+** =conversation-identifiers.lisp= and =conversation-identifier-migration.lisp=
+
+Own the short Bitcoin Base58 conversation identifier derivation, display
+normalization, collision probing, and the retained legacy alias map. Migration
+is a process-locked sequence of atomic file replacements and directory renames.
+Its readable phase record is published before mutation and after each boundary,
+so startup can safely repeat every operation after interruption. It rewrites
+conversation, memory, crash, and task-artifact references, preserves activity
+timestamps, and keeps old resume identifiers resolvable after completion.
+
 ** =conversation.lisp=
 
 Owns append-only portable records and their projection into provider input.

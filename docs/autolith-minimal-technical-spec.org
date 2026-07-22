@@ -583,6 +583,37 @@ Autolith persists ten kinds of state:
 
 Each conversation is stored in a separate =.sexp= file.
 
+A conversation identifier is stored as seven case-sensitive Bitcoin Base58
+characters and displayed with a visual hyphen after the first character. For
+example, =K8vQ2mp= is stored and =K-8vQ2mp= is displayed. Lookup accepts either
+form and removes only that one optional hyphen.
+
+The first character is a random seed. The remaining six characters encode a
+scrambled Common Lisp Universal Time reduced modulo =2^32= and padded on the
+left with Base58 zeroes. For seed alphabet index =s=, the parameters are:
+
+#+BEGIN_SRC text
+multiplier = mix32(s xor 0x73656564) bitwise-or 1
+offset     = mix32(s xor 0x6f666673)
+scrambled  = (multiplier * universal-time + offset) mod 2^32
+#+END_SRC
+
+=mix32= is the portable MurmurHash3 32-bit finalizer: xor with the value shifted
+right 16, multiply by =0x85ebca6b=, xor with the value shifted right 13,
+multiply by =0xc2b2ae35=, then xor with the value shifted right 16. Every
+intermediate value is reduced modulo =2^32=. The forced odd multiplier makes
+each seed's affine mapping invertible modulo =2^32=. Generation begins at one
+random seed and probes the remaining Base58 seeds cyclically when its pathname
+is occupied. Exhausting all 58 seeds for one second is a structured failure.
+
+On the first startup that sees legacy resumable identifiers, Autolith writes a
+complete old-to-new mapping before changing data. It then atomically replaces
+conversation and typed reference files, moves identifier-keyed image and task
+artifacts, and removes legacy conversation files only after their replacements
+are durable. Durable phase records make an interrupted migration idempotent.
+The completed mapping remains available so old resume commands, crash capsules,
+and retained generations continue to resolve.
+
 A fresh conversation remains in memory until it has a durable record. The
 header and first record are published together atomically, so starting and
 leaving an empty conversation does not create a conversation file.
@@ -606,7 +637,7 @@ Example:
 #+BEGIN_SRC lisp
 (:conversation
  :version 1
- :id "2026-07-11-001"
+ :id "K8vQ2mp"
  :created-at 3992846378)
 
 (:message

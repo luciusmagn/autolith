@@ -224,6 +224,12 @@ when the conversation is durable, shutdown prints the exact
 resume instruction. Pressing Ctrl-C again while shutdown is pending forces exit
 with status 130 and repeats the durable resume command before leaving.
 
+Conversation identifiers are short, case-sensitive Bitcoin Base58 values such
+as =K-8vQ2mp=. The hyphen after the first character is visual, so both
+=K-8vQ2mp= and =K8vQ2mp= resume the same conversation. On first startup after
+upgrading from UUID identifiers, Autolith migrates saved conversations and
+their durable references transactionally. Old resume commands remain aliases.
+
 Long agent turns are allowed to continue well beyond eight tool batches. Autolith
 continues provider and tool rounds until the model finishes, the user interrupts,
 or an unrecoverable provider or agent error occurs. Context compaction happens
