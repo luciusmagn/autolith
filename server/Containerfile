@@ -5,7 +5,7 @@ FROM ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce51
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes \
        bubblewrap build-essential ca-certificates cmake curl git \
-       libssl-dev libz-dev libzstd-dev pkg-config \
+       libicu-dev libssl-dev libz-dev libzstd-dev pkg-config \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

@@ -143,6 +143,11 @@
            (uiop:read-file-string
             (merge-pathnames "server/Containerfile" source-root)))
    "the release container selects its pinned Rust toolchain")
+  (test-assert
+   (search "libicu-dev"
+           (uiop:read-file-string
+            (merge-pathnames "server/Containerfile" source-root)))
+   "the release container can compile ColorLisp's ICU-backed Unicode source")
   nil)
 
 (-> release-script-tests--source-launcher (pathname pathname) null)
