@@ -99,6 +99,7 @@
     (test-provider-rate-limits)
     (test-provider-stream-decoding)
     (test-provider-stream-failures)
+    (test-provider-stream-error-classification)
     (test-provider-authentication-retries)
     (test-provider-stream-retries)
     (test-tool-registry)

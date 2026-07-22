@@ -412,6 +412,95 @@
      "failed and unterminated SSE streams signal typed provider errors"))
   nil)
 
+(-> test-provider-stream-error-classification () null)
+(defun test-provider-stream-error-classification ()
+  "Test structured SSE failures retain details and only transient codes retry."
+  (let* ((source
+           (test-sse-event-string
+            (json-object
+             "type" "response.failed"
+             "response"
+             (json-object
+              "id" "failed-response"
+              "error"
+              (json-object
+               "code" "server_error"
+               "message" "Temporary provider failure."
+               "request_id" "request-from-event")))))
+         (condition
+           (handler-case
+               (progn
+                 (provider--consume-stream
+                  (make-instance 'test-character-input-stream :source source)
+                  nil
+                  #'identity)
+                 nil)
+             (provider-error (error)
+               error))))
+    (test-assert (typep condition 'provider-retryable-error)
+                 "response.failed server errors are retryable")
+    (test-assert (string= (provider-error-code condition) "server_error")
+                 "response.failed retains its structured error code")
+    (test-assert
+     (string= (provider-error-request-id condition) "request-from-event")
+     "response.failed retains its structured request identifier")
+    (test-assert
+     (string= (provider-error-response-id condition) "failed-response")
+     "response.failed keeps its response identifier distinct")
+    (test-assert (search "Temporary provider failure." (format nil "~A" condition))
+                 "response.failed surfaces the provider's explanation"))
+  (let* ((source
+           (test-sse-event-string
+            (json-object
+             "type" "error"
+             "code" "server_error"
+             "message" "Please retry the request.")))
+         (condition
+           (handler-case
+               (progn
+                 (provider--consume-stream
+                  (make-instance 'test-character-input-stream :source source)
+                  '(("x-request-id" . "request-from-header"))
+                  #'identity)
+                 nil)
+             (provider-error (error)
+               error))))
+    (test-assert (typep condition 'provider-retryable-error)
+                 "top-level server error events are retryable")
+    (test-assert
+     (string= (provider-error-request-id condition) "request-from-header")
+     "top-level errors fall back to the response request header")
+    (test-assert (search "Please retry the request." (format nil "~A" condition))
+                 "top-level errors surface the provider's explanation"))
+  (let* ((source
+           (test-sse-event-string
+            (json-object
+             "type" "response.failed"
+             "response"
+             (json-object
+              "id" "invalid-response"
+              "error"
+              (json-object
+               "code" "invalid_prompt"
+               "message" "The prompt is invalid.")))))
+         (condition
+           (handler-case
+               (progn
+                 (provider--consume-stream
+                  (make-instance 'test-character-input-stream :source source)
+                  nil
+                  #'identity)
+                 nil)
+             (provider-error (error)
+               error))))
+    (test-assert
+     (and (typep condition 'provider-error)
+          (not (typep condition 'provider-retryable-error)))
+     "invalid prompt failures remain terminal")
+    (test-assert (string= (provider-error-code condition) "invalid_prompt")
+                 "terminal failures retain their structured error code"))
+  nil)
+
 (defclass test-codex-provider (codex-subscription-provider)
   ((outcomes
     :initarg :outcomes
@@ -453,6 +542,14 @@
               :message "Injected stream interruption."
               :status nil
               :request-id nil
+              :response nil))
+      ((eq outcome :server-error)
+       (error 'provider-retryable-error
+              :message "Injected transient server failure."
+              :status nil
+              :code "server_error"
+              :request-id "request-server-error"
+              :response-id "response-server-error"
               :response nil))
       (t
        (error "Invalid scripted provider outcome ~S." outcome)))))
@@ -544,35 +641,42 @@
          (let ((*provider-stream-retry-sleep-function*
                  (lambda (seconds)
                    (declare (ignore seconds)))))
-           (let ((events nil)
-                 (provider
-                   (test-codex-provider-create
-                    configuration
-                    (list :stream-error result))))
-             (test-assert
-              (eq (provider-stream-turn
-                   provider
-                   conversation
-                   :tool-namespaces #()
-                   :event-callback (lambda (event) (push event events)))
-                  result)
-              "a transient stream interruption retries the same provider turn")
-             (let ((retry-event (find-if (lambda (event)
-                                           (typep event 'provider-retry-event))
-                                         events)))
+           (dolist (failure '(:stream-error :server-error))
+             (let ((events nil)
+                   (provider
+                     (test-codex-provider-create
+                      configuration
+                      (list failure result))))
                (test-assert
-                (and retry-event
-                     (= (provider-retry-event-attempt retry-event) 1)
-                     (= (provider-retry-event-maximum-attempts retry-event)
-                        (length +provider-stream-retry-delays+))
-                     (= (provider-retry-event-delay retry-event) 1))
-                "stream retries expose their attempt and delay to the observer")))
+                (eq (provider-stream-turn
+                     provider
+                     conversation
+                     :tool-namespaces #()
+                     :event-callback (lambda (event) (push event events)))
+                    result)
+                "transient stream and server failures retry the provider turn")
+               (let ((retry-event
+                       (find-if (lambda (event)
+                                  (typep event 'provider-retry-event))
+                                events)))
+                 (test-assert
+                  (and retry-event
+                       (= (provider-retry-event-attempt retry-event) 1)
+                       (= (provider-retry-event-maximum-attempts retry-event)
+                          (length +provider-stream-retry-delays+))
+                       (= (provider-retry-event-delay retry-event) 1))
+                  "provider retries expose their attempt and delay to the observer"))
+               (test-assert
+                (equal (nreverse
+                        (test-codex-provider-refresh-flags provider))
+                       '(nil nil))
+                "provider retries do not force an authentication refresh")))
            (let ((provider
                    (test-codex-provider-create
                     configuration
                     (make-list
                      (1+ (length +provider-stream-retry-delays+))
-                     :initial-element :stream-error))))
+                     :initial-element :server-error))))
              (test-assert
               (handler-case
                   (progn
@@ -581,8 +685,8 @@
                                           :tool-namespaces #()
                                           :event-callback #'identity)
                     nil)
-                (response-stream-error ()
-                  t))
-              "exhausting the stream retry budget remains a typed provider failure")))
+                (provider-retryable-error (condition)
+                  (string= (provider-error-code condition) "server_error")))
+              "retry exhaustion re-signals the final structured failure")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

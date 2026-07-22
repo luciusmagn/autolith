@@ -126,11 +126,23 @@
     :reader provider-error-status
     :type (option integer)
     :documentation "The provider HTTP status, if a response was received.")
+   (code
+    :initarg :code
+    :initform nil
+    :reader provider-error-code
+    :type (option string)
+    :documentation "The provider's structured error code, if supplied.")
    (request-id
     :initarg :request-id
     :reader provider-error-request-id
     :type (option string)
     :documentation "The provider request identifier, if supplied.")
+   (response-id
+    :initarg :response-id
+    :initform nil
+    :reader provider-error-response-id
+    :type (option string)
+    :documentation "The failed response identifier, if supplied.")
    (response
     :initarg :response
     :reader provider-error-response
@@ -138,7 +150,11 @@
     :documentation "A bounded provider response safe for display."))
   (:documentation "A model-provider request failed."))
 
-(define-condition response-stream-error (provider-error)
+(define-condition provider-retryable-error (provider-error)
+  ()
+  (:documentation "A transient provider failure eligible for bounded retry."))
+
+(define-condition response-stream-error (provider-retryable-error)
   ()
   (:documentation "A provider stream ended without a valid terminal event."))
 

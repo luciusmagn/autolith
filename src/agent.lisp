@@ -358,6 +358,16 @@
            :usage (agent--portable-value (provider-result-usage result)))))
   nil)
 
+(-> agent--provider-error-metadata (provider-error) list)
+(defun agent--provider-error-metadata (condition)
+  "Return portable terminal failure metadata for provider CONDITION."
+  (list :message (bounded-string (format nil "~A" condition) :limit 2000)
+        :status (provider-error-status condition)
+        :code (provider-error-code condition)
+        :request-id (provider-error-request-id condition)
+        :response-id (provider-error-response-id condition)
+        :retryable-p (typep condition 'provider-retryable-error)))
+
 (-> agent--validate-tool-call-identifiers
     (agent list
      &key (:seen-call-identifiers hash-table) (:request-number integer))
@@ -583,14 +593,22 @@ persisted as history, only the durable summary record is."
              :tool-rounds tool-rounds))
       (let* ((conversation (agent-conversation agent))
              (result
-               (provider-stream-turn
-                (agent-provider agent)
-                conversation
-                :tool-namespaces
-                (tool-registry-provider-schemas
-                 (agent-tool-registry agent))
-                :event-callback (agent--provider-event-callback observer)
-                :goal-context goal-context))
+               (handler-case
+                   (provider-stream-turn
+                    (agent-provider agent)
+                    conversation
+                    :tool-namespaces
+                    (tool-registry-provider-schemas
+                     (agent-tool-registry agent))
+                    :event-callback (agent--provider-event-callback observer)
+                    :goal-context goal-context)
+                 (provider-error (condition)
+                   (conversation-append-provider-metadata
+                    conversation
+                    (list :request-number request-number
+                          :failure
+                          (agent--provider-error-metadata condition)))
+                   (error condition))))
              (calls (provider-result-tool-calls result)))
         (agent--validate-tool-call-identifiers
          agent

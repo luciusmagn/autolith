@@ -147,6 +147,11 @@
   :test #'equal
   :documentation "Backoff seconds for bounded provider stream reconnects.")
 
+(define-constant +provider-retryable-event-error-codes+
+    '("server_error" "internal_server_error")
+  :test #'equal
+  :documentation "Structured SSE error codes eligible for bounded retry.")
+
 (defparameter *provider-stream-retry-sleep-function* #'sleep
   "Function used to wait between provider stream reconnect attempts.")
 
@@ -704,6 +709,116 @@ the transport consumes only after a completed response."
        headers
        "The provider connection closed during an SSE event."))))
 
+(-> provider--event-response (json-object) (option json-object))
+(defun provider--event-response (event)
+  "Return EVENT's nested response object, when present."
+  (let ((response (json-get event "response")))
+    (and (json-object-p response) response)))
+
+(-> provider--event-error-object (json-object) (option json-object))
+(defun provider--event-error-object (event)
+  "Return the structured error object nested in EVENT, when present."
+  (let* ((response (provider--event-response event))
+         (response-error (and response (json-get response "error")))
+         (event-error (json-get event "error")))
+    (cond
+      ((json-object-p response-error)
+       response-error)
+      ((json-object-p event-error)
+       event-error)
+      ((equal (json-get event "type") "error")
+       event)
+      (t
+       nil))))
+
+(-> provider--event-error-code ((option json-object)) (option string))
+(defun provider--event-error-code (error-object)
+  "Return ERROR-OBJECT's code or type when either is a non-empty string."
+  (when error-object
+    (let ((code (json-get error-object "code"))
+          (type (json-get error-object "type")))
+      (cond
+        ((non-empty-string-p code)
+         code)
+        ((non-empty-string-p type)
+         type)
+        (t
+         nil)))))
+
+(-> provider--event-response-id
+    (json-object (option string))
+    (option string))
+(defun provider--event-response-id (event current-response-id)
+  "Return EVENT's response identifier or CURRENT-RESPONSE-ID."
+  (let* ((response (provider--event-response event))
+         (nested-id (and response (json-get response "id")))
+         (event-id (json-get event "response_id")))
+    (cond
+      ((non-empty-string-p nested-id)
+       nested-id)
+      ((non-empty-string-p event-id)
+       event-id)
+      (t
+       current-response-id))))
+
+(-> provider--event-request-id
+    (json-object (option json-object) t)
+    (option string))
+(defun provider--event-request-id (event error-object headers)
+  "Return the structured or header request identifier for EVENT."
+  (let ((error-request-id (and error-object
+                               (json-get error-object "request_id")))
+        (event-request-id (json-get event "request_id"))
+        (header-request-id (response-header headers "x-request-id")))
+    (cond
+      ((non-empty-string-p error-request-id)
+       error-request-id)
+      ((non-empty-string-p event-request-id)
+       event-request-id)
+      ((non-empty-string-p header-request-id)
+       header-request-id)
+      (t
+       nil))))
+
+(-> provider--retryable-event-error-code-p ((option string)) boolean)
+(defun provider--retryable-event-error-code-p (code)
+  "Return true when structured provider CODE describes a transient failure."
+  (not (null (and code
+                  (member code
+                          +provider-retryable-event-error-codes+
+                          :test #'string-equal)))))
+
+(-> provider--signal-event-failure
+    (json-object
+     &key (:type string)
+          (:data string)
+          (:headers t)
+          (:response-id (option string)))
+    null)
+(defun provider--signal-event-failure
+    (event &key type data headers response-id)
+  "Signal EVENT as a structured terminal or retryable provider failure."
+  (let* ((error-object (provider--event-error-object event))
+         (code (provider--event-error-code error-object))
+         (detail (and error-object (json-get error-object "message")))
+         (message
+           (if (non-empty-string-p detail)
+               (format nil "The provider returned ~A.~%~A"
+                       (or code type)
+                       (bounded-string detail :limit 1000))
+               (format nil "The provider ended with ~A." type)))
+         (condition-type
+           (if (provider--retryable-event-error-code-p code)
+               'provider-retryable-error
+               'provider-error)))
+    (error condition-type
+           :message message
+           :status nil
+           :code code
+           :request-id (provider--event-request-id event error-object headers)
+           :response-id (provider--event-response-id event response-id)
+           :response (bounded-string data :limit 2000))))
+
 (-> provider--consume-stream (stream t function) provider-result)
 (defun provider--consume-stream (stream headers event-callback)
   "Consume STREAM into a provider result while invoking EVENT-CALLBACK."
@@ -775,15 +890,16 @@ the transport consumes only after a completed response."
                                               :response-id response-id
                                               :usage usage
                                               :turn-completion turn-completion))))
-                   ((and type
+                   ((and (stringp type)
                          (member type
                                  '("response.failed" "response.incomplete" "error")
                                  :test #'string=))
-                    (error 'provider-error
-                           :message (format nil "The provider ended with ~A." type)
-                           :status nil
-                           :request-id response-id
-                           :response (bounded-string data :limit 2000)))
+                    (provider--signal-event-failure
+                     event
+                     :type type
+                     :data data
+                     :headers headers
+                     :response-id response-id))
                    (t
                     (funcall event-callback
                              (make-instance 'provider-progress-event)))))))
@@ -903,7 +1019,7 @@ the transport consumes only after a completed response."
           do (handler-case
                  (return-from provider-stream-turn
                    (attempt-with-authentication))
-               (response-stream-error (condition)
+               (provider-retryable-error (condition)
                  (when (= retry-number
                           (length +provider-stream-retry-delays+))
                    (error condition))

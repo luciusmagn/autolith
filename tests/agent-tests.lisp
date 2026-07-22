@@ -440,6 +440,75 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-agent-provider-failure-persistence () null)
+(defun test-agent-provider-failure-persistence ()
+  "Test a terminal provider failure is durable but absent from model replay."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration :identifier "provider-failure"))
+         (provider
+           (make-instance
+            'scripted-provider
+            :results
+            (list
+             (make-condition
+              'provider-error
+              :message "The provider rejected the prompt."
+              :status 400
+              :code "invalid_prompt"
+              :request-id "request-invalid"
+              :response-id "response-invalid"
+              :response nil))))
+         (agent
+           (agent-create :configuration configuration
+                         :provider provider
+                         :conversation conversation
+                         :tool-registry (agent-test-registry)
+                         :worker ':unused)))
+    (unwind-protect
+         (progn
+           (test-assert
+            (handler-case
+                (progn
+                  (agent-run-user-turn agent "persist this failure")
+                  nil)
+              (provider-error ()
+                t))
+            "terminal provider failures still reach the caller")
+           (let* ((records
+                    (conversation--read-records
+                     (conversation-pathname conversation)))
+                  (provider-record
+                    (find-if (lambda (record)
+                               (eq (first record) ':provider))
+                             records))
+                  (metadata (getf (rest provider-record) :metadata))
+                  (failure (getf metadata :failure)))
+             (test-assert (= (getf metadata :request-number) 1)
+                          "provider failure metadata retains its request number")
+             (test-assert (string= (getf failure :code) "invalid_prompt")
+                          "provider failure metadata retains its error code")
+             (test-assert
+              (string= (getf failure :request-id) "request-invalid")
+              "provider failure metadata retains its request identifier")
+             (test-assert
+              (string= (getf failure :response-id) "response-invalid")
+              "provider failure metadata retains its response identifier")
+             (test-assert (null (getf failure :retryable-p))
+                          "terminal failure metadata is not marked retryable"))
+           (let ((reloaded
+                   (conversation-load-by-id configuration "provider-failure")))
+             (test-assert (= (length (conversation-input-items reloaded)) 1)
+                          "provider failure metadata stays outside model replay")
+             (test-assert
+              (string= (json-get (first (conversation-input-items reloaded))
+                                 "role")
+                       "user")
+              "replayed input retains the user message that failed")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-agent-long-tool-turn () null)
 (defun test-agent-long-tool-turn ()
   "Test a useful turn may execute more than eight tool batches before completion."
@@ -667,6 +736,7 @@
   (test-agent-explicit-continuation)
   (test-agent-invalid-call-history)
   (test-agent-tool-failures)
+  (test-agent-provider-failure-persistence)
   (test-agent-long-tool-turn)
   (test-agent-unbounded-tool-calls)
   (test-agent-default-turn-has-no-step-guillotine)
