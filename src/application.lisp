@@ -469,7 +469,11 @@ completion or help output."
           (application-rendered-sequence application)
           (if (and recovery-rendered-sequence
                    (string= (conversation-identifier conversation)
-                            (or recovery-conversation-id "")))
+                            (if recovery-conversation-id
+                                (conversation-identifier-migration-resolve
+                                 prepared-configuration
+                                 recovery-conversation-id)
+                                "")))
               recovery-rendered-sequence
               0)
           (application-overlay-failures application) overlay-failures)
