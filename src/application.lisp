@@ -331,6 +331,7 @@ completion or help output."
           (preferences-apply-model-selection configuration)))
     (context-runtime-reset)
     (configuration-ensure-directories preferred-configuration)
+    (conversation-identifier-migrate preferred-configuration)
     (durable-mutations-load preferred-configuration)
     (let* ((overlay-failures (image-state-load preferred-configuration))
            (user-init-pathname (user-init-load preferred-configuration))
@@ -404,6 +405,7 @@ completion or help output."
          (prepared-configuration
            (progn
              (configuration-ensure-directories retained-configuration)
+             (conversation-identifier-migrate retained-configuration)
              (user-init-load retained-configuration)
              retained-configuration))
          (reasoning-traces-p

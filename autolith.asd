@@ -37,6 +37,7 @@
                              (:file "lisp-images")
                              (:file "device-authentication")
                              (:file "conversation-identifiers")
+                             (:file "conversation-identifier-migration")
                              (:file "conversation")
                              (:file "memories")
                              (:file "agendas")

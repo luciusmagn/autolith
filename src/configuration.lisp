@@ -391,6 +391,12 @@ Selecting a different model recomputes the context window for that model."
   "Return the directory containing append-only conversation files."
   (merge-pathnames "conversations/" (configuration-data-root configuration)))
 
+(-> configuration-conversation-identifier-migration-path (configuration) pathname)
+(defun configuration-conversation-identifier-migration-path (configuration)
+  "Return the durable legacy conversation identifier migration record."
+  (merge-pathnames "conversation-identifier-migration.sexp"
+                   (configuration-state-root configuration)))
+
 (-> configuration-user-init-path (configuration) pathname)
 (defun configuration-user-init-path (configuration)
   "Return the user-authored Lisp initialization pathname."

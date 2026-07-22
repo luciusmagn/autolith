@@ -397,6 +397,20 @@
   (:documentation
    "All 58 conversation identifier seeds were occupied for one second."))
 
+(define-condition conversation-identifier-migration-error (conversation-error)
+  ((stage
+    :initarg :stage
+    :reader conversation-identifier-migration-error-stage
+    :type keyword
+    :documentation "The planning, conversation, reference, artifact, or cleanup stage.")
+   (cause
+    :initarg :cause
+    :initform nil
+    :reader conversation-identifier-migration-error-cause
+    :type t
+    :documentation "The underlying migration failure, when available."))
+  (:documentation "Legacy conversation identifiers could not be migrated safely."))
+
 (define-condition memory-error (autolith-error)
   ((pathname
     :initarg :pathname

@@ -761,10 +761,8 @@ conversation files."
   "Return CONFIGURATION's conversation pathname for IDENTIFIER."
   (merge-pathnames (make-pathname
                     :name
-                    (handler-case
-                        (conversation-identifier-normalize identifier)
-                      (conversation-identifier-error ()
-                        identifier))
+                    (conversation-identifier-migration-resolve
+                     configuration identifier)
                     :type "sexp")
                    (configuration-conversation-root configuration)))
 
