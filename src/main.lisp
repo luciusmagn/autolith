@@ -137,7 +137,8 @@
 (-> application--startup-command-entry () list)
 (defun application--startup-command-entry ()
   "Return one command entry selected for the startup banner."
-  (nth (random (length +application-commands+))
+  (nth (random (length +application-commands+)
+               (make-random-state t))
        +application-commands+))
 
 (-> application--command-tip-spans (list) terminal-styled-text)
