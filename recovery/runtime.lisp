@@ -531,6 +531,19 @@
   (sb-posix:unsetenv "AUTOLITH_RECOVERY_RENDERED_SEQUENCE")
   nil)
 
+(serapeum:-> recovery-conversation-identifier-display (string) string)
+(defun recovery-conversation-identifier-display (identifier)
+  "Return a short conversation identifier with its visual hyphen."
+  (if (and (= (length identifier) 7)
+           (every
+            (lambda (character)
+              (find character
+                    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+                    :test #'char=))
+            identifier))
+      (format nil "~A-~A" (subseq identifier 0 1) (subseq identifier 1))
+      identifier))
+
 (serapeum:-> recovery-report-crash-capsule
     (recovery-context t)
     (or null string))
@@ -558,7 +571,11 @@
                     (recovery-sanitize-text capsule-pathname)
                     (recovery-sanitize-text
                      (or (getf properties :condition) "unknown"))
-                    (recovery-sanitize-text (or conversation-id "unknown")))
+                    (recovery-sanitize-text
+                     (if (stringp conversation-id)
+                         (recovery-conversation-identifier-display
+                          conversation-id)
+                         "unknown")))
             (when (and (stringp conversation-id)
                        (recovery-identifier-p conversation-id))
               (sb-posix:setenv "AUTOLITH_RECOVERY_CONVERSATION_ID"

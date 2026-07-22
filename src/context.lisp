@@ -825,7 +825,8 @@ same evaluation behavior as DEFUN."
                                       (getf registration :function))))
                            registrations))
                   "none")
-              identifier
+              (and identifier
+                   (conversation-identifier-display identifier))
               (cond
                 ((null delivery)
                  "none assembled")
@@ -836,7 +837,8 @@ same evaluation behavior as DEFUN."
                 (t
                  (format nil
                          "conversation ~A~%~@[active:~%~{~A~^~%~}~%~]~@[omitted by budget:~%~{~A~^~%~}~%~]~@[contributor failures:~%~{~A~^~%~}~]"
-                         (context-delivery-conversation-identifier delivery)
+                         (conversation-identifier-display
+                          (context-delivery-conversation-identifier delivery))
                          (and (context-delivery-contributions delivery)
                               (mapcar #'context--contribution-status-line
                                       (context-delivery-contributions delivery)))

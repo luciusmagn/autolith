@@ -131,7 +131,10 @@
           (memory-tool--scope-label memory)
           (memory--timestamp-string (memory-created-at memory))
           (memory--timestamp-string (memory-updated-at memory))
-          (or (memory-source-conversation memory) "unknown")
+          (if (memory-source-conversation memory)
+              (conversation-identifier-display
+               (memory-source-conversation memory))
+              "unknown")
           (memory-title memory)
           (memory-tags memory)
           (memory-content memory)))
