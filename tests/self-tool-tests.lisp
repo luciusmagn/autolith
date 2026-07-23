@@ -13,6 +13,38 @@
 (defvar *test-discard-setting* :baseline
   "The mutable binding used by exploratory discard tests.")
 
+(-> test-application-command-definition-source
+    (&key (:definition-name symbol)
+          (:name string)
+          (:aliases list)
+          (:action keyword)
+          (:description string)
+          (:tip string))
+    string)
+(defun test-application-command-definition-source
+    (&key definition-name name aliases action description tip)
+  "Return one complete application command definition for self-tool tests."
+  (format nil
+          "(define-application-command ~S~%~
+             ~2T(:name ~S~%~
+             ~3T:aliases ~S~%~
+             ~3T:argument nil~%~
+             ~3T:description ~S~%~
+             ~3T:tip ~S~%~
+             ~3T:busy-behavior :hold~%~
+             ~3T:terminal-behavior :shared)~%~
+             ~2T(application invocation)~%~
+             ~2T~S~%~
+             ~2T(declare (ignore application invocation))~%~
+             ~2T~S)"
+          definition-name
+          name
+          aliases
+          description
+          tip
+          description
+          action))
+
 (-> test-self-tools () null)
 (defun test-self-tools ()
   "Test active definition installation, inspection, and form-aware persistence."
@@ -256,6 +288,399 @@
              (when (fboundp symbol)
                (fmakunbound symbol))
              (unintern symbol implementation-package)))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-self-definition-installation-rollback () null)
+(defun test-self-definition-installation-rollback ()
+  "Test failed definition installation restores exact live and cached state."
+  (let* ((*package* (find-package '#:autolith))
+         (configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (existing-name 'test-self-atomic-existing)
+         (new-name 'test-self-atomic-new)
+         (existing-identifier
+           (context--definition-identifier existing-name))
+         (new-identifier (context--definition-identifier new-name))
+         (baseline-source
+           "(define-context-contributor test-self-atomic-existing (context) (declare (ignore context)) :baseline)")
+         (replacement-source
+           "(define-context-contributor test-self-atomic-existing (context) (declare (ignore context)) :replacement)")
+         (new-source
+           "(define-context-contributor test-self-atomic-new (context) (declare (ignore context)) :new)")
+         (baseline-definition (self-read-form baseline-source))
+         (new-definition (self-read-form new-source))
+         (existing-target (definition-key baseline-definition))
+         (new-target (definition-key new-definition))
+         (original-journal-function (symbol-function 'mutation-journal-append))
+         (original-register-function
+           (symbol-function 'register-context-contributor)))
+    (unwind-protect
+         (progn
+           (when (fboundp existing-name)
+             (fmakunbound existing-name))
+           (when (fboundp new-name)
+             (fmakunbound new-name))
+           (unregister-context-contributor existing-identifier)
+           (unregister-context-contributor new-identifier)
+           (remhash existing-target *exploratory-definitions*)
+           (remhash new-target *exploratory-definitions*)
+           (self--install-definition baseline-definition baseline-source)
+           (let ((baseline-registration
+                   (context--registration-snapshot existing-identifier)))
+             (setf (symbol-function 'mutation-journal-append)
+                   (lambda (checked-configuration record)
+                     (if (and (eq (getf (rest record) :kind) :definition)
+                              (eq (getf (rest record) :result) :installed))
+                         (error "Injected installed-journal failure.")
+                         (funcall original-journal-function
+                                  checked-configuration
+                                  record))))
+             (test-assert
+              (handler-case
+                  (progn
+                    (self-install-definition configuration replacement-source)
+                    nil)
+                (error ()
+                  t))
+              "an installed-journal failure rejects the exploratory definition")
+             (test-assert
+              (eq (funcall (symbol-function existing-name) nil) :baseline)
+              "failed installation restores the exact preceding function")
+             (test-assert
+              (equal (context--registration-snapshot existing-identifier)
+                     baseline-registration)
+              "failed installation restores the preceding side registration")
+             (test-assert
+              (string= (gethash existing-target *exploratory-definitions*)
+                       baseline-source)
+              "failed installation restores the preceding exploratory source")
+             (setf (symbol-function 'mutation-journal-append)
+                   original-journal-function))
+           (setf (symbol-function 'register-context-contributor)
+                 (lambda (identifier function-designator &key source)
+                   (declare (ignore identifier function-designator source))
+                   (error "Injected registration failure.")))
+           (test-assert
+            (handler-case
+                (progn
+                  (self-install-definition configuration new-source)
+                  nil)
+              (error ()
+                t))
+            "a partial defining-form failure rejects the new definition")
+           (test-assert (not (fboundp new-name))
+                        "partial installation restores an unbound function")
+           (test-assert (null (context--registration-snapshot new-identifier))
+                        "partial installation removes a new side registration")
+           (test-assert
+            (not (nth-value 1
+                            (gethash new-target *exploratory-definitions*)))
+            "failed installation does not invent an exploratory source")
+           (test-assert
+            (equal
+             (loop for record in (mutation-journal-read-records configuration)
+                   when (and (eq (first record) :mutation)
+                             (member (getf (rest record) :target)
+                                     (list existing-target new-target)
+                                     :test #'string=))
+                     collect (getf (rest record) :result))
+             '(:pending :failed :pending :failed))
+            "each rejected definition journals pending and failed states"))
+      (setf (symbol-function 'mutation-journal-append)
+            original-journal-function
+            (symbol-function 'register-context-contributor)
+            original-register-function)
+      (unregister-context-contributor existing-identifier)
+      (unregister-context-contributor new-identifier)
+      (when (fboundp existing-name)
+        (fmakunbound existing-name))
+      (when (fboundp new-name)
+        (fmakunbound new-name))
+      (remhash existing-target *exploratory-definitions*)
+      (remhash new-target *exploratory-definitions*)
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-self-application-command-definitions () null)
+(defun test-self-application-command-definitions ()
+  "Test command definition identity, rollback, discard, and private replay."
+  (let* ((*package* (find-package '#:autolith))
+         (configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (registry-snapshot (application-command--registry-snapshot))
+         (definition-names
+           '(test-self-command-existing
+             test-self-command-new
+             test-self-command-collision-owner
+             test-self-command-collision-rejected
+             test-self-command-replay))
+         (function-snapshots
+           (loop for name in definition-names
+                 collect
+                 (list name
+                       (not (null (fboundp name)))
+                       (and (fboundp name) (fdefinition name)))))
+         (existing-baseline-source
+           (test-application-command-definition-source
+            :definition-name 'test-self-command-existing
+            :name "/self-command-existing"
+            :aliases nil
+            :action ':continue
+            :description "Return the baseline command action."
+            :tip "Use /self-command-existing for the baseline action."))
+         (existing-replacement-source
+           (test-application-command-definition-source
+            :definition-name 'test-self-command-existing
+            :name "/self-command-existing"
+            :aliases '("/self-command-existing-alias")
+            :action ':quit
+            :description "Return the replacement command action."
+            :tip "Use /self-command-existing for the replacement action."))
+         (new-source
+           (test-application-command-definition-source
+            :definition-name 'test-self-command-new
+            :name "/self-command-new"
+            :aliases nil
+            :action ':continue
+            :description "Return the new command action."
+            :tip "Use /self-command-new for the new action."))
+         (collision-owner-source
+           (test-application-command-definition-source
+            :definition-name 'test-self-command-collision-owner
+            :name "/self-command-collision-owner"
+            :aliases '("/self-command-collision")
+            :action ':continue
+            :description "Own the colliding command alias."
+            :tip "Use /self-command-collision-owner for the owner."))
+         (collision-rejected-source
+           (test-application-command-definition-source
+            :definition-name 'test-self-command-collision-rejected
+            :name "/self-command-collision"
+            :aliases nil
+            :action ':quit
+            :description "Attempt to collide with an existing alias."
+            :tip "This colliding command must never become effective."))
+         (replay-source
+           (test-application-command-definition-source
+            :definition-name 'test-self-command-replay
+            :name "/self-command-replay"
+            :aliases '("/self-command-replay-alias")
+            :action ':continue
+            :description "Return the replayed command action."
+            :tip "Use /self-command-replay after private replay."))
+         (existing-baseline-definition
+           (self-read-form existing-baseline-source :read-eval nil))
+         (existing-replacement-definition
+           (self-read-form existing-replacement-source :read-eval nil))
+         (new-definition (self-read-form new-source :read-eval nil))
+         (collision-rejected-definition
+           (self-read-form collision-rejected-source :read-eval nil))
+         (replay-definition (self-read-form replay-source :read-eval nil))
+         (targets
+           (mapcar
+            #'definition-key
+            (list existing-baseline-definition
+                  new-definition
+                  collision-rejected-definition
+                  replay-definition)))
+         (previous-state-initialized-p *image-state-initialized-p*)
+         (previous-commit-identifier *active-image-commit-identifier*)
+         (previous-history-commit *active-image-history-commit*)
+         (previous-lineage-identifier *active-image-lineage-identifier*))
+    (unwind-protect
+         (progn
+           (dolist (name definition-names)
+             (unregister-application-command name :source ':runtime)
+             (when (fboundp name)
+               (fmakunbound name)))
+           (dolist (target targets)
+             (remhash target *exploratory-definitions*))
+           (setf *image-state-initialized-p* nil
+                 *active-image-commit-identifier* nil
+                 *active-image-history-commit* nil
+                 *active-image-lineage-identifier* nil)
+           (image-state-load configuration)
+           (test-assert
+            (definition-form-p existing-baseline-definition)
+            "application commands are supported top-level definitions")
+           (test-assert
+            (equal (definition-signature existing-baseline-definition)
+                   (definition-signature existing-replacement-definition))
+            "command definition identity survives metadata changes")
+           (test-assert
+            (not
+             (equal (definition-signature existing-baseline-definition)
+                    '(defun test-self-command-existing)))
+            "command definitions remain distinct from same-named functions")
+           (let* ((tracked-root (merge-pathnames "tracked/" root))
+                  (tracked-pathname
+                    (merge-pathnames "src/commands.lisp" tracked-root))
+                  (tracked-configuration
+                    (test-configuration-for-source-root tracked-root)))
+             (ensure-directories-exist tracked-pathname)
+             (with-open-file (stream tracked-pathname
+                                     :direction :output
+                                     :if-exists :supersede
+                                     :if-does-not-exist :create
+                                     :external-format :utf-8)
+               (format stream "(in-package #:autolith)~2%~A~%"
+                       replay-source))
+             (let ((definitions
+                     (self-tracked-definitions
+                      tracked-configuration
+                      'test-self-command-replay)))
+               (test-assert
+                (and (= (length definitions) 1)
+                     (equal
+                      (definition-signature
+                       (source-form-form
+                        (tracked-definition-source-form
+                         (first definitions))))
+                      (definition-signature replay-definition)))
+                "tracked source inspection finds application command definitions")))
+           (eval existing-baseline-definition)
+           (let ((baseline-binding
+                   (fdefinition 'test-self-command-existing))
+                 (baseline-registration
+                   (application-command--registration-snapshot
+                    'test-self-command-existing
+                    ':runtime))
+                 (baseline-command
+                   (application-command-find "/self-command-existing")))
+             (self-install-definition
+              configuration
+              existing-replacement-source)
+             (test-assert
+              (eq (funcall
+                   (fdefinition 'test-self-command-existing)
+                   nil
+                   nil)
+                  ':quit)
+              "self.redefine installs replacement command behavior")
+             (test-assert
+              (eq (application-command-definition-name
+                   (application-command-find
+                    "/self-command-existing-alias"))
+                  'test-self-command-existing)
+              "self.redefine publishes replacement command metadata")
+             (self-discard-mutation configuration nil)
+             (test-assert
+              (eq (fdefinition 'test-self-command-existing)
+                  baseline-binding)
+              "discard restores an existing command's exact function")
+             (test-assert
+              (equal
+               (application-command--registration-snapshot
+                'test-self-command-existing
+                ':runtime)
+               baseline-registration)
+              "discard restores an existing command's exact runtime registration")
+             (test-assert
+              (and (eq (application-command-find "/self-command-existing")
+                       baseline-command)
+                   (null
+                    (application-command-find
+                     "/self-command-existing-alias")))
+              "discard restores the preceding command projection"))
+           (self-install-definition configuration new-source)
+           (test-assert
+            (and (fboundp 'test-self-command-new)
+                 (eq
+                  (application-command-definition-name
+                   (application-command-find "/self-command-new"))
+                  'test-self-command-new))
+            "self.redefine installs a new command and registration")
+           (self-discard-mutation configuration nil)
+           (test-assert
+            (and (not (fboundp 'test-self-command-new))
+                 (null
+                  (application-command--registration-snapshot
+                   'test-self-command-new
+                   ':runtime))
+                 (null (application-command-find "/self-command-new")))
+            "discard removes a new command's function and registration")
+           (eval (self-read-form collision-owner-source :read-eval nil))
+           (let ((owner-command
+                   (application-command-find "/self-command-collision")))
+             (test-assert
+              (handler-case
+                  (progn
+                    (self-install-definition
+                     configuration
+                     collision-rejected-source)
+                    nil)
+                (error ()
+                  t))
+              "identifier collision rejects a new command definition")
+             (test-assert
+              (and
+               (not (fboundp 'test-self-command-collision-rejected))
+               (null
+                (application-command--registration-snapshot
+                 'test-self-command-collision-rejected
+                 ':runtime))
+               (eq (application-command-find "/self-command-collision")
+                   owner-command)
+               (not
+                (nth-value
+                 1
+                 (gethash
+                  (definition-key collision-rejected-definition)
+                  *exploratory-definitions*))))
+              "collision rollback restores the exact function, registry, and cache"))
+           (let ((script (merge-pathnames "command-replay.lisp" root)))
+             (image-commit-write-script
+              script
+              :identifier "command-replay"
+              :title "Replay one application command"
+              :entries
+              (list
+               (list :kind ':definition
+                     :id "command-replay-definition"
+                     :target (definition-key replay-definition)
+                     :package "AUTOLITH"
+                     :source replay-source)))
+             (load script)
+             (load script))
+           (test-assert
+            (= (loop for registration
+                       in (application-command--registrations)
+                     for command = (getf registration :command)
+                     count
+                     (and
+                      (eq (getf registration :source) ':runtime)
+                      (eq (application-command-definition-name command)
+                          'test-self-command-replay)))
+               1)
+            "private replay replaces rather than duplicates command registration")
+           (test-assert
+            (and
+             (eq
+              (application-command-definition-name
+               (application-command-find
+                "/self-command-replay-alias"))
+              'test-self-command-replay)
+             (eq
+              (funcall
+               (application-command-handler
+                (application-command-find "/self-command-replay"))
+               nil
+               nil)
+              ':continue))
+            "private replay reconstructs command metadata and behavior"))
+      (application-command--registry-restore registry-snapshot)
+      (dolist (snapshot function-snapshots)
+        (self--restore-function-binding
+         (first snapshot)
+         (second snapshot)
+         (third snapshot)))
+      (dolist (target targets)
+        (remhash target *exploratory-definitions*))
+      (setf *image-state-initialized-p* previous-state-initialized-p
+            *active-image-commit-identifier* previous-commit-identifier
+            *active-image-history-commit* previous-history-commit
+            *active-image-lineage-identifier* previous-lineage-identifier)
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -659,6 +1084,37 @@
              (test-assert
               (null (image-commit--pointer-identifier configuration))
               "a rejected definition publishes no private commit")
+             (let* ((*package* (find-package '#:autolith))
+                    (new-definition-source
+                      "(defun test-self-new-rejected-definition () \"Exist only during a rejected durable mutation.\" 17)")
+                    (new-definition
+                      (self-read-form new-definition-source :read-eval nil))
+                    (new-target (definition-key new-definition)))
+               (when (fboundp 'test-self-new-rejected-definition)
+                 (fmakunbound 'test-self-new-rejected-definition))
+               (remhash new-target *exploratory-definitions*)
+               (test-assert
+                (handler-case
+                    (progn
+                      (tool-execute
+                       persist-tool
+                       failing-active-context
+                       (json-object "definition" new-definition-source))
+                      nil)
+                  (error ()
+                    t))
+                "a failing active check rejects a new durable definition")
+               (test-assert
+                (not (fboundp 'test-self-new-rejected-definition))
+                "rejected new persistence restores an unbound function")
+               (test-assert
+                (not (nth-value
+                      1
+                      (gethash new-target *exploratory-definitions*)))
+                "rejected new persistence removes its exploratory source")
+               (test-assert
+                (null (image-commit--pointer-identifier configuration))
+                "rejected new persistence leaves private selection unchanged"))
              (let* ((result
                       (tool-execute
                        persist-tool
@@ -963,15 +1419,164 @@
             *active-image-lineage-identifier* previous-lineage-identifier)
       (when (fboundp 'test-legacy-image-target)
         (fmakunbound 'test-legacy-image-target))
+      (when (fboundp 'test-self-new-rejected-definition)
+        (fmakunbound 'test-self-new-rejected-definition))
+      (remhash
+       (definition-key '(defun test-self-new-rejected-definition () nil))
+       *exploratory-definitions*)
       (let ((test-identifiers nil))
         (maphash
          (lambda (identifier mutation)
-           (when (string= (durable-mutation-target mutation)
-                          (definition-key '(defun test-self-target () 0)))
+           (when (member
+                  (durable-mutation-target mutation)
+                  (list
+                   (definition-key '(defun test-self-target () 0))
+                   (definition-key
+                    '(defun test-self-new-rejected-definition () nil)))
+                  :test #'string=)
              (push identifier test-identifiers)))
          *durable-mutations*)
         (dolist (identifier test-identifiers)
           (remhash identifier *durable-mutations*)))
+      (uiop:delete-directory-tree source-root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-durable-definition-publication-boundary () null)
+(defun test-durable-definition-publication-boundary ()
+  "Test a post-publication failure does not undo selected live definition state."
+  (let* ((*package* (find-package '#:autolith))
+         (source-root
+           (uiop:ensure-directory-pathname
+            (merge-pathnames
+             (format nil "autolith-publication-tests-~A/" (make-identifier))
+             (uiop:temporary-directory))))
+         (configuration (test-configuration-for-source-root source-root))
+         (source-pathname (merge-pathnames "src/baseline.lisp" source-root))
+         (definition-source
+           "(defun test-self-published-definition () \"Remain live after publication.\" 23)")
+         (definition (self-read-form definition-source :read-eval nil))
+         (target (definition-key definition))
+         (previous-state-initialized-p *image-state-initialized-p*)
+         (previous-commit-identifier *active-image-commit-identifier*)
+         (previous-history-commit *active-image-history-commit*)
+         (previous-lineage-identifier *active-image-lineage-identifier*)
+         (original-transition-function
+           (symbol-function 'durable-mutation-transition))
+         (mutation nil)
+         (*image-commit-replay-probe-function*
+           (lambda (checked-configuration script identifier)
+             (declare (ignore checked-configuration script identifier))
+             nil)))
+    (unwind-protect
+         (progn
+           (ensure-directories-exist source-pathname)
+           (with-open-file (stream source-pathname
+                                   :direction :output
+                                   :if-exists :supersede
+                                   :if-does-not-exist :create
+                                   :external-format :utf-8)
+             (format stream "(in-package #:autolith)~%"))
+           (self-git-command configuration '("init" "--quiet"))
+           (self-git-command configuration
+                             '("config" "user.name" "Autolith Test"))
+           (self-git-command
+            configuration
+            '("config" "user.email" "autolith-test@example.invalid"))
+           (self-git-command configuration '("add" "src/baseline.lisp"))
+           (self-git-command configuration
+                             '("commit" "--quiet" "-m" "Create baseline"))
+           (when (fboundp 'test-self-published-definition)
+             (fmakunbound 'test-self-published-definition))
+           (remhash target *exploratory-definitions*)
+           (setf *image-state-initialized-p* nil
+                 *active-image-commit-identifier* nil
+                 *active-image-history-commit* nil
+                 *active-image-lineage-identifier* nil)
+           (image-state-load configuration)
+           (let* ((conversation
+                    (conversation-create configuration
+                                         :identifier "publication-boundary"))
+                  (context
+                    (make-instance
+                     'tool-context
+                     :configuration configuration
+                     :worker nil
+                     :conversation conversation
+                     :mutation-checker
+                     (make-instance
+                      'callback-mutation-checker
+                      :active-callback
+                      (lambda (checked-configuration checked-source)
+                        (declare (ignore checked-configuration checked-source))
+                        "active checks passed"))))
+                  (tool (make-instance 'self-persist-definition-tool)))
+             (setf (symbol-function 'durable-mutation-transition)
+                   (lambda (checked-configuration checked-mutation phase
+                            &key detail git-commit)
+                     (let ((result
+                             (funcall original-transition-function
+                                      checked-configuration
+                                      checked-mutation
+                                      phase
+                                      :detail detail
+                                      :git-commit git-commit)))
+                       (when (eq phase :source-written)
+                         (error "Injected post-publication journal failure."))
+                       result)))
+             (test-assert
+              (handler-case
+                  (progn
+                    (tool-execute
+                     tool
+                     context
+                     (json-object "definition" definition-source))
+                    nil)
+                (error ()
+                  t))
+              "an error after image publication still escapes the tool")
+             (setf (symbol-function 'durable-mutation-transition)
+                   original-transition-function))
+           (setf mutation
+                 (loop for candidate being the hash-values
+                         of *durable-mutations*
+                       when (string= target
+                                     (durable-mutation-target candidate))
+                         return candidate))
+           (test-assert mutation
+                        "post-publication failure retains its mutation state")
+           (test-assert
+            (and (fboundp 'test-self-published-definition)
+                 (= (test-self-published-definition) 23))
+            "post-publication failure preserves the selected live definition")
+           (test-assert
+            (string= (gethash target *exploratory-definitions*)
+                     definition-source)
+            "post-publication failure preserves selected exploratory source")
+           (test-assert
+            (image-commit-contains-mutation-p
+             configuration
+             (durable-mutation-identifier mutation))
+            "post-publication failure leaves the selected replay commit intact")
+           (test-assert
+            (eq (durable-mutation-phase mutation) :source-written)
+            "post-publication journal progress remains reconcilable")
+           (durable-mutations-reconcile configuration)
+           (test-assert
+            (eq (durable-mutation-phase mutation) :durable)
+            "reconciliation completes the selected post-publication mutation"))
+      (setf (symbol-function 'durable-mutation-transition)
+            original-transition-function
+            *image-state-initialized-p* previous-state-initialized-p
+            *active-image-commit-identifier* previous-commit-identifier
+            *active-image-history-commit* previous-history-commit
+            *active-image-lineage-identifier* previous-lineage-identifier)
+      (when (fboundp 'test-self-published-definition)
+        (fmakunbound 'test-self-published-definition))
+      (remhash target *exploratory-definitions*)
+      (when mutation
+        (remhash (durable-mutation-identifier mutation) *durable-mutations*))
       (uiop:delete-directory-tree source-root
                                   :validate t
                                   :if-does-not-exist :ignore)))

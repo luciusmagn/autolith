@@ -490,6 +490,30 @@ function name is its stable registry identifier. The lower-level
 =register-context-contributor= function remains available when registration
 must be managed separately.
 
+Interactive commands use the same live extension model:
+
+#+BEGIN_SRC lisp
+(define-application-command my-version-command
+    (:name "/my-version"
+     :argument nil
+     :description "show my local integration version"
+     :tip "shows the version supplied by init.lisp."
+     :busy-behavior :inspect
+     :terminal-behavior :shared)
+    (application invocation)
+  (declare (ignore invocation))
+  (application-present application "integration 3")
+  :continue)
+#+END_SRC
+
+The stable Lisp definition name identifies revisions even when slash names or
+aliases change. =:inspect= permits only an argument-free invocation while a
+turn is active; =:hold= waits for the main application thread, and =:cancel=
+requests shutdown. Terminal behavior is =:shared=, =:exclusive=, or
+=:exclusive-without-arguments=. Every command requires a nonblank tip. The
+defining form participates in =self.redefine=, =self.discard=, private replay,
+dynamic completion, help, and startup tips.
+
 Conversations are append-only readable forms under
 =${XDG_DATA_HOME:-~/.local/share}/autolith/conversations/=. A truncated final form is
 ignored after a crash; malformed complete records are rejected. If a crash

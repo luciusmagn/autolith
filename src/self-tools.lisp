@@ -303,7 +303,7 @@ protocol."
 (defparameter +definition-operators+
   '(defun defgeneric defmethod defmacro defclass defstruct define-condition
     deftype define-compiler-macro defvar defparameter define-constant
-    define-context-contributor)
+    define-context-contributor define-application-command)
   "Top-level defining operators accepted by self.redefine and source persistence.")
 
 (-> definition-name-p (t) boolean)
@@ -487,6 +487,17 @@ protocol."
          (lambda ()
            (self--restore-function-binding name bound-p binding)
            (context--registration-restore identifier registration))))
+      (define-application-command
+       (let ((registration
+               (application-command--registration-snapshot name ':runtime))
+             (bound-p (not (null (fboundp name))))
+             (binding (and (fboundp name) (fdefinition name))))
+         (lambda ()
+           (self--restore-function-binding name bound-p binding)
+           (application-command--registration-restore
+            name
+            ':runtime
+            registration))))
       (define-compiler-macro
        (let ((binding (compiler-macro-function name)))
          (lambda ()
@@ -558,6 +569,41 @@ protocol."
               :message "The definition kind has no reversible installation strategy."
               :tool-name "self.redefine"
               :pathname nil)))))
+
+(-> self--definition-state-undo-action
+    (list (option string) package)
+    function)
+(defun self--definition-state-undo-action
+    (definition previous-source package)
+  "Return an undo action for DEFINITION's live binding and source cache."
+  (let ((target (let ((*package* package))
+                  (definition-key definition)))
+        (binding-undo
+          (self--definition-undo-action definition previous-source package)))
+    (multiple-value-bind (cached-source cached-source-p)
+        (gethash target *exploratory-definitions*)
+      (lambda ()
+        (funcall binding-undo)
+        (if cached-source-p
+            (setf (gethash target *exploratory-definitions*) cached-source)
+            (remhash target *exploratory-definitions*))
+        nil))))
+
+(-> self--undo-failed-definition-installation
+    (function serious-condition)
+    null)
+(defun self--undo-failed-definition-installation
+    (undo-action original-condition)
+  "Run UNDO-ACTION or signal corruption retaining both failure conditions."
+  (handler-case
+      (funcall undo-action)
+    (error (restoration-condition)
+      (error 'active-image-corruption
+             :message
+             "A failed definition mutation could not restore the active image."
+             :original-condition original-condition
+             :restoration-condition restoration-condition)))
+  nil)
 
 (-> self--install-definition (list string &key (:package package)) t)
 (defun self--install-definition
@@ -638,7 +684,10 @@ protocol."
             (previous (self-previous-definition configuration definition))
             (undo-action nil))
         (setf undo-action
-              (self--definition-undo-action definition previous package))
+              (self--definition-state-undo-action
+               definition
+               previous
+               package))
         (mutation-journal-append
          configuration
          (list :mutation
@@ -669,19 +718,26 @@ protocol."
                     undo-action)
               result)
           (error (condition)
-            (mutation-journal-append
-             configuration
-             (list :mutation
-                   :kind :definition
-                   :id identifier
-                   :lineage *active-image-lineage-identifier*
-                   :target key
-                   :package package-name
-                   :previous previous
-                   :proposed source
-                   :result :failed
-                   :condition (princ-to-string condition)))
-            (error condition)))))))
+            (let ((reported-condition condition))
+              (handler-case
+                  (self--undo-failed-definition-installation
+                   undo-action
+                   condition)
+                (active-image-corruption (corruption)
+                  (setf reported-condition corruption)))
+              (mutation-journal-append
+               configuration
+               (list :mutation
+                     :kind :definition
+                     :id identifier
+                     :lineage *active-image-lineage-identifier*
+                     :target key
+                     :package package-name
+                     :previous previous
+                     :proposed source
+                     :result :failed
+                     :condition (princ-to-string reported-condition)))
+              (error reported-condition))))))))
 
 (defmethod tool-execute ((tool self-redefine-tool)
                          (context tool-context)

@@ -404,6 +404,11 @@ journals may instead name a startup overlay or tracked src/ file."
                                    configuration
                                    definition)
                                   ""))
+             (undo-action
+               (self--definition-state-undo-action
+                definition
+                (and (non-empty-string-p previous-source) previous-source)
+                (find-package '#:autolith)))
              (mutation
                (durable-mutation-create configuration
                                         definition
@@ -411,7 +416,8 @@ journals may instead name a startup overlay or tracked src/ file."
                                         (namestring commit-script)
                                         :previous-source previous-source
                                         :proposed-source definition-source))
-             (checker (tool-context-effective-mutation-checker context)))
+             (checker (tool-context-effective-mutation-checker context))
+             (published-p nil))
         (handler-case
             (progn
               (self-call-with-restarts
@@ -435,6 +441,7 @@ journals may instead name a startup overlay or tracked src/ file."
                                    :target target
                                    :source definition-source))
                        :identifier commit-identifier)))
+                (setf published-p t)
                 (durable-mutation-transition configuration mutation
                                              :source-written)
                 (durable-mutation-transition configuration mutation :durable)
@@ -448,12 +455,11 @@ journals may instead name a startup overlay or tracked src/ file."
                          (image-commit-history-commit commit)
                          (namestring commit-script)))))
           (error (condition)
-            (when (and (member (durable-mutation-phase mutation)
-                               '(:pending :installed :checked)
-                               :test #'eq)
-                       (non-empty-string-p previous-source))
+            (unless published-p
               (handler-case
-                  (self-restore-definition previous-source condition)
+                  (self--undo-failed-definition-installation
+                   undo-action
+                   condition)
                 (active-image-corruption (corruption)
                   (durable-mutation-transition
                    configuration
@@ -464,14 +470,14 @@ journals may instead name a startup overlay or tracked src/ file."
                            condition
                            (active-image-corruption-restoration-condition
                             corruption)))
-                  (error corruption))))
-            (unless (member (durable-mutation-phase mutation)
-                            '(:failed :superseded)
-                            :test #'eq)
-              (durable-mutation-transition configuration
-                                           mutation
-                                           :failed
-                                           :detail condition))
+                  (error corruption)))
+              (unless (member (durable-mutation-phase mutation)
+                              '(:failed :superseded)
+                              :test #'eq)
+                (durable-mutation-transition configuration
+                                             mutation
+                                             :failed
+                                             :detail condition)))
             (error condition)))))))
 
 

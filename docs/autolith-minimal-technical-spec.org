@@ -1014,6 +1014,17 @@ in a saved image. The command token is colored separately from its explanation.
 Every canonical command definition carries a non-empty tip, and omitting it is
 a compile-time error. Declared aliases share their canonical command's tip.
 
+Interactive commands are immutable CLOS objects in a live layered registry.
+Help, completion, startup tips, dispatch, busy-turn routing, and terminal
+ownership all query that registry. Each command declares whether an invocation
+is held, cancels the active turn, or may execute as an argument-free inspection
+while work is active. It also declares whether it needs exclusive terminal
+ownership. =define-application-command= is a complete supported
+self-modification defining form. Exploratory installation and discard restore
+both its function binding and exact registry layer, and private replay
+reconstructs both. User initialization uses the same registration protocol and
+remains the final command layer.
+
 Decorative animations, excessive transitions, and visual spectacle are
 out of scope.
 
