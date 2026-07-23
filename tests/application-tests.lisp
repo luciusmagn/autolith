@@ -226,50 +226,68 @@
 (defun test-application-command-tips ()
   "Test command tips are mandatory metadata rendered with a styled command."
   (test-assert
-   (every (lambda (entry)
-            (non-empty-string-p (getf entry :tip)))
-          +application-commands+)
+   (every (lambda (command)
+            (non-empty-string-p (application-command-tip command)))
+          (application-command-list))
    "every canonical application command carries a non-empty tip")
-  (dolist (entry
+  (dolist (metadata
            '((:name "/missing-tip"
               :argument nil
-              :description "omit the tip")
+              :description "omit the tip"
+              :busy-behavior :inspect
+              :terminal-behavior :shared)
              (:name "/blank-tip"
               :argument nil
               :description "leave the tip blank"
-              :tip "   ")))
+              :tip "   "
+              :busy-behavior :inspect
+              :terminal-behavior :shared)))
     (test-assert
      (handler-case
          (progn
-           (macroexpand-1 `(define-application-commands ,entry))
+           (macroexpand-1
+            `(define-application-command application-tests--invalid-command
+                 ,metadata
+                 (application invocation)
+               (declare (ignore application invocation))
+               :continue))
            nil)
        (error ()
          t))
      "missing and blank command tips fail during macro expansion"))
   (test-assert
-   (and (string= (application-command-canonical-name "/EXIT") "/quit")
-        (string= (application-command-canonical-name "/usage") "/status"))
+   (and (string= (application-command-name
+                  (application-command-find "/EXIT"))
+                 "/quit")
+        (string= (application-command-name
+                  (application-command-find "/usage"))
+                 "/status"))
    "declared aliases resolve through their canonical command definitions")
-  (test-assert (application--quit-command-p "/EXIT")
-               "quit detection follows the declared case-insensitive alias")
+  (test-assert
+   (eq
+    (application-command-busy-action
+     (application-command-find "/EXIT")
+     (application-command-invocation-parse "/EXIT"))
+    ':cancel)
+   "quit aliases inherit the command's cancellation policy")
   (let* ((*random-state* (make-random-state nil))
          (captured-state (make-random-state *random-state*))
          (entry (application--startup-command-entry)))
-    (test-assert (member entry +application-commands+ :test #'equal)
+    (test-assert (member entry (application-command-list) :test #'eq)
                  "startup tip selection returns one canonical command")
     (test-assert (equalp *random-state* captured-state)
                  "startup tip selection does not consume saved image RNG state"))
-  (let* ((entry (first +application-commands+))
+  (let* ((entry (first (application-command-list)))
          (spans (application--command-tip-spans entry))
          (command-span (third spans))
          (tip-span (fourth spans)))
     (test-assert (eq (terminal-span-style command-span) ':code)
                  "the command token uses the colored code style")
     (test-assert (string= (terminal-span-text command-span)
-                          (getf entry :name))
+                          (application-command-name entry))
                  "the colored span contains only the canonical command")
     (test-assert (string= (terminal-span-text tip-span)
-                          (format nil " ~A" (getf entry :tip)))
+                          (format nil " ~A" (application-command-tip entry)))
                  "the command's mandatory tip follows its colored token"))
   nil)
 
@@ -300,7 +318,7 @@
                 (tip-command-span (first tip-command-spans))
                 (tip-entry
                   (and tip-command-span
-                       (application-command-entry
+                       (application-command-find
                         (terminal-span-text tip-command-span))))
                 (gradient-styles
                   (loop for span in spans
@@ -359,7 +377,7 @@
                         "the startup banner shows exactly one command tip")
            (test-assert
             (and tip-entry
-                 (search (getf tip-entry :tip) text))
+                 (search (application-command-tip tip-entry) text))
             "the startup banner pairs a registered command with its own tip")
            (let* ((immutable-configuration
                     (configuration--clone configuration :immutable-p t))
@@ -1774,8 +1792,13 @@
               controller "/goal")
              (let ((output (recording-terminal-output terminal)))
                (test-assert
-                (not (application--responsive-goal-inspection-p
-                      "/goal pause"))
+                (eq
+                 (let* ((invocation
+                          (application-command-invocation-parse "/goal pause"))
+                        (command
+                          (application-command-invocation-command invocation)))
+                   (application-command-busy-action command invocation))
+                 ':hold)
                 "goal mutations remain on the serialized application thread")
                (test-assert
                 (search "finish the migration" output)
@@ -1795,19 +1818,26 @@
 (-> test-input-reader-quiescence () null)
 (defun test-input-reader-quiescence ()
   "Test modal and checkpoint work can temporarily restore a single Lisp thread."
-  (test-assert (application--command-needs-terminal-owner-p "/model")
-               "argument-free picker commands take terminal ownership")
-  (test-assert (application--command-needs-terminal-owner-p "/permissions")
-               "the permission picker takes terminal ownership")
-  (test-assert (application--command-needs-terminal-owner-p
-                "/model gpt-5.6-luna")
-               "explicit model changes own the terminal for the effort picker")
-  (test-assert (not (application--command-needs-terminal-owner-p "/resume"))
-               "resume pauses input only while its modal selector is active")
-  (test-assert (not (application--command-needs-terminal-owner-p "/compact"))
-               "nonmodal model commands retain responsive input")
-  (test-assert (application--command-needs-terminal-owner-p "/auth")
-               "authentication owns terminal mode while it runs")
+  (labels ((terminal-owner-p (input)
+             "Return the registered terminal policy for command INPUT."
+             (let* ((invocation (application-command-invocation-parse input))
+                    (command
+                      (application-command-invocation-command invocation)))
+               (and command
+                    (application-command-terminal-owner-p
+                     command invocation)))))
+    (test-assert (terminal-owner-p "/model")
+                 "argument-free picker commands take terminal ownership")
+    (test-assert (terminal-owner-p "/permissions")
+                 "the permission picker takes terminal ownership")
+    (test-assert (terminal-owner-p "/model gpt-5.6-luna")
+                 "explicit model changes own the terminal for the effort picker")
+    (test-assert (terminal-owner-p "/resume")
+                 "resume declares terminal ownership for its modal selector")
+    (test-assert (not (terminal-owner-p "/compact"))
+                 "nonmodal model commands retain responsive input")
+    (test-assert (terminal-owner-p "/auth")
+                 "authentication owns terminal mode while it runs"))
   (let* ((terminal (make-instance 'waiting-recording-terminal :columns 60))
          (ui (terminal-ui-create :terminal terminal))
          (application (make-instance 'application :ui ui))
@@ -2264,9 +2294,9 @@
                                  :agent agent
                                  :ui ui)))
            (terminal-ui-start ui)
-           (let ((entry (find "/cwd" +application-commands+
-                              :key (lambda (command) (getf command :name))
-                              :test #'string=)))
+           (let ((entry
+                   (application-command-completion-entry
+                    (application-command-find "/cwd"))))
              (test-assert
               (and entry
                    (string= (terminal-completion-label entry) "/cwd PATH"))

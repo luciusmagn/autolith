@@ -89,6 +89,7 @@
     (test-later-reset-selection)
     (test-system-prompt-context)
     (test-request-local-context)
+    (run-application-command-tests)
     (test-project-adaptations)
     (test-conversation-identifiers)
     (test-conversation-persistence)

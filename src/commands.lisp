@@ -5,11 +5,12 @@
 (-> application-help () string)
 (defun application-help ()
   "Return the concise interactive command reference."
-  (let ((label-width
-          (loop for entry in +application-commands+
-                maximize (length (terminal-completion-label entry)))))
+  (let* ((entries (application-command-completion-entries))
+         (label-width
+           (loop for entry in entries
+                 maximize (length (terminal-completion-label entry)))))
     (format nil "~{~A~^~%~}"
-            (loop for entry in +application-commands+
+            (loop for entry in entries
                   collect (format nil "~vA  ~A"
                                   label-width
                                   (terminal-completion-label entry)
@@ -927,152 +928,338 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
                       window))))))))
   nil)
 
+;;;; -- Built-in Interactive Commands --
+
+(define-application-command application--builtin-help-command
+    (:name "/help"
+     :argument nil
+     :description "show this reference"
+     :tip "shows every interactive command."
+     :busy-behavior :inspect
+     :terminal-behavior :shared)
+    (application invocation)
+  (declare (ignore invocation))
+  (application-present application (application-help))
+  ':continue)
+
+(define-application-command application--builtin-new-command
+    (:name "/new"
+     :argument nil
+     :description "start a new conversation"
+     :tip "starts fresh without deleting the current conversation."
+     :busy-behavior :hold
+     :terminal-behavior :shared)
+    (application invocation)
+  (declare (ignore invocation))
+  (application-install-conversation
+   application
+   (conversation-create (application-configuration application)))
+  (application-present
+   application
+   (format nil "Started conversation ~A."
+           (conversation-identifier-display
+            (conversation-identifier
+             (application-conversation application)))))
+  ':continue)
+
+(define-application-command application--builtin-resume-command
+    (:name "/resume"
+     :argument nil
+     :description "pick a saved conversation to resume"
+     :tip "returns to a saved conversation from this workspace or another one."
+     :busy-behavior :hold
+     :terminal-behavior :exclusive-without-arguments)
+    (application invocation)
+  (let* ((configuration (application-configuration application))
+         (startup-offer-p
+           (application-project-adaptation-offer-p application))
+         (identifier
+           (or (application-command-invocation-argument invocation)
+               (application--pick-identifier
+                application
+                :title "resume conversation"
+                :items (application--conversation-items application)
+                :usage "Usage: /resume ID"
+                :empty-notice "No saved conversations exist."))))
+    (setf (application-project-adaptation-offer-p application) nil)
+    (when identifier
+      (application-install-conversation
+       application
+       (conversation-load-by-id configuration identifier))
+      (application-render-records application)
+      (when startup-offer-p
+        (application-maybe-offer-project-adaptation application))))
+  ':continue)
+
+(define-application-command application--builtin-conversations-command
+    (:name "/conversations"
+     :argument nil
+     :description "list saved conversations"
+     :tip "lists saved conversations from newest to oldest."
+     :busy-behavior :inspect
+     :terminal-behavior :shared)
+    (application invocation)
+  (declare (ignore invocation))
+  (application-present application
+                       (application-list-conversations application))
+  ':continue)
+
+(define-application-command application--builtin-working-directory-command
+    (:name "/cwd"
+     :argument "PATH"
+     :description "change the active workspace"
+     :tip "moves the active workspace without restarting Autolith."
+     :busy-behavior :inspect
+     :terminal-behavior :shared)
+    (application invocation)
+  (application-working-directory-command
+   application
+   (application-command-invocation-remainder invocation))
+  ':continue)
+
+(define-application-command application--builtin-authentication-command
+    (:name "/auth"
+     :argument nil
+     :description "authenticate Autolith with ChatGPT"
+     :tip "starts direct ChatGPT authentication when credentials need attention."
+     :busy-behavior :hold
+     :terminal-behavior :exclusive)
+    (application invocation)
+  (declare (ignore invocation))
+  (application-authenticate application)
+  ':continue)
+
+(define-application-command application--builtin-model-command
+    (:name "/model"
+     :argument nil
+     :description "pick the 5.6 model and reasoning effort"
+     :tip "changes both the model and its reasoning effort."
+     :busy-behavior :hold
+     :terminal-behavior :exclusive)
+    (application invocation)
+  (let ((model
+          (or (application-command-invocation-argument invocation)
+              (application--pick-identifier
+               application
+               :title "pick the model"
+               :items (application--model-items application)
+               :usage "Usage: /model NAME"
+               :empty-notice "No supported models exist."))))
+    (when model
+      (configuration-with-model (application-configuration application)
+                                model)
+      (let ((effort (application--pick-reasoning-effort application)))
+        (when effort
+          (application-set-model-selection application model effort)
+          (application-present
+           application
+           (format nil "The model is now ~A with reasoning effort ~A."
+                   (configuration-model
+                    (application-configuration application))
+                   (configuration-reasoning-effort
+                    (application-configuration application))))))))
+  ':continue)
+
+(define-application-command application--builtin-effort-command
+    (:name "/effort"
+     :argument nil
+     :description "pick the reasoning effort"
+     :tip "changes reasoning effort without switching models."
+     :busy-behavior :hold
+     :terminal-behavior :exclusive-without-arguments)
+    (application invocation)
+  (let ((effort
+          (or (application-command-invocation-argument invocation)
+              (application--pick-reasoning-effort application))))
+    (when effort
+      (application-set-reasoning-effort application effort)
+      (application-present
+       application
+       (format nil "Reasoning effort is now ~A."
+               (configuration-reasoning-effort
+                (application-configuration application))))))
+  ':continue)
+
+(define-application-command application--builtin-trace-command
+    (:name "/trace"
+     :argument "on|off"
+     :description "show visible reasoning summaries"
+     :tip "toggles visible reasoning summaries with on or off."
+     :busy-behavior :inspect
+     :terminal-behavior :shared)
+    (application invocation)
+  (application-trace-command
+   application
+   (application-command-invocation-argument invocation))
+  ':continue)
+
+(define-application-command application--builtin-permissions-command
+    (:name "/permissions"
+     :argument nil
+     :description "choose command access for this session"
+     :tip "chooses how shell commands are authorized for this session."
+     :busy-behavior :hold
+     :terminal-behavior :exclusive-without-arguments)
+    (application invocation)
+  (application-permissions-command
+   application
+   (application-command-invocation-argument invocation))
+  ':continue)
+
+(define-application-command application--builtin-later-command
+    (:name "/later"
+     :argument "INPUT"
+     :description "run input after rate limits reset"
+     :tip "queues a prompt for the next known rate-limit reset."
+     :busy-behavior :hold
+     :terminal-behavior :shared)
+    (application invocation)
+  (application-later-command
+   application
+   (application-command-invocation-remainder invocation))
+  ':continue)
+
+(define-application-command application--builtin-goal-command
+    (:name "/goal"
+     :argument "OBJECTIVE"
+     :description "set or view the session goal"
+     :tip "sets the objective Autolith should pursue across continuations."
+     :busy-behavior :inspect
+     :terminal-behavior :shared)
+    (application invocation)
+  (application-goal-command
+   application
+   (application-command-invocation-remainder invocation))
+  ':continue)
+
+(define-application-command application--builtin-agenda-command
+    (:name "/agenda"
+     :argument nil
+     :description "show workspace agenda entries"
+     :tip "shows durable commitments and notes for the current workspace."
+     :busy-behavior :inspect
+     :terminal-behavior :shared)
+    (application invocation)
+  (declare (ignore invocation))
+  (application-present application (application-agenda-entry application))
+  ':continue)
+
+(define-application-command application--builtin-checkpoint-command
+    (:name "/checkpoint"
+     :argument nil
+     :description "save a retained live generation"
+     :tip "saves the current live state as a retained generation."
+     :busy-behavior :hold
+     :terminal-behavior :shared)
+    (application invocation)
+  (declare (ignore invocation))
+  (application-checkpoint application)
+  ':continue)
+
+(define-application-command application--builtin-generations-command
+    (:name "/generations"
+     :argument nil
+     :description "list retained generations"
+     :tip "shows live generations available for recovery."
+     :busy-behavior :inspect
+     :terminal-behavior :shared)
+    (application invocation)
+  (declare (ignore invocation))
+  (application-present
+   application
+   (generation-render-list (application-configuration application)))
+  ':continue)
+
+(define-application-command application--builtin-rollback-command
+    (:name "/rollback"
+     :argument nil
+     :description "pick a generation for recovery"
+     :tip "selects a retained generation for the next recovery start."
+     :busy-behavior :hold
+     :terminal-behavior :exclusive-without-arguments)
+    (application invocation)
+  (let* ((configuration (application-configuration application))
+         (identifier
+           (or (application-command-invocation-argument invocation)
+               (application--pick-identifier
+                application
+                :title "select a generation for recovery"
+                :items (application--generation-items application)
+                :usage "Usage: /rollback ID"
+                :empty-notice "No retained generations exist."))))
+    (when identifier
+      (generation-request-rollback configuration identifier)))
+  ':continue)
+
+(define-application-command application--builtin-status-command
+    (:name "/status"
+     :aliases ("/usage")
+     :argument nil
+     :description "show usage and rate limits"
+     :tip "shows the model, context usage, and subscription rate limits."
+     :busy-behavior :inspect
+     :terminal-behavior :shared)
+    (application invocation)
+  (declare (ignore invocation))
+  (application-present application (application-status-entry application))
+  ':continue)
+
+(define-application-command application--builtin-context-command
+    (:name "/context"
+     :argument nil
+     :description "inspect request-local context"
+     :tip "reveals the ephemeral context prepared for provider requests."
+     :busy-behavior :inspect
+     :terminal-behavior :shared)
+    (application invocation)
+  (declare (ignore invocation))
+  (application-present
+   application
+   (context-status (application-conversation application)))
+  ':continue)
+
+(define-application-command application--builtin-compact-command
+    (:name "/compact"
+     :argument "on|off"
+     :description "hide routine results, or summarize with no argument"
+     :tip "toggles routine result visibility; with no argument it compacts context."
+     :busy-behavior :hold
+     :terminal-behavior :shared)
+    (application invocation)
+  (let ((argument (application-command-invocation-argument invocation)))
+    (if argument
+        (application-compact-view-command application argument)
+        (application-compact application)))
+  ':continue)
+
+(define-application-command application--builtin-quit-command
+    (:name "/quit"
+     :aliases ("/exit")
+     :argument nil
+     :description "leave Autolith"
+     :tip "exits cleanly; Ctrl-C also prints the exact resume command."
+     :busy-behavior :cancel
+     :terminal-behavior :shared)
+    (application invocation)
+  (declare (ignore application invocation))
+  ':quit)
+
+
+;;;; -- Command Dispatch --
+
 (-> application-command (application string) keyword)
 (defun application-command (application input)
   "Execute slash command INPUT for APPLICATION and return its loop action."
-  (let* ((parts (remove-if-not
-                 #'non-empty-string-p
-                 (uiop:split-string input :separator '(#\Space #\Tab))))
-         (command
-           (application-command-canonical-name (or (first parts) "")))
-         (argument (second parts))
-         (configuration (application-configuration application)))
-    (cond
-      ((string= command "/quit")
-       :quit)
-      ((string= command "/help")
-       (application-present application (application-help))
-       :continue)
-      ((string= command "/status")
-       (application-present application (application-status-entry application))
-       :continue)
-      ((string= command "/context")
-       (application-present
-        application
-        (context-status (application-conversation application)))
-       :continue)
-      ((string= command "/compact")
-       (if argument
-           (application-compact-view-command application argument)
-           (application-compact application))
-       :continue)
-      ((string= command "/new")
-       (application-install-conversation application
-                                         (conversation-create configuration))
-       (application-present
-        application
-        (format nil "Started conversation ~A."
-                (conversation-identifier-display
-                 (conversation-identifier
-                  (application-conversation application)))))
-       :continue)
-      ((string= command "/resume")
-       (let ((startup-offer-p
-               (application-project-adaptation-offer-p application))
-             (identifier
-               (or argument
-                   (application--pick-identifier
-                    application
-                    :title "resume conversation"
-                    :items (application--conversation-items application)
-                    :usage "Usage: /resume ID"
-                    :empty-notice "No saved conversations exist."))))
-         (setf (application-project-adaptation-offer-p application) nil)
-         (when identifier
-           (application-install-conversation
-            application
-            (conversation-load-by-id configuration identifier))
-           (application-render-records application)
-           (when startup-offer-p
-             (application-maybe-offer-project-adaptation application))))
-       :continue)
-      ((string= command "/conversations")
-       (application-present application
-                            (application-list-conversations application))
-       :continue)
-      ((string= command "/cwd")
-       (application-working-directory-command
-        application
-        (application--command-remainder input))
-       :continue)
-      ((string= command "/auth")
-       (application-authenticate application)
-       :continue)
-      ((string= command "/effort")
-       (let ((effort
-               (or argument
-                   (application--pick-reasoning-effort application))))
-         (when effort
-           (application-set-reasoning-effort application effort)
-           (application-present
-            application
-            (format nil "Reasoning effort is now ~A."
-                    (configuration-reasoning-effort
-                     (application-configuration application))))))
-       :continue)
-      ((string= command "/trace")
-       (application-trace-command application argument)
-       :continue)
-      ((string= command "/permissions")
-       (application-permissions-command application argument)
-       :continue)
-      ((string= command "/later")
-       (application-later-command application
-                                  (application--command-remainder input))
-       :continue)
-      ((string= command "/goal")
-       (application-goal-command application
-                                 (application--command-remainder input))
-       :continue)
-      ((string= command "/agenda")
-       (application-present application (application-agenda-entry application))
-       :continue)
-      ((string= command "/model")
-       (let ((model
-               (or argument
-                   (application--pick-identifier
-                    application
-                    :title "pick the model"
-                    :items (application--model-items application)
-                    :usage "Usage: /model NAME"
-                    :empty-notice "No supported models exist."))))
-         (when model
-           (configuration-with-model (application-configuration application)
-                                     model)
-           (let ((effort (application--pick-reasoning-effort application)))
-             (when effort
-               (application-set-model-selection application model effort)
-               (application-present
-                application
-                (format nil "The model is now ~A with reasoning effort ~A."
-                        (configuration-model
-                         (application-configuration application))
-                        (configuration-reasoning-effort
-                         (application-configuration application))))))))
-       :continue)
-      ((string= command "/checkpoint")
-       (application-checkpoint application)
-       :continue)
-      ((string= command "/generations")
-       (application-present application
-                            (generation-render-list configuration))
-       :continue)
-      ((string= command "/rollback")
-       (let ((identifier
-               (or argument
-                   (application--pick-identifier
-                    application
-                    :title "select a generation for recovery"
-                    :items (application--generation-items application)
-                    :usage "Usage: /rollback ID"
-                    :empty-notice "No retained generations exist."))))
-         (when identifier
-           (generation-request-rollback configuration identifier)))
-       :continue)
-      (t
-       (application-present application
-                            (format nil "Unknown command ~A. Use /help." command))
-       :continue))))
+  (let* ((invocation (application-command-invocation-parse input))
+         (command (application-command-invocation-command invocation)))
+    (if command
+        (application-command-execute command application invocation)
+        (progn
+          (application-present
+           application
+           (format nil "Unknown command ~A. Use /help."
+                   (application-command-invocation-name invocation)))
+          ':continue))))
 
 (-> application-handle-input (application string) keyword)
 (defun application-handle-input (application input)

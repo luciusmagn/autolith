@@ -229,56 +229,6 @@ Return true when a model or command turn still needs cancellation."
       (t
        (application-input--copy input)))))
 
-(-> application--quit-command-p (string) boolean)
-(defun application--quit-command-p (input)
-  "Return true when INPUT is the explicit quit or exit slash command."
-  (let ((command
-          (application-command-canonical-name
-           (or (first (uiop:split-string
-                       input
-                       :separator '(#\Space #\Tab)))
-               ""))))
-    (string= command "/quit")))
-
-(-> application--responsive-goal-inspection-p (string) boolean)
-(defun application--responsive-goal-inspection-p (input)
-  "Return true when INPUT is an argument-free /goal inspection."
-  (let ((command
-          (application-command-canonical-name
-           (or (first (uiop:split-string
-                       input
-                       :separator '(#\Space #\Tab)))
-               ""))))
-    (and (string= command "/goal")
-         (zerop (length (application--command-remainder input))))))
-
-(-> application-input-controller--present-goal
-    (application-input-controller)
-    null)
-(defun application-input-controller--present-goal (controller)
-  "Present CONTROLLER's goal without waiting for active application work."
-  (let ((application (application-input-controller-application controller)))
-    (application-present application
-                         (application--goal-description application)))
-  nil)
-
-(-> application--command-needs-terminal-owner-p (string) boolean)
-(defun application--command-needs-terminal-owner-p (input)
-  "Return true when command INPUT must read from or reconfigure the terminal."
-  (let* ((parts (remove-if-not
-                 #'non-empty-string-p
-                 (uiop:split-string input :separator '(#\Space #\Tab))))
-         (command
-           (application-command-canonical-name (or (first parts) "")))
-         (argument (second parts)))
-    (or (not (null (member command '("/auth" "/model") :test #'string=)))
-        (and (null argument)
-             (not
-              (null
-               (member command
-                       '("/effort" "/rollback" "/permissions")
-                       :test #'string=)))))))
-
 (-> application-input-controller--publish-counts
     (application-input-controller)
     null)
@@ -437,6 +387,23 @@ Return true when a model or command turn still needs cancellation."
        "  Edit it now or press Enter again when idle."))))
   nil)
 
+(-> application-input-controller--run-responsive-command
+    (application-input-controller application-command
+     application-command-invocation)
+    keyword)
+(defun application-input-controller--run-responsive-command
+    (controller command invocation)
+  "Execute an immediate COMMAND without converting its errors on the reader."
+  (let ((application
+          (application-input-controller-application controller)))
+    (handler-case
+        (application-command-execute command application invocation)
+      (autolith-error (condition)
+        (application-present
+         application
+         (application--expected-error-entry application condition))
+        ':failed))))
+
 (-> application-input-controller--handle-submission
     (application-input-controller (or string user-message-input)
      &key (:steer-p boolean))
@@ -454,13 +421,23 @@ Return true when a model or command turn still needs cancellation."
       ((not (non-empty-string-p text))
        nil)
       ((application-input-controller-busy-p controller)
-       (cond
-         ((application--quit-command-p text)
-          (application-input-controller--request-exit controller ':quit))
-         ((application--responsive-goal-inspection-p text)
-          (application-input-controller--present-goal controller))
-         (t
-          (application-input-controller--hold-command controller text))))
+       (let* ((invocation (application-command-invocation-parse text))
+              (command
+                (application-command-invocation-command invocation))
+              (action
+                (if command
+                    (application-command-busy-action command invocation)
+                    ':hold)))
+         (ecase action
+           (:cancel
+            (application-input-controller--request-exit controller ':quit))
+           (:execute
+            (when (eq (application-input-controller--run-responsive-command
+                       controller command invocation)
+                      ':quit)
+              (application-input-controller--request-exit controller ':quit)))
+           (:hold
+            (application-input-controller--hold-command controller text)))))
       (t
        (application-input-controller--enqueue controller ':command text))))
   nil)
@@ -1125,8 +1102,13 @@ reader stays alive in interrupt-only mode until FUNCTION returns or unwinds."
           (application-input-controller--take-steering controller))))
       (:command
        (let* ((input (second work))
+              (invocation (application-command-invocation-parse input))
+              (command
+                (application-command-invocation-command invocation))
               (result
-                (if (application--command-needs-terminal-owner-p input)
+                (if (and command
+                         (application-command-terminal-owner-p
+                          command invocation))
                     (application-input-controller-call-with-reader-paused
                      controller
                      (lambda ()

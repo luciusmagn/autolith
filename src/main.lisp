@@ -134,20 +134,23 @@
          append (application--banner-terminate-row
                  (terminal--clip-spans metadata-row columns)))))
 
-(-> application--startup-command-entry () list)
+(-> application--startup-command-entry () application-command)
 (defun application--startup-command-entry ()
   "Return one command entry selected for the startup banner."
-  (nth (random (length +application-commands+)
-               (make-random-state t))
-       +application-commands+))
+  (let ((commands (application-command-list)))
+    (nth (random (length commands) (make-random-state t))
+         commands)))
 
-(-> application--command-tip-spans (list) terminal-styled-text)
+(-> application--command-tip-spans
+    (application-command)
+    terminal-styled-text)
 (defun application--command-tip-spans (entry)
   "Return a startup tip with ENTRY's command token styled as code."
   (list (terminal-span :plain (format nil "~2%"))
         (terminal-span :dim "Tip: ")
-        (terminal-span :code (getf entry :name))
-        (terminal-span :plain (format nil " ~A" (getf entry :tip)))))
+        (terminal-span :code (application-command-name entry))
+        (terminal-span :plain
+                       (format nil " ~A" (application-command-tip entry)))))
 
 (-> application-banner (application) list)
 (defun application-banner (application)
@@ -235,21 +238,27 @@
                                  (format nil "Skipped Autolith ~A." (subseq tag 1))))))))))
   nil)
 
+(-> application--expected-error-entry
+    (application autolith-error)
+    list)
+(defun application--expected-error-entry (application condition)
+  "Return the transcript entry describing expected CONDITION."
+  (application--transcript-entry
+   application
+   :style ':failure
+   :header "✗ error"
+   :body (if (typep condition 'credentials-unavailable)
+             (format nil "~A~%Use /auth to authenticate Autolith directly."
+                     condition)
+             (format nil "~A" condition))))
+
 (-> application-handle-expected-error (application autolith-error) null)
 (defun application-handle-expected-error (application condition)
   "Present expected CONDITION without abandoning APPLICATION's active path."
   (application-set-activity application nil)
   (application-render-records application)
-  (application-present
-   application
-   (application--transcript-entry
-    application
-    :style ':failure
-    :header "✗ error"
-    :body (if (typep condition 'credentials-unavailable)
-              (format nil "~A~%Use /auth to authenticate Autolith directly."
-                      condition)
-              (format nil "~A" condition))))
+  (application-present application
+                       (application--expected-error-entry application condition))
   nil)
 
 (-> application-read-terminal-event (terminal-ui) t)

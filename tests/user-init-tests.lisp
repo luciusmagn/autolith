@@ -11,7 +11,8 @@
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (pathname (configuration-user-init-path configuration))
-         (registrations (context--registry-snapshot)))
+         (context-registrations (context--registry-snapshot))
+         (command-registrations (application-command--registry-snapshot)))
     (unwind-protect
          (progn
            (configuration-ensure-directories configuration)
@@ -23,7 +24,22 @@
                                    :if-does-not-exist :create
                                    :external-format :utf-8)
              (write-string
-              "(progn (setf *user-init-test-value* (list *user-init-loading-p* *package*)) (register-context-contributor \"user-init-test\" 'context-tests--next-request))"
+              "(progn
+                 (setf *user-init-test-value*
+                       (list *user-init-loading-p* *package*))
+                 (register-context-contributor
+                  \"user-init-test\"
+                  'context-tests--next-request)
+                 (define-application-command user-init-tests--command
+                     (:name \"/user-init-test\"
+                      :argument nil
+                      :description \"exercise user command registration\"
+                      :tip \"exists only in the user-init test.\"
+                      :busy-behavior :inspect
+                      :terminal-behavior :shared)
+                     (application invocation)
+                   (declare (ignore application invocation))
+                   :continue))"
               stream))
            (setf *user-init-test-value* nil)
            (test-assert (equal (user-init-load configuration) pathname)
@@ -42,6 +58,19 @@
                       :source)
                 ':user)
             "contributors registered by user init retain their source")
+           (let ((command (application-command-find "/user-init-test")))
+             (test-assert
+              (and command
+                   (eq
+                    (getf
+                     (find
+                      'user-init-tests--command
+                      (application-command--registrations)
+                      :key (lambda (registration)
+                             (getf registration :definition-name)))
+                     :source)
+                    ':user))
+              "commands registered by user init retain their source"))
            (with-open-file (stream pathname
                                    :direction :output
                                    :if-exists :supersede
@@ -63,14 +92,27 @@
                   :key (lambda (registration)
                          (getf registration :identifier)))
             "a failed reload restores the previous contributor registry")
+           (test-assert
+            (application-command-find "/user-init-test")
+            "a failed reload restores the previous command registry")
            (delete-file pathname)
            (user-init-load configuration)
            (test-assert
             (null (find ':user (context-contributor-registrations)
                         :key (lambda (registration)
                                (getf registration :source))))
-            "removing init.lisp removes its stale contributor registrations"))
+            "removing init.lisp removes its stale contributor registrations")
+           (test-assert
+            (null
+             (find ':user
+                   (application-command--registrations)
+                   :key (lambda (registration)
+                          (getf registration :source))))
+            "removing init.lisp removes its stale command registrations"))
       (setf *user-init-test-value* nil)
-      (context--registry-restore registrations)
+      (context--registry-restore context-registrations)
+      (application-command--registry-restore command-registrations)
+      (when (fboundp 'user-init-tests--command)
+        (fmakunbound 'user-init-tests--command))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

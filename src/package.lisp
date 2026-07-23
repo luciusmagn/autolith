@@ -174,7 +174,33 @@
                 #:snapshot-write)
   (:import-from #:yason
                 #:false)
-  (:export #:main
+  (:export #:application-command
+           #:application-command-aliases
+           #:application-command-argument
+           #:application-command-busy-action
+           #:application-command-busy-behavior
+           #:application-command-completion-entries
+           #:application-command-completion-entry
+           #:application-command-create
+           #:application-command-definition-name
+           #:application-command-description
+           #:application-command-execute
+           #:application-command-find
+           #:application-command-handler
+           #:application-command-invocation
+           #:application-command-invocation-argument
+           #:application-command-invocation-command
+           #:application-command-invocation-input
+           #:application-command-invocation-name
+           #:application-command-invocation-parse
+           #:application-command-invocation-remainder
+           #:application-command-list
+           #:application-command-name
+           #:application-command-terminal-behavior
+           #:application-command-terminal-owner-p
+           #:application-command-tip
+           #:define-application-command
+           #:main
            #:context-contributor-registrations
            #:context-status
            #:define-context-contributor
@@ -186,8 +212,10 @@
            #:request-context-goal-context
            #:request-context-latest-user-text
            #:request-context-tool-namespaces
+           #:register-application-command
            #:release-server-main
            #:run-tests
+           #:unregister-application-command
            #:unregister-context-contributor
            #:worker-main))
 
