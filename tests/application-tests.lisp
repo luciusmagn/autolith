@@ -2519,6 +2519,110 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-application-task-presentation () null)
+(defun test-application-task-presentation ()
+  "Test task events drive one reconnectable child-agent terminal projection."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (registry
+           (task-augment-tool-registry
+            (make-default-tool-registry)))
+         (run-tool (tool-registry-find registry "task" "run"))
+         (orchestrator (task-run-tool-orchestrator run-tool))
+         (ui
+           (terminal-ui-create
+            :terminal (make-instance 'recording-terminal :columns 72)))
+         (application
+           (make-instance 'application
+                          :configuration configuration
+                          :tool-registry registry
+                          :ui ui))
+         (primary
+           (task-tests--primary-agent
+            configuration "task-presentation-primary" registry))
+         (definition
+           (task-agent-definition-create
+            :name "presenter"
+            :description "Exercise task presentation events."
+            :instructions "Remain visible while the test inspects the UI."
+            :source ':test))
+         (queued nil)
+         (running nil))
+    (unwind-protect
+         (progn
+           (application-connect-task-presentation application)
+           (application-connect-task-presentation application)
+           (test-assert
+            (= (with-lock-held ((task-orchestrator-lock orchestrator))
+                 (length (task-orchestrator-listeners orchestrator)))
+               1)
+            "reconnection retains exactly one task presentation listener")
+           (setf queued
+                 (task-tests--register-job
+                  orchestrator primary definition :name "queued-agent")
+                 running
+                 (task-tests--register-job
+                  orchestrator primary definition :name "running-agent"))
+           (with-lock-held ((task-job-lock running))
+             (setf (task-job-state running) ':running)
+             (task-job--set-progress-state running ':running))
+           (task-progress-note-status
+            running ':tool-call-started
+            (list :tool "search.content"))
+           (let ((activities (terminal-ui-agent-activities ui)))
+             (test-assert
+              (and (= (length activities) 2)
+                   (eq (getf (first activities) :state) ':queued)
+                   (eq (getf (second activities) :state) ':running)
+                   (string= (getf (second activities) :current-tool)
+                            "search.content"))
+              "one progress event projects every queued and running child"))
+           (task-job--publish-terminal
+            queued
+            ':completed
+            (task-tests--terminal-result
+             queued :status ':success :output "queued complete"))
+           (test-assert
+            (equal
+             (mapcar (lambda (activity)
+                       (getf activity :id))
+                     (terminal-ui-agent-activities ui))
+             (list (getf (task-job-identity running) :id)))
+            "terminal lifecycle events remove only their finished child")
+           (task-job--publish-terminal
+            running
+            ':completed
+            (task-tests--terminal-result
+             running :status ':success :output "running complete"))
+           (task-orchestrator-emit
+            orchestrator
+            ':task-subagent-progress
+            (list :id (getf (task-job-identity running) :id)))
+           (test-assert
+            (null (terminal-ui-agent-activities ui))
+            "late progress cannot resurrect a terminal child")
+           (application-disconnect-task-presentation application)
+           (test-assert
+            (and
+             (null (application-task-presentation-orchestrator application))
+             (null (application-task-presentation-listener application))
+             (zerop
+              (with-lock-held ((task-orchestrator-lock orchestrator))
+                (length (task-orchestrator-listeners orchestrator)))))
+            "disconnect removes the exact observer and retained scheduler link"))
+      (application-disconnect-task-presentation application)
+      (dolist (job (remove nil (list queued running)))
+        (unless (task-job-terminal-p job)
+          (task-job--publish-terminal
+           job
+           ':aborted
+           (task-tests--terminal-result
+            job :status ':aborted :output "test cleanup"))))
+      (ignore-errors (tool-registry-close-runtime-state registry))
+      (uiop:delete-directory-tree root :validate t
+                                       :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-working-directory-command () null)
 (defun test-working-directory-command ()
   "Test /cwd completion, full-path parsing, presentation, and no-argument status."
@@ -3054,6 +3158,7 @@
   (test-conversation-picker)
   (test-working-directory-switch)
   (test-application-tool-runtime-lifecycle)
+  (test-application-task-presentation)
   (test-working-directory-command)
   (test-effort-switch)
   (test-status-entry)

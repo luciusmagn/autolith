@@ -88,6 +88,20 @@
     :initform (make-lock "Autolith command authorization")
     :reader application-command-authorization-lock
     :documentation "The lock serializing command prompts from concurrent agents.")
+   (task-presentation-lock
+    :initform (make-lock "Autolith task presentation")
+    :reader application-task-presentation-lock
+    :documentation "The lock serializing scheduler snapshots into the active UI.")
+   (task-presentation-orchestrator
+    :initform nil
+    :accessor application-task-presentation-orchestrator
+    :type (option task-orchestrator)
+    :documentation "The task runtime currently projected into the terminal.")
+   (task-presentation-listener
+    :initform nil
+    :accessor application-task-presentation-listener
+    :type (option function)
+    :documentation "The exact task event callback removed during reconnection.")
    (input-controller
     :initform nil
     :accessor application-input-controller
@@ -286,6 +300,81 @@
    :model (conversation-model conversation)
    :reasoning-effort (conversation-reasoning-effort conversation)))
 
+(-> application--task-orchestrator
+    (application)
+    (option task-orchestrator))
+(defun application--task-orchestrator (application)
+  "Return APPLICATION's task runtime, when its registry provides one."
+  (let ((registry
+          (and (slot-boundp application 'tool-registry)
+               (application-tool-registry application))))
+    (when (typep registry 'tool-registry)
+      (let ((tool (tool-registry-find registry "task" "run")))
+        (and (typep tool 'task-run-tool)
+             (task-run-tool-orchestrator tool))))))
+
+(-> application--refresh-task-presentation
+    (application task-orchestrator)
+    null)
+(defun application--refresh-task-presentation (application orchestrator)
+  "Project ORCHESTRATOR's newest live children into APPLICATION's UI."
+  (with-lock-held ((application-task-presentation-lock application))
+    (when (eq orchestrator
+              (application-task-presentation-orchestrator application))
+      (let ((ui
+              (and (slot-boundp application 'ui)
+                   (application-ui application))))
+        (when (typep ui 'terminal-ui)
+          (terminal-ui-set-agent-activities
+           ui
+           (task-orchestrator-live-activities orchestrator))))))
+  nil)
+
+(-> application-disconnect-task-presentation (application) null)
+(defun application-disconnect-task-presentation (application)
+  "Disconnect APPLICATION's task observer and clear its child-agent rows."
+  (let ((orchestrator nil)
+        (listener nil))
+    (with-lock-held ((application-task-presentation-lock application))
+      (setf orchestrator
+            (application-task-presentation-orchestrator application)
+            listener
+            (application-task-presentation-listener application)
+            (application-task-presentation-orchestrator application) nil
+            (application-task-presentation-listener application) nil))
+    (when (and orchestrator listener)
+      (task-orchestrator-remove-listener orchestrator listener))
+    (let ((ui
+            (and (slot-boundp application 'ui)
+                 (application-ui application))))
+      (when (typep ui 'terminal-ui)
+        (terminal-ui-set-agent-activities ui nil))))
+  nil)
+
+(-> application-connect-task-presentation (application) null)
+(defun application-connect-task-presentation (application)
+  "Project task lifecycle and progress events into APPLICATION's active UI."
+  (application-disconnect-task-presentation application)
+  (let ((orchestrator (application--task-orchestrator application)))
+    (when orchestrator
+      (let ((listener
+              (lambda (channel payload)
+                (declare (ignore payload))
+                (when (member channel
+                              '(:task-subagent-lifecycle
+                                :task-subagent-progress)
+                              :test #'eq)
+                  (application--refresh-task-presentation
+                   application orchestrator)))))
+        (with-lock-held ((application-task-presentation-lock application))
+          (setf (application-task-presentation-orchestrator application)
+                orchestrator
+                (application-task-presentation-listener application)
+                listener))
+        (task-orchestrator-add-listener orchestrator listener)
+        (application--refresh-task-presentation application orchestrator))))
+  nil)
+
 (-> application-create
     (configuration &key (:conversation-id (option string)))
     application)
@@ -347,6 +436,7 @@
                                        update-availability)))
       (declare (ignore user-init-pathname))
       (setf (application-overlay-failures application) overlay-failures)
+      (application-connect-task-presentation application)
       (application--load-goal application)
       (application-publish-recovery-session application)
       application)))
@@ -379,6 +469,7 @@
     (application &key conversation-id
                    (immutable-p nil immutable-p-supplied-p))
   "Reconnect retained APPLICATION resources, optionally selecting CONVERSATION-ID."
+  (application-disconnect-task-presentation application)
   (tool-registry-close-runtime-state
    (application-tool-registry application))
   (image-state-reconnect)
@@ -501,6 +592,7 @@
             (application-history-floor-sequence application)
             restored-history-floor-sequence
             (application-overlay-failures application) overlay-failures))
+    (application-connect-task-presentation application)
     (application--load-goal application)
     (application-publish-recovery-session application)
     application))
@@ -529,6 +621,8 @@
         (application-worker application) nil
         (application-agent application) nil
         (application-ui application) nil
+        (application-task-presentation-orchestrator application) nil
+        (application-task-presentation-listener application) nil
         (application-input-controller application) nil
         (application-update-check-thread application) nil)
   application)

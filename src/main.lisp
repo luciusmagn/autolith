@@ -314,6 +314,8 @@
                       (ignore-errors
                         (tool-registry-close-runtime-state
                          (application-tool-registry application)))
+                   (ignore-errors
+                     (application-disconnect-task-presentation application))
                    (setf tool-runtimes-closed-p t)))
                (unless worker-stopped-p
                  (unwind-protect
