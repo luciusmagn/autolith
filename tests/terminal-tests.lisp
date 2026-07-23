@@ -921,6 +921,113 @@
                      "new progress removes the stale warning"))))
   nil)
 
+(-> test-terminal-agent-activities () null)
+(defun test-terminal-agent-activities ()
+  "Test bounded, ordered, colored, and independently animated child rows."
+  (let* ((clock 0)
+         (terminal (make-instance 'recording-terminal
+                                  :columns 72
+                                  :styled-p t))
+         (ui (terminal-ui-create
+              :terminal terminal
+              :clock-function (lambda () clock)))
+         (activities
+           (list
+            (list :id "review-2"
+                  :index 2
+                  :agent "reviewer"
+                  :state ':queued
+                  :current-tool nil
+                  :assignment "Review the finished patch."
+                  :detached nil)
+            (list :id "search-1"
+                  :index 1
+                  :agent "explorer"
+                  :state ':running
+                  :current-tool "search.content"
+                  :assignment "Locate the scheduler."
+                  :detached t))))
+    (with-terminal-ui (active-ui ui)
+      (terminal-ui-set-status active-ui "working")
+      (recording-terminal-reset terminal)
+      (terminal-ui-set-agent-activities active-ui activities)
+      (test-assert (string= (recording-terminal-output terminal) "")
+                   "child notifications do not paint from worker threads")
+      (test-assert
+       (equal (mapcar (lambda (activity) (getf activity :id))
+                      (terminal-ui-agent-activities active-ui))
+              '("search-1" "review-2"))
+       "child rows retain scheduler creation order")
+      (test-assert (terminal-ui-refresh-status active-ui)
+                   "the reader coalesces changed child state into one frame")
+      (multiple-value-bind (text display cursor)
+          (terminal-ui--live-content active-ui clock)
+        (declare (ignore cursor))
+        (let ((search-position (search "search-1" text))
+              (review-position (search "review-2" text))
+              (status-position (search "READ " text)))
+          (test-assert
+           (and (search "agents 2" text)
+                search-position
+                review-position
+                status-position
+                (< search-position review-position status-position)
+                (search "explorer · async · search.content" text)
+                (search "reviewer · queued" text))
+           "live child rows sit in stable order immediately above the modeline"))
+        (test-assert
+         (and (search (terminal-style-sequence ':agent-spinner) display)
+              (search (terminal-style-sequence ':agent-name) display)
+              (search (terminal-style-sequence ':agent-role) display)
+              (search (terminal-style-sequence ':agent-tool) display))
+         "running child rows use distinct basic-palette semantic colors"))
+      (setf clock 0.24)
+      (test-assert (not (terminal-ui-refresh-status active-ui))
+                   "child spinners do not repaint within one animation frame")
+      (setf clock 0.25)
+      (test-assert (terminal-ui-refresh-status active-ui)
+                   "running child spinners advance on the shared cadence")
+      (terminal-ui-set-status active-ui nil)
+      (multiple-value-bind (text display cursor)
+          (terminal-ui--live-content active-ui clock)
+        (declare (ignore display cursor))
+        (test-assert
+         (and (search "search-1" text)
+              (not (search "READ " text)))
+         "detached children remain visible while the primary agent is idle"))
+      (setf clock 0.5)
+      (test-assert (terminal-ui-refresh-status active-ui)
+                   "detached child animation continues without a modeline")
+      (let ((many-activities
+              (loop for index from 1 to 10
+                    collect
+                    (list :id (format nil "worker-~D" index)
+                          :index index
+                          :agent "worker"
+                          :state ':queued
+                          :current-tool nil
+                          :assignment "Wait for capacity."
+                          :detached t))))
+        (terminal-ui-set-agent-activities active-ui many-activities)
+        (terminal-ui-refresh-status active-ui)
+        (multiple-value-bind (text display cursor)
+            (terminal-ui--live-content active-ui clock)
+          (declare (ignore display cursor))
+          (test-assert
+           (and (search "agents 10" text)
+                (search "… 2 more agents" text)
+                (not (search "worker-9" text)))
+           "the child strip caps rows and summarizes overflow")))
+      (terminal-ui-set-agent-activities active-ui nil)
+      (test-assert (terminal-ui-refresh-status active-ui)
+                   "clearing the final child repaints the live region")
+      (multiple-value-bind (text display cursor)
+          (terminal-ui--live-content active-ui)
+        (declare (ignore display cursor))
+        (test-assert (not (search "agents " text))
+                     "terminal child state disappears when no jobs remain"))))
+  nil)
+
 (-> test-terminal-stream-update () null)
 (defun test-terminal-stream-update ()
   "Test continuous streamed blocks, fluid tail repaint, and block completion."
@@ -1408,6 +1515,7 @@
   (test-terminal-bounded-editor-repaint)
   (test-terminal-preview-rows)
   (test-terminal-timed-status)
+  (test-terminal-agent-activities)
   (test-terminal-stream-update)
   (test-terminal-command-completion)
   (test-terminal-modal-selection)

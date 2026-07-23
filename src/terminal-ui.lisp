@@ -16,6 +16,13 @@
 (defparameter *terminal-ui-pending-preview-limit* 3
   "The maximum pending inputs previewed for each delivery class.")
 
+(defparameter *terminal-ui-agent-visible-limit* 8
+  "The maximum queued and running child agents shown above the modeline.")
+
+(defparameter *terminal-ui-agent-spinner-frames*
+  #("⣾" "⣽" "⣻" "⢿" "⡿" "⣟" "⣯" "⣷")
+  "The shared running-child spinner cycle.")
+
 (-> terminal-ui--monotonic-seconds () real)
 (defun terminal-ui--monotonic-seconds ()
   "Return monotonic process time in seconds for live activity accounting."
@@ -29,6 +36,24 @@
        (non-empty-string-p (getf value :name))
        (typep (getf value :argument) '(option string))
        (stringp (getf value :description))))
+
+(-> terminal-agent-activity-p (t) boolean)
+(defun terminal-agent-activity-p (value)
+  "Return true when VALUE is one queued or running child presentation."
+  (handler-case
+      (not
+       (null
+        (and (listp value)
+             (evenp (length value))
+             (non-empty-string-p (getf value :id))
+             (typep (getf value :index) '(integer 1))
+             (non-empty-string-p (getf value :agent))
+             (member (getf value :state) '(:queued :running) :test #'eq)
+             (typep (getf value :current-tool) '(option string))
+             (stringp (getf value :assignment))
+             (typep (getf value :detached) 'boolean))))
+    (error ()
+      nil)))
 
 (-> terminal-ui-create
     (&key (:terminal terminal) (:editor (option line-editor)) (:prompt string)
@@ -545,6 +570,79 @@
 
 ;;;; -- Live Region Composition --
 
+(-> terminal-ui--agent-spinner-phase-at (real) (integer 0))
+(defun terminal-ui--agent-spinner-phase-at (now)
+  "Return the shared child-agent spinner phase at monotonic NOW."
+  (mod (floor (* *terminal-ui-status-spinner-frames-per-second*
+                 (max 0 now)))
+       (length *terminal-ui-agent-spinner-frames*)))
+
+(-> terminal-ui--agent-activity-row-at (list real integer) list)
+(defun terminal-ui--agent-activity-row-at (activity now row-width)
+  "Return one clipped child ACTIVITY row at monotonic NOW."
+  (let* ((running-p (eq (getf activity :state) ':running))
+         (current-tool (getf activity :current-tool))
+         (assignment (getf activity :assignment))
+         (detail
+           (cond
+             ((non-empty-string-p current-tool)
+              (terminal-span ':agent-tool current-tool))
+             ((not running-p)
+              (terminal-span ':dim "queued"))
+             ((non-empty-string-p assignment)
+              (terminal-span ':dim assignment))
+             (t
+              nil))))
+    (terminal--clip-spans
+     (remove
+      nil
+      (append
+       (list
+        (if running-p
+            (terminal-span
+             ':agent-spinner
+             (format nil "~A "
+                     (aref *terminal-ui-agent-spinner-frames*
+                           (terminal-ui--agent-spinner-phase-at now))))
+            (terminal-span ':dim "○ "))
+        (terminal-span ':agent-name (getf activity :id))
+        (terminal-span ':dim " · ")
+        (terminal-span ':agent-role (getf activity :agent)))
+       (when (getf activity :detached)
+         (list (terminal-span ':dim " · async")))
+       (when detail
+         (list (terminal-span ':dim " · ")
+               detail))))
+     row-width)))
+
+(-> terminal-ui--agent-activity-rows-at
+    (terminal-ui real integer)
+    list)
+(defun terminal-ui--agent-activity-rows-at (ui now row-width)
+  "Return bounded child-agent rows for UI at monotonic NOW."
+  (let* ((activities (terminal-ui-agent-activities ui))
+         (visible-count
+           (min *terminal-ui-agent-visible-limit* (length activities)))
+         (omitted-count (- (length activities) visible-count)))
+    (when activities
+      (append
+       (list
+        (terminal--clip-spans
+         (list (terminal-span ':agent-name "agents")
+               (terminal-span ':dim
+                              (format nil " ~D" (length activities))))
+         row-width))
+       (loop for activity in (subseq activities 0 visible-count)
+             collect
+             (terminal-ui--agent-activity-row-at activity now row-width))
+       (when (plusp omitted-count)
+         (list
+          (terminal--clip-spans
+           (list (terminal-span ':dim
+                                (format nil "… ~D more agent~:P"
+                                        omitted-count)))
+           row-width)))))))
+
 (-> terminal-ui--status-times-at
     (terminal-ui real)
     (values integer integer))
@@ -607,6 +705,25 @@
     (list elapsed
           (and (>= idle *terminal-ui-stale-status-seconds*) idle)
           (terminal-ui--status-spinner-phase-at ui now))))
+
+(-> terminal-ui--animation-signature-at
+    (terminal-ui real)
+    (option list))
+(defun terminal-ui--animation-signature-at (ui now)
+  "Return visible status and child-agent values identifying a live paint."
+  (let ((activities (terminal-ui-agent-activities ui)))
+    (when (or (terminal-ui-status ui) activities)
+      (list
+       (and (terminal-ui-status ui)
+            (terminal-ui--status-signature-at ui now))
+       (and activities
+            (list
+             (and (find ':running activities
+                        :key (lambda (activity)
+                               (getf activity :state))
+                        :test #'eq)
+                  (terminal-ui--agent-spinner-phase-at now))
+             activities))))))
 
 (-> terminal-ui--status-text-at (terminal-ui real) string)
 (defun terminal-ui--status-text-at (ui now)
@@ -681,7 +798,8 @@
   (let* ((terminal (terminal-ui-terminal ui))
          (row-width (max 1 (terminal-columns terminal)))
          (status-now (or status-now
-                         (and (terminal-ui-status ui)
+                         (and (or (terminal-ui-status ui)
+                                  (terminal-ui-agent-activities ui))
                               (funcall (terminal-ui-clock-function ui)))))
          (rows nil))
     (dolist (row (terminal-ui-preview-rows ui))
@@ -698,11 +816,21 @@
                             (list (terminal-span ':plain tail))
                             tail)
                         row-width))))))
+    (let ((activity-rows
+            (and (terminal-ui-agent-activities ui)
+                 (terminal-ui--agent-activity-rows-at
+                  ui status-now row-width))))
+      (when activity-rows
+        (setf rows
+              (append rows
+                      (list nil)
+                      activity-rows))))
     (when (terminal-ui-status ui)
       (setf rows
             (append rows
+                    (unless (terminal-ui-agent-activities ui)
+                      (list nil))
                     (list
-                     nil
                      (terminal-ui--status-row-at ui status-now row-width)))))
     (let ((steering-inputs (terminal-ui-steering-input-previews ui)))
       (when steering-inputs
@@ -825,12 +953,13 @@ live unfinished line continuing that block, or removes it when NIL."
     (ui &key status-now (appended-text "") (appended-display ""))
   "Present UI live content, atomically preceding it with appended scrollback."
   (let* ((status-now (or status-now
-                         (and (terminal-ui-status ui)
+                         (and (or (terminal-ui-status ui)
+                                  (terminal-ui-agent-activities ui))
                               (funcall (terminal-ui-clock-function ui)))))
          (terminal (terminal-ui-terminal ui)))
     (setf (terminal-ui-status-rendered-signature ui)
-          (and (terminal-ui-status ui)
-               (terminal-ui--status-signature-at ui status-now)))
+          (and status-now
+               (terminal-ui--animation-signature-at ui status-now)))
     (when (terminal-interactive-p terminal)
       (multiple-value-bind (text display cursor)
           (terminal-ui--live-content ui status-now)
@@ -1120,14 +1249,54 @@ when no resize needs to be applied."
             (funcall (terminal-ui-clock-function ui)))))
   ui)
 
+(-> terminal-ui--sanitize-agent-activity (list) list)
+(defun terminal-ui--sanitize-agent-activity (activity)
+  "Return a display-safe detached copy of one child ACTIVITY."
+  (let ((current-tool (getf activity :current-tool)))
+    (list :id
+          (sanitize-text (getf activity :id) :single-line-p t)
+          :index (getf activity :index)
+          :agent
+          (sanitize-text (getf activity :agent) :single-line-p t)
+          :state (getf activity :state)
+          :current-tool
+          (and current-tool
+               (sanitize-text current-tool :single-line-p t))
+          :assignment
+          (sanitize-text (getf activity :assignment) :single-line-p t)
+          :detached (not (null (getf activity :detached))))))
+
+(-> terminal-ui-set-agent-activities (terminal-ui list) terminal-ui)
+(defun terminal-ui-set-agent-activities (ui activities)
+  "Replace UI's queued and running child-agent presentation state.
+
+The responsive input reader coalesces worker notifications with animation
+frames, so this function never paints directly from a child thread."
+  (unless (every #'terminal-agent-activity-p activities)
+    (error 'terminal-error
+           :message "Every child-agent activity must be a valid live snapshot."
+           :operation ':set-agent-activities
+           :cause nil))
+  (let ((safe-activities
+          (sort (mapcar #'terminal-ui--sanitize-agent-activity activities)
+                #'<
+                :key (lambda (activity)
+                       (getf activity :index)))))
+    (with-terminal-ui-locked (ui)
+      (unless (equal safe-activities (terminal-ui-agent-activities ui))
+        (setf (terminal-ui-agent-activities ui) safe-activities))))
+  ui)
+
 (-> terminal-ui-refresh-status (terminal-ui) boolean)
 (defun terminal-ui-refresh-status (ui)
-  "Repaint UI when a visible elapsed activity value changed."
+  "Repaint UI when a visible status or child-agent value changed."
   (with-terminal-ui-locked (ui)
-    (let* ((status-now (and (terminal-ui-status ui)
+    (let* ((status-now (and (or (terminal-ui-status ui)
+                                (terminal-ui-agent-activities ui))
                             (funcall (terminal-ui-clock-function ui))))
            (signature (and status-now
-                           (terminal-ui--status-signature-at ui status-now))))
+                           (terminal-ui--animation-signature-at
+                            ui status-now))))
       (if (equal signature (terminal-ui-status-rendered-signature ui))
           nil
           (progn

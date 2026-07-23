@@ -175,11 +175,18 @@
     :accessor terminal-ui-status-progress-at
     :type (option real)
     :documentation "The monotonic time of the newest progress within the activity phase.")
+   (agent-activities
+    :initform nil
+    :accessor terminal-ui-agent-activities
+    :type list
+    :documentation
+    "Sanitized queued and running child-agent summaries in stable display order.")
    (status-rendered-signature
     :initform nil
     :accessor terminal-ui-status-rendered-signature
     :type list
-    :documentation "The elapsed status values used by the newest live-region paint.")
+    :documentation
+    "The status and child-agent animation values used by the newest live paint.")
    (clock-function
     :initarg :clock-function
     :initform (lambda ()

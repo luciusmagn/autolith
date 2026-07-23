@@ -11,6 +11,7 @@
            :recovery-gradient-4 :recovery-gradient-5 :recovery-gradient-6
            :user :tool :success :failure :notice :dim :hint :selected
            :strong :emphasis :code
+           :agent-spinner :agent-name :agent-role :agent-tool
            :status-plain :status-dim :status-accent
            :status-model :status-effort :status-branch
            :syntax-comment :syntax-keyword :syntax-string :syntax-escape
@@ -36,6 +37,10 @@
            (:strong (:bold t))
            (:emphasis (:italic t))
            (:code (:foreground :cyan))
+           (:agent-spinner (:foreground :bright-green :bold t))
+           (:agent-name (:foreground :bright-cyan :bold t))
+           (:agent-role (:foreground :bright-magenta))
+           (:agent-tool (:foreground :bright-yellow))
            (:syntax-comment (:faint t))
            (:syntax-keyword (:foreground :magenta))
            (:syntax-string (:foreground :green))
