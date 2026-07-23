@@ -577,8 +577,11 @@
                  (max 0 now)))
        (length *terminal-ui-agent-spinner-frames*)))
 
-(-> terminal-ui--agent-activity-row-at (list real integer) list)
-(defun terminal-ui--agent-activity-row-at (activity now row-width)
+(-> terminal-ui--agent-activity-row-at
+    (list real integer &key (:identity-width integer))
+    list)
+(defun terminal-ui--agent-activity-row-at
+    (activity now row-width &key (identity-width 0))
   "Return one clipped child ACTIVITY row at monotonic NOW."
   (let* ((running-p (eq (getf activity :state) ':running))
          (current-tool (getf activity :current-tool))
@@ -598,6 +601,7 @@
       nil
       (append
        (list
+        (terminal-span ':dim "  ")
         (if running-p
             (terminal-span
              ':agent-spinner
@@ -605,11 +609,11 @@
                      (aref *terminal-ui-agent-spinner-frames*
                            (terminal-ui--agent-spinner-phase-at now))))
             (terminal-span ':dim "○ "))
-        (terminal-span ':agent-name (getf activity :id))
+        (terminal-span ':agent-name
+                       (layout-fit-text (getf activity :id)
+                                        identity-width))
         (terminal-span ':dim " · ")
         (terminal-span ':agent-role (getf activity :agent)))
-       (when (getf activity :detached)
-         (list (terminal-span ':dim " · async")))
        (when detail
          (list (terminal-span ':dim " · ")
                detail))))
@@ -623,7 +627,20 @@
   (let* ((activities (terminal-ui-agent-activities ui))
          (visible-count
            (min *terminal-ui-agent-visible-limit* (length activities)))
-         (omitted-count (- (length activities) visible-count)))
+         (omitted-count (- (length activities) visible-count))
+         (visible-activities (subseq activities 0 visible-count))
+         (identity-width
+           (or
+            (first
+             (layout-column-widths
+              (loop for activity in visible-activities
+                    collect
+                    (list (getf activity :id)
+                          (getf activity :agent)))
+              (max 0 (- row-width (text-cell-width "  ○ ")))
+              :gap-width 3
+              :minimum-widths '(1 1)))
+            0)))
     (when activities
       (append
        (list
@@ -631,14 +648,18 @@
          (list (terminal-span ':agent-name "agents")
                (terminal-span ':dim
                               (format nil " ~D" (length activities))))
-         row-width))
-       (loop for activity in (subseq activities 0 visible-count)
+         row-width)
+        nil)
+       (loop for activity in visible-activities
              collect
-             (terminal-ui--agent-activity-row-at activity now row-width))
+             (terminal-ui--agent-activity-row-at
+              activity now row-width
+              :identity-width identity-width))
        (when (plusp omitted-count)
          (list
           (terminal--clip-spans
-           (list (terminal-span ':dim
+           (list (terminal-span ':dim "  ")
+                 (terminal-span ':dim
                                 (format nil "… ~D more agent~:P"
                                         omitted-count)))
            row-width)))))))
@@ -828,10 +849,10 @@
     (when (terminal-ui-status ui)
       (setf rows
             (append rows
-                    (unless (terminal-ui-agent-activities ui)
-                      (list nil))
                     (list
-                     (terminal-ui--status-row-at ui status-now row-width)))))
+                     nil
+                     (terminal-ui--status-row-at
+                      ui status-now row-width)))))
     (let ((steering-inputs (terminal-ui-steering-input-previews ui)))
       (when steering-inputs
         (setf rows

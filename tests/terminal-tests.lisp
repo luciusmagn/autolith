@@ -933,7 +933,7 @@
               :clock-function (lambda () clock)))
          (activities
            (list
-            (list :id "review-2"
+            (list :id "review-agent-2"
                   :index 2
                   :agent "reviewer"
                   :state ':queued
@@ -956,25 +956,62 @@
       (test-assert
        (equal (mapcar (lambda (activity) (getf activity :id))
                       (terminal-ui-agent-activities active-ui))
-              '("search-1" "review-2"))
+              '("search-1" "review-agent-2"))
        "child rows retain scheduler creation order")
       (test-assert (terminal-ui-refresh-status active-ui)
                    "the reader coalesces changed child state into one frame")
       (multiple-value-bind (text display cursor)
           (terminal-ui--live-content active-ui clock)
         (declare (ignore cursor))
-        (let ((search-position (search "search-1" text))
-              (review-position (search "review-2" text))
-              (status-position (search "READ " text)))
+        (let* ((lines (uiop:split-string text :separator '(#\Newline)))
+               (header-index (position "agents 2" lines :test #'string=))
+               (search-index
+                 (position-if (lambda (line)
+                                (search "search-1" line))
+                              lines))
+               (review-index
+                 (position-if (lambda (line)
+                                (search "review-agent-2" line))
+                              lines))
+               (status-index
+                 (position-if (lambda (line)
+                                (search "READ " line))
+                              lines))
+               (search-line (and search-index (nth search-index lines)))
+               (review-line (and review-index (nth review-index lines)))
+               (search-role-position
+                 (and search-line (search "explorer" search-line)))
+               (review-role-position
+                 (and review-line (search "reviewer" review-line))))
           (test-assert
-           (and (search "agents 2" text)
-                search-position
-                review-position
-                status-position
-                (< search-position review-position status-position)
-                (search "explorer · async · search.content" text)
+           (and header-index
+                search-index
+                review-index
+                status-index
+                (= search-index (+ header-index 2))
+                (= review-index (1+ search-index))
+                (= status-index (+ review-index 2))
+                (string= (nth (1+ header-index) lines) "")
+                (string= (nth (1+ review-index) lines) "")
+                (uiop:string-prefix-p "  " search-line)
+                (uiop:string-prefix-p "  " review-line)
+                search-role-position
+                review-role-position
+                (= (text-cell-width
+                    (subseq search-line 0 search-role-position))
+                   (text-cell-width
+                    (subseq review-line 0 review-role-position)))
+                (search "explorer · search.content" text)
                 (search "reviewer · queued" text))
-           "live child rows sit in stable order immediately above the modeline"))
+           "child rows are separated, indented, aligned, and above the modeline")
+          (test-assert (not (search "async" text))
+                       "detached state does not add a redundant row label"))
+        (test-assert
+         (every (lambda (row)
+                  (<= (terminal--spans-width row) 12))
+                (terminal-ui--agent-activity-rows-at
+                 active-ui clock 12))
+         "aligned child columns remain bounded on narrow terminals")
         (test-assert
          (and (search (terminal-style-sequence ':agent-spinner) display)
               (search (terminal-style-sequence ':agent-name) display)
@@ -991,10 +1028,18 @@
       (multiple-value-bind (text display cursor)
           (terminal-ui--live-content active-ui clock)
         (declare (ignore display cursor))
-        (test-assert
-         (and (search "search-1" text)
-              (not (search "READ " text)))
-         "detached children remain visible while the primary agent is idle"))
+        (let* ((lines (uiop:split-string text :separator '(#\Newline)))
+               (review-index
+                 (position-if (lambda (line)
+                                (search "review-agent-2" line))
+                              lines)))
+          (test-assert
+           (and (search "search-1" text)
+                (not (search "READ " text))
+                review-index
+                (string= (nth (1+ review-index) lines) "")
+                (non-empty-string-p (nth (+ review-index 2) lines)))
+           "detached children keep one blank row before the idle prompt")))
       (setf clock 0.5)
       (test-assert (terminal-ui-refresh-status active-ui)
                    "detached child animation continues without a modeline")
@@ -1015,7 +1060,10 @@
           (declare (ignore display cursor))
           (test-assert
            (and (search "agents 10" text)
-                (search "… 2 more agents" text)
+                (find-if
+                 (lambda (line)
+                   (uiop:string-prefix-p "  … 2 more agents" line))
+                 (uiop:split-string text :separator '(#\Newline)))
                 (not (search "worker-9" text)))
            "the child strip caps rows and summarizes overflow")))
       (terminal-ui-set-agent-activities active-ui nil)
