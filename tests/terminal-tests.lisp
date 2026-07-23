@@ -952,6 +952,26 @@
           (declare (ignore payload))
           (test-assert (eq action ':edit-queue)
                        "empty active-turn tab requests queued follow-up editing")))))
+  (let* ((terminal (make-instance 'recording-terminal :columns 60))
+         (completions
+           '((:name "/help" :argument nil :description "show this reference")))
+         (ui (terminal-ui-create
+              :terminal terminal
+              :completion-function (lambda () completions))))
+    (with-terminal-ui (active-ui ui)
+      (terminal-ui-process-event active-ui '(:insert "/n"))
+      (test-assert
+       (not (search "/new" (recording-terminal-output terminal)))
+       "a dynamic completion provider initially omits unregistered commands")
+      (setf completions
+            '((:name "/help" :argument nil :description "show this reference")
+              (:name "/new" :argument nil :description "start a conversation")))
+      (test-assert
+       (find "/new"
+             (terminal-ui--matching-completions active-ui)
+             :key (lambda (entry) (getf entry :name))
+             :test #'string=)
+       "dynamic command completion observes registry changes without rebuilding UI")))
   nil)
 
 (-> test-terminal-modal-selection () null)

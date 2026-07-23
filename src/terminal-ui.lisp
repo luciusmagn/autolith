@@ -32,10 +32,13 @@
 
 (-> terminal-ui-create
     (&key (:terminal terminal) (:editor (option line-editor)) (:prompt string)
-          (:placeholder string) (:completions list) (:clock-function function))
+          (:placeholder string) (:completions list)
+          (:completion-function (option function))
+          (:clock-function function))
     terminal-ui)
 (defun terminal-ui-create
     (&key terminal editor (prompt "> ") (placeholder "") completions
+          completion-function
           (clock-function #'terminal-ui--monotonic-seconds))
   "Create a scrollback-preserving UI for TERMINAL."
   (unless (typep terminal 'terminal)
@@ -46,6 +49,11 @@
   (unless (every #'terminal-completion-p completions)
     (error 'terminal-error
            :message "Every completion entry needs a name and a description."
+           :operation ':create-ui
+           :cause nil))
+  (unless (typep completion-function '(option function))
+    (error 'terminal-error
+           :message "The completion provider must be a function or NIL."
            :operation ':create-ui
            :cause nil))
   (let ((live-region
@@ -66,6 +74,7 @@
                    :prompt prompt
                    :placeholder placeholder
                    :completions completions
+                   :completion-function completion-function
                    :completion-selector
                    (make-selector
                     :visible-count +terminal-ui-visible-completions+
@@ -298,19 +307,35 @@
 
 ;;;; -- Command Completion Suggestions --
 
+(-> terminal-ui--current-completions (terminal-ui) list)
+(defun terminal-ui--current-completions (ui)
+  "Return and validate UI's current static or dynamically provided completions."
+  (let ((completions
+          (if (terminal-ui-completion-function ui)
+              (funcall (terminal-ui-completion-function ui))
+              (terminal-ui-completions ui))))
+    (unless (and (listp completions)
+                 (every #'terminal-completion-p completions))
+      (error 'terminal-error
+             :message "The completion provider returned invalid entries."
+             :operation ':complete
+             :cause nil))
+    completions))
+
 (-> terminal-ui--matching-completions (terminal-ui) list)
 (defun terminal-ui--matching-completions (ui)
   "Return UI completions whose names extend the command currently being typed."
-  (let ((text (line-editor-text (terminal-ui-editor ui))))
+  (let ((text (line-editor-text (terminal-ui-editor ui)))
+        (completions (terminal-ui--current-completions ui)))
     (if (and (terminal-interactive-p (terminal-ui-terminal ui))
-             (terminal-ui-completions ui)
+             completions
              (uiop:string-prefix-p "/" text)
              (not (find #\Space text))
              (not (find #\Newline text)))
         (remove-if-not (lambda (entry)
                          (uiop:string-prefix-p (string-downcase text)
                                                (getf entry :name)))
-                       (terminal-ui-completions ui))
+                       completions)
         nil)))
 
 (-> terminal-ui--reconcile-completions (terminal-ui) list)

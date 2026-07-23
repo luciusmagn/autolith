@@ -124,6 +124,13 @@
     :reader terminal-ui-completions
     :type list
     :documentation "Completion entries offered while typing an interactive command.")
+   (completion-function
+    :initarg :completion-function
+    :initform nil
+    :reader terminal-ui-completion-function
+    :type (option function)
+    :documentation
+    "Optional function returning the current completion entries on demand.")
    (completion-selector
     :initarg :completion-selector
     :reader terminal-ui-completion-selector
