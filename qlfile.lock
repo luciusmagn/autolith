@@ -22,6 +22,10 @@
  (:class qlot/source/ql:source-ql
   :initargs (:%version "2026-01-01")
   :version "ql-2026-01-01"))
+("ironclad" .
+ (:class qlot/source/ql:source-ql
+  :initargs (:%version "2026-01-01")
+  :version "ql-2024-10-12"))
 ("opticl" .
  (:class qlot/source/ql:source-ql
   :initargs (:%version "2022-02-20")
@@ -58,6 +62,10 @@
  (:class qlot/source/git:source-git
   :initargs (:remote-url "https://github.com/luciusmagn/colorlisp.git" :ref "6e1ee575bf57628fa864acd6f0a61209af9990b1")
   :version "git-6e1ee575bf57628fa864acd6f0a61209af9990b1"))
+("mcparen" .
+ (:class qlot/source/git:source-git
+  :initargs (:remote-url "https://github.com/luciusmagn/mcparen.git" :ref "a0981df8ca0910fc0676e1b34b5507fbd54ac901")
+  :version "git-a0981df8ca0910fc0676e1b34b5507fbd54ac901"))
 ("sexp-store" .
  (:class qlot/source/git:source-git
   :initargs (:remote-url "https://github.com/luciusmagn/sexp-store.git" :ref "a03ddb709eb43efdd2f1a98dd87aa4e7f444940c")

@@ -283,6 +283,13 @@
     :accessor task-job-command-authorization-function
     :type (option function)
     :documentation "The parent capability used to authorize child shell commands.")
+   (tool-authorization-function
+    :initarg :tool-authorization-function
+    :initform nil
+    :accessor task-job-tool-authorization-function
+    :type (option function)
+    :documentation
+    "The parent capability used to authorize child external tool calls.")
    (detached-p :initarg :detached-p :reader task-job-detached-p :type
                boolean :documentation
                "True when the parent did not wait for this child.")

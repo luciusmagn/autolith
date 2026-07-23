@@ -6,7 +6,7 @@
 ┌[RAM 35%] ~/c/frob [master]
 └ 00:50 lho-thinkpad mag took λ ./bin/autolith
 
-  :::.      :::        AUTOLITH v0.15.1
+  :::.      :::        AUTOLITH v0.16.0
   ;;`;;     ;;;        ────────────────────────────────────────
  ,[[ '[[,   [[[        model         gpt-5.6-sol (effort ultra)
 c$$$cc$$$c  $$'        workspace     /root/common-lisp/frob/
@@ -38,6 +38,9 @@ and the user can grant commands full access for a session.
 - Persistent, opt-in provider-visible reasoning summaries with =/trace on=.
 - Append-only portable conversation files with exact resume commands.
 - Optional root =AUTOLITH.org= notes for documented project adaptations.
+- Native Skills with explicit, request-local instruction loading.
+- MCP 2025-11-25 and 2025-06-18 over standard I/O or Streamable HTTP,
+  including tools, resources, and prompts.
 - Workspace and global persistent memories with ranked request-local recall.
 - Short workspace agendas with memory links and repository transport.
 - Warm in-process fff path, glob, plain, regex, fuzzy, and multi-pattern search.
@@ -101,14 +104,18 @@ drafted and queued while AL is responding. Type =/help= for commands.
 - =tests/= contains the complete regression suite.
 - [[file:docs/guide.org][docs/guide.org]] covers setup, operation, tools, persistence, and recovery.
 - [[file:docs/architecture.org][docs/architecture.org]] maps the runtime components and invariants.
+- [[file:docs/skills.org][docs/skills.org]] documents native Skill discovery and request-local loading.
+- [[file:docs/mcp.org][docs/mcp.org]] documents native MCP configuration and operation.
 - [[file:docs/release-service.org][docs/release-service.org]] documents the host-built release service.
 - [[file:docs/autolith-minimal-technical-spec.org][docs/autolith-minimal-technical-spec.org]] is the product specification.
 - [[file:AGENTS.md][AGENTS.md]] defines repository, Lisp, testing, and commit policy.
 
 * Persistent paths
 
-Autolith keeps user-authored Lisp and child-agent definitions under
-=${XDG_CONFIG_HOME:-~/.config}/autolith/=. Credentials, preferences, exact
+Autolith keeps user-authored Lisp, native MCP configuration, user Skills, and
+child-agent definitions under =${XDG_CONFIG_HOME:-~/.config}/autolith/=.
+Project Skills live below the project root's =.autolith/skills/=, and Autolith
+may provide lower-precedence bundled Skills. Credentials, preferences, exact
 command approvals, deferred inputs, live-mutation journals, and atomic
 selections belong under =${XDG_STATE_HOME:-~/.local/state}/autolith/=, together
 with the readable cached release availability and a private Git history of

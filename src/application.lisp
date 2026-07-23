@@ -376,6 +376,190 @@
         (application--refresh-task-presentation application orchestrator))))
   nil)
 
+(-> application--create-tool-registry (configuration) tool-registry)
+(defun application--create-tool-registry (configuration)
+  "Create one complete registry and close its base runtimes on later failure."
+  (let ((registry nil)
+        (completed-p nil))
+    (unwind-protect
+         (progn
+           (setf registry
+                 (make-default-tool-registry
+                  :immutable-p
+                  (configuration-immutable-p configuration)))
+           (setf registry
+                 (task-augment-tool-registry registry))
+           (multiple-value-bind (augmented manager)
+               (mcp-tool-registry-augment registry configuration)
+             (declare (ignore manager))
+             (setf registry augmented
+                   completed-p t)
+             registry))
+      (unless completed-p
+        (when registry
+          (ignore-errors
+            (tool-registry-close-runtime-state registry)))))))
+
+(-> application--discard-connection-resources
+    ((option application) (option tool-registry) t)
+    list)
+(defun application--discard-connection-resources
+    (application registry worker)
+  "Best-effort close partial resources and return every serious cleanup failure."
+  (let ((failures nil))
+    (when application
+      (handler-case
+          (application-disconnect-task-presentation application)
+        (serious-condition (condition)
+          (push condition failures))))
+    (when registry
+      (handler-case
+          (tool-registry-close-runtime-state registry)
+        (serious-condition (condition)
+          (push condition failures))))
+    (when worker
+      (handler-case
+          (lisp-worker-manager-stop worker)
+        (serious-condition (condition)
+          (push condition failures))))
+    (nreverse failures)))
+
+(-> application--restore-retired-tool-registry
+    (application tool-registry list &key (:reconnect-p boolean))
+    list)
+(defun application--restore-retired-tool-registry
+    (application registry quiesced-tools &key reconnect-p)
+  "Resume QUIESCED-TOOLS and reconnect APPLICATION, returning restoration failures."
+  (let ((failures nil))
+    (handler-case
+        (tool-registry-resume-runtime-state
+         registry :tools quiesced-tools)
+      (serious-condition (condition)
+        (push condition failures)))
+    (when reconnect-p
+      (handler-case
+          (application-connect-task-presentation application)
+        (serious-condition (condition)
+          (push condition failures))))
+    (nreverse failures)))
+
+(-> application--raise-runtime-replacement-error
+    (&key (:operation keyword)
+          (:stage keyword)
+          (:cause serious-condition)
+          (:rollback-causes list))
+    null)
+(defun application--raise-runtime-replacement-error
+    (&key operation stage cause rollback-causes)
+  "Signal a structured runtime replacement failure for OPERATION and STAGE."
+  (error
+   'application-runtime-replacement-error
+   :message
+   (format nil
+           "Could not replace the application runtime during ~(~A~) ~(~A~).~:[~; The previous runtime could not be restored completely.~]"
+           operation
+           stage
+           (not (null rollback-causes)))
+   :operation operation
+   :stage stage
+   :cause cause
+   :rollback-causes rollback-causes))
+
+(-> application-reload-mcp (application) null)
+(defun application-reload-mcp (application)
+  "Reload native and user MCP registrations and install a fresh tool registry."
+  (let* ((configuration (application-configuration application))
+         (mcp-registration-snapshot nil)
+         (context-registration-snapshot nil)
+         (command-registration-snapshot nil)
+         (old-registry (application-tool-registry application))
+         (old-agent
+           (and (slot-boundp application 'agent)
+                (application-agent application)))
+         (new-registry nil)
+         (new-agent nil)
+         (application-swapped-p nil)
+         (retirement-started-p nil)
+         (presentation-disconnected-p nil)
+         (quiesced-tools nil)
+         (failure nil)
+         (failure-stage ':prepare)
+         (rollback-failures nil)
+         (committed-p nil))
+    (with-extension-registry-transaction
+      (setf mcp-registration-snapshot (mcp--registry-snapshot)
+            context-registration-snapshot (context--registry-snapshot)
+            command-registration-snapshot
+            (application-command--registry-snapshot))
+      (unwind-protect
+           (handler-case
+               (progn
+                 (mcp-configuration-load configuration)
+                 (user-init-load configuration)
+                 (setf new-registry
+                       (application--create-tool-registry configuration))
+                 (setf new-agent
+                       (agent-create
+                        :configuration configuration
+                        :provider (application-provider application)
+                        :conversation (application-conversation application)
+                        :tool-registry new-registry
+                        :worker (application-worker application))
+                       retirement-started-p t
+                       failure-stage ':retire)
+                 (application-disconnect-task-presentation application)
+                 (setf presentation-disconnected-p t)
+                 (multiple-value-bind (completed retirement-failure)
+                     (tool-registry-quiesce-runtime-state old-registry)
+                   (setf quiesced-tools completed)
+                   (when retirement-failure
+                     (error retirement-failure)))
+                 (setf failure-stage ':install
+                       application-swapped-p t
+                       (application-tool-registry application) new-registry
+                       (application-agent application) new-agent)
+                 (application-connect-task-presentation application)
+                 (context-runtime-reset)
+                 (setf committed-p t))
+             (serious-condition (condition)
+               (setf failure condition)))
+        (unless committed-p
+          (when application-swapped-p
+            (handler-case
+                (application-disconnect-task-presentation application)
+              (serious-condition (condition)
+                (push condition rollback-failures))))
+          (when application-swapped-p
+            (setf (application-tool-registry application) old-registry
+                  (application-agent application) old-agent))
+          (mcp--registry-restore mcp-registration-snapshot)
+          (context--registry-restore context-registration-snapshot)
+          (application-command--registry-restore
+           command-registration-snapshot)
+          (when new-registry
+            (handler-case
+                (tool-registry-close-runtime-state new-registry)
+              (serious-condition (condition)
+                (push condition rollback-failures))))
+          (when retirement-started-p
+            (setf rollback-failures
+                  (nconc
+                   rollback-failures
+                   (application--restore-retired-tool-registry
+                    application
+                    old-registry
+                    quiesced-tools
+                    :reconnect-p presentation-disconnected-p)))))))
+    (when failure
+      (if retirement-started-p
+          (application--raise-runtime-replacement-error
+           :operation ':mcp-reload
+           :stage failure-stage
+           :cause failure
+           :rollback-causes rollback-failures)
+          (error failure))))
+  nil)
+
 (-> application-create
     (configuration &key (:conversation-id (option string)))
     application)
@@ -388,59 +572,94 @@
     (conversation-identifier-migrate preferred-configuration)
     (durable-mutations-load preferred-configuration)
     (let* ((overlay-failures (image-state-load preferred-configuration))
-           (user-init-pathname (user-init-load preferred-configuration))
-           (reasoning-traces-p
-             (preferences-reasoning-traces-p preferred-configuration))
-           (compact-view-p
-             (preferences-compact-view-p preferred-configuration))
-           (permission-state (permissions-load preferred-configuration))
-           (conversation (if conversation-id
-                             (conversation-load-by-id preferred-configuration
-                                                      conversation-id)
-                             (conversation-create preferred-configuration)))
-           (configuration
-             (application--configuration-for-conversation
-              preferred-configuration
-              conversation))
-           (installation-provenance
-             (installation-provenance-detect configuration))
-           (update-availability
-             (update-availability-current configuration installation-provenance))
-           (provider (provider-create
-                      configuration
-                      :reasoning-summaries-p reasoning-traces-p))
-           (registry
-             (task-augment-tool-registry
-              (make-default-tool-registry
-               :immutable-p (configuration-immutable-p configuration))))
-           (worker (lisp-worker-pool-create configuration))
-           (agent (agent-create :configuration configuration
+           (mcp-registration-snapshot nil)
+           (context-registration-snapshot nil)
+           (command-registration-snapshot nil)
+           (registry nil)
+           (worker nil)
+           (application nil)
+           (completed-p nil))
+      (unwind-protect
+           (with-extension-registry-transaction
+             (setf mcp-registration-snapshot (mcp--registry-snapshot)
+                   context-registration-snapshot
+                   (context--registry-snapshot)
+                   command-registration-snapshot
+                   (application-command--registry-snapshot))
+             (unwind-protect
+                  (progn
+                    (mcp-configuration-load preferred-configuration)
+                    (user-init-load preferred-configuration)
+                    (let* ((reasoning-traces-p
+                             (preferences-reasoning-traces-p
+                              preferred-configuration))
+                           (compact-view-p
+                             (preferences-compact-view-p
+                              preferred-configuration))
+                           (permission-state
+                             (permissions-load preferred-configuration))
+                           (conversation
+                             (if conversation-id
+                                 (conversation-load-by-id
+                                  preferred-configuration conversation-id)
+                                 (conversation-create
+                                  preferred-configuration)))
+                           (configuration
+                             (application--configuration-for-conversation
+                              preferred-configuration
+                              conversation))
+                           (installation-provenance
+                             (installation-provenance-detect configuration))
+                           (update-availability
+                             (update-availability-current
+                              configuration installation-provenance))
+                           (provider
+                             (provider-create
+                              configuration
+                              :reasoning-summaries-p reasoning-traces-p)))
+                      (setf registry
+                            (application--create-tool-registry configuration)
+                            worker
+                            (lisp-worker-pool-create configuration))
+                      (let* ((agent
+                               (agent-create
+                                :configuration configuration
                                 :provider provider
                                 :conversation conversation
                                 :tool-registry registry
                                 :worker worker))
-           (ui (application-terminal-ui-create))
-           (application (make-instance 'application
-                                       :configuration configuration
-                                       :conversation conversation
-                                       :provider provider
-                                       :tool-registry registry
-                                       :worker worker
-                                       :agent agent
-                                       :ui ui
-                                       :permission-state permission-state
-                                       :reasoning-traces-p reasoning-traces-p
-                                       :compact-view-p compact-view-p
-                                       :installation-provenance
-                                       installation-provenance
-                                       :update-availability
-                                       update-availability)))
-      (declare (ignore user-init-pathname))
-      (setf (application-overlay-failures application) overlay-failures)
-      (application-connect-task-presentation application)
-      (application--load-goal application)
-      (application-publish-recovery-session application)
-      application)))
+                             (ui (application-terminal-ui-create)))
+                        (setf application
+                              (make-instance
+                               'application
+                               :configuration configuration
+                               :conversation conversation
+                               :provider provider
+                               :tool-registry registry
+                               :worker worker
+                               :agent agent
+                               :ui ui
+                               :permission-state permission-state
+                               :reasoning-traces-p reasoning-traces-p
+                               :compact-view-p compact-view-p
+                               :installation-provenance
+                               installation-provenance
+                               :update-availability update-availability)
+                              (application-overlay-failures application)
+                              overlay-failures)
+                        (application-connect-task-presentation application)
+                        (application--load-goal application)
+                        (application-publish-recovery-session application)
+                        (setf completed-p t)
+                        application)))
+               (unless completed-p
+                 (mcp--registry-restore mcp-registration-snapshot)
+                 (context--registry-restore context-registration-snapshot)
+                 (application-command--registry-restore
+                  command-registration-snapshot))))
+        (unless completed-p
+          (application--discard-connection-resources
+           application registry worker))))))
 
 (-> application--normalize-recovery-cursors
     (conversation boolean (option integer) (option integer))
@@ -469,134 +688,208 @@
 (defun application-reconnect
     (application &key conversation-id
                    (immutable-p nil immutable-p-supplied-p))
-  "Reconnect retained APPLICATION resources, optionally selecting CONVERSATION-ID."
-  (application-disconnect-task-presentation application)
-  (tool-registry-close-runtime-state
-   (application-tool-registry application))
-  (image-state-reconnect)
-  (context-runtime-reset)
+  "Build and commit a replacement connection without damaging APPLICATION."
   (let* ((previous (application-configuration application))
          (effective-immutable-p
            (if immutable-p-supplied-p
                immutable-p
                (configuration-immutable-p previous)))
          (retained-conversation (application-conversation application))
-         (retained-configuration
-           (configuration-create
-            :working-directory (uiop:getcwd)
-            :model (configuration-model previous)
-            :reasoning-effort (configuration-reasoning-effort previous)
-            :immutable-p effective-immutable-p))
-         (prepared-configuration
-           (progn
-             (configuration-ensure-directories retained-configuration)
-             (conversation-identifier-migrate retained-configuration)
-             (user-init-load retained-configuration)
-             retained-configuration))
-         (reasoning-traces-p
-           (preferences-reasoning-traces-p prepared-configuration))
-         (compact-view-p
-           (preferences-compact-view-p prepared-configuration))
-         (permission-state (permissions-load prepared-configuration))
-         (recovery-conversation-id
-           (let ((value (uiop:getenv "AUTOLITH_RECOVERY_CONVERSATION_ID")))
-             (and (non-empty-string-p value) value)))
-         (overlay-failures nil)
-         (conversation
-           (cond
-             (recovery-conversation-id
-              (conversation-load-by-id prepared-configuration
-                                       recovery-conversation-id))
-             (conversation-id
-              (conversation-load-by-id prepared-configuration conversation-id))
-             ((conversation-persisted-p retained-conversation)
-              (conversation-load-by-id
-               prepared-configuration
-               (conversation-identifier retained-conversation)))
-             (t
-              (conversation-create prepared-configuration))))
-         (configuration
-           (application--configuration-for-conversation
-            prepared-configuration
-            conversation))
-         (installation-provenance
-           (installation-provenance-detect configuration))
-         (update-availability
-           (update-availability-current configuration installation-provenance))
-         (provider (provider-create
-                    configuration
-                    :reasoning-summaries-p reasoning-traces-p))
-         (worker (lisp-worker-pool-create configuration))
-         (registry (task-augment-tool-registry
-                    (make-default-tool-registry
-                     :immutable-p effective-immutable-p)))
-         (agent (agent-create :configuration configuration
-                              :provider provider
-                              :conversation conversation
-                              :tool-registry registry
-                              :worker worker))
-         (ui (application-terminal-ui-create))
-         (recovery-rendered-sequence
-           (handler-case
-               (let ((value (uiop:getenv "AUTOLITH_RECOVERY_RENDERED_SEQUENCE")))
-                 (and (non-empty-string-p value)
-                      (let ((parsed (parse-integer value :junk-allowed nil)))
-                        (and (not (minusp parsed)) parsed))))
-             (error ()
-               nil)))
-         (recovery-history-floor-sequence
-           (handler-case
-               (let ((value
-                       (uiop:getenv
-                        "AUTOLITH_RECOVERY_HISTORY_FLOOR_SEQUENCE")))
-                 (and (non-empty-string-p value)
-                      (let ((parsed (parse-integer value :junk-allowed nil)))
-                        (and (not (minusp parsed)) parsed))))
-             (error ()
-               nil)))
-         (recovering-conversation-p
-           (and recovery-conversation-id
-                (string=
-                 (conversation-identifier conversation)
-                 (conversation-identifier-migration-resolve
-                  prepared-configuration
-                  recovery-conversation-id)))))
-    (multiple-value-bind
-        (restored-rendered-sequence restored-history-floor-sequence)
-        (application--normalize-recovery-cursors
-         conversation
-         (not (null recovering-conversation-p))
-         recovery-rendered-sequence
-         recovery-history-floor-sequence)
-      (setf (application-configuration application) configuration
-            (application-conversation application) conversation
-            (application-provider application) provider
-            (application-tool-registry application) registry
-            (application-worker application) worker
-            (application-agent application) agent
-            (application-ui application) ui
-            (application-permission-state application) permission-state
-            (application-permission-mode application) :ask
-            (application-input-controller application) nil
-            (application-reasoning-traces-p application) reasoning-traces-p
-            (application-compact-view-p application) compact-view-p
-            (application-installation-provenance application)
-            installation-provenance
-            (application-update-availability application) update-availability
-            (application-update-check-thread application) nil
-            (application-rendered-sequence application)
-            restored-rendered-sequence
-            (application-render-position application) 0
-            (application-render-generation application)
-            (conversation-log-generation conversation)
-            (application-transcript-synchronized-p application) nil
-            (application-history-floor-sequence application)
-            restored-history-floor-sequence
-            (application-overlay-failures application) overlay-failures))
-    (application-connect-task-presentation application)
-    (application--load-goal application)
-    (application-publish-recovery-session application)
-    application))
+         (mcp-registration-snapshot nil)
+         (context-registration-snapshot nil)
+         (command-registration-snapshot nil)
+         (registry nil)
+         (worker nil)
+         (new-application nil)
+         (old-registry (application-tool-registry application))
+         (retirement-started-p nil)
+         (presentation-disconnected-p nil)
+         (quiesced-tools nil)
+         (failure-stage ':prepare)
+         (rollback-failures nil)
+         (completed-p nil))
+    (handler-case
+        (unwind-protect
+             (with-extension-registry-transaction
+           (setf mcp-registration-snapshot (mcp--registry-snapshot)
+                 context-registration-snapshot
+                 (context--registry-snapshot)
+                 command-registration-snapshot
+                 (application-command--registry-snapshot))
+           (unwind-protect
+                (let* ((retained-configuration
+                  (configuration-create
+                   :working-directory (uiop:getcwd)
+                   :model (configuration-model previous)
+                   :reasoning-effort
+                   (configuration-reasoning-effort previous)
+                   :immutable-p effective-immutable-p))
+                (prepared-configuration
+                  (progn
+                    (configuration-ensure-directories retained-configuration)
+                    (conversation-identifier-migrate retained-configuration)
+                    (mcp-configuration-load retained-configuration)
+                    (user-init-load retained-configuration)
+                    retained-configuration))
+                (reasoning-traces-p
+                  (preferences-reasoning-traces-p prepared-configuration))
+                (compact-view-p
+                  (preferences-compact-view-p prepared-configuration))
+                (permission-state (permissions-load prepared-configuration))
+                (recovery-conversation-id
+                  (let ((value
+                          (uiop:getenv
+                           "AUTOLITH_RECOVERY_CONVERSATION_ID")))
+                    (and (non-empty-string-p value) value)))
+                (conversation
+                  (cond
+                    (recovery-conversation-id
+                     (conversation-load-by-id
+                      prepared-configuration recovery-conversation-id))
+                    (conversation-id
+                     (conversation-load-by-id
+                      prepared-configuration conversation-id))
+                    ((conversation-persisted-p retained-conversation)
+                     (conversation-load-by-id
+                      prepared-configuration
+                      (conversation-identifier retained-conversation)))
+                    (t
+                     (conversation-create prepared-configuration))))
+                (configuration
+                  (application--configuration-for-conversation
+                   prepared-configuration
+                   conversation))
+                (installation-provenance
+                  (installation-provenance-detect configuration))
+                (update-availability
+                  (update-availability-current
+                   configuration installation-provenance))
+                (provider
+                  (provider-create
+                   configuration
+                   :reasoning-summaries-p reasoning-traces-p))
+                (recovery-rendered-sequence
+                  (handler-case
+                      (let ((value
+                              (uiop:getenv
+                               "AUTOLITH_RECOVERY_RENDERED_SEQUENCE")))
+                        (and
+                         (non-empty-string-p value)
+                         (let ((parsed
+                                 (parse-integer value :junk-allowed nil)))
+                           (and (not (minusp parsed)) parsed))))
+                    (error ()
+                      nil)))
+                (recovery-history-floor-sequence
+                  (handler-case
+                      (let ((value
+                              (uiop:getenv
+                               "AUTOLITH_RECOVERY_HISTORY_FLOOR_SEQUENCE")))
+                        (and
+                         (non-empty-string-p value)
+                         (let ((parsed
+                                 (parse-integer value :junk-allowed nil)))
+                           (and (not (minusp parsed)) parsed))))
+                    (error ()
+                      nil)))
+                (recovering-conversation-p
+                  (and
+                   recovery-conversation-id
+                   (string=
+                    (conversation-identifier conversation)
+                    (conversation-identifier-migration-resolve
+                     prepared-configuration
+                     recovery-conversation-id)))))
+           (setf worker (lisp-worker-pool-create configuration)
+                 registry (application--create-tool-registry configuration))
+           (let* ((agent
+                    (agent-create :configuration configuration
+                                  :provider provider
+                                  :conversation conversation
+                                  :tool-registry registry
+                                  :worker worker))
+                  (ui (application-terminal-ui-create)))
+             (setf new-application
+                   (make-instance
+                    'application
+                    :configuration configuration
+                    :conversation conversation
+                    :provider provider
+                    :tool-registry registry
+                    :worker worker
+                    :agent agent
+                    :ui ui
+                    :permission-state permission-state
+                    :reasoning-traces-p reasoning-traces-p
+                    :compact-view-p compact-view-p
+                    :installation-provenance installation-provenance
+                    :update-availability update-availability))
+             (multiple-value-bind
+                 (restored-rendered-sequence
+                  restored-history-floor-sequence)
+                 (application--normalize-recovery-cursors
+                  conversation
+                  (not (null recovering-conversation-p))
+                  recovery-rendered-sequence
+                  recovery-history-floor-sequence)
+               (setf
+                (application-rendered-sequence new-application)
+                restored-rendered-sequence
+                (application-render-position new-application) 0
+                (application-render-generation new-application)
+                (conversation-log-generation conversation)
+                (application-transcript-synchronized-p new-application) nil
+                (application-history-floor-sequence new-application)
+                restored-history-floor-sequence
+                (application-overlay-failures new-application) nil))
+             (application--load-goal new-application)
+             (image-state-reconnect)
+             (setf retirement-started-p t
+                   failure-stage ':retire)
+             (application-disconnect-task-presentation application)
+             (setf presentation-disconnected-p t)
+             (multiple-value-bind (completed retirement-failure)
+                 (tool-registry-quiesce-runtime-state old-registry)
+               (setf quiesced-tools completed)
+               (when retirement-failure
+                 (error retirement-failure)))
+             (setf failure-stage ':install)
+             (application-connect-task-presentation new-application)
+             (context-runtime-reset)
+             (setf completed-p t)
+             (when (and (slot-boundp application 'worker)
+                        (application-worker application))
+               (ignore-errors
+                 (lisp-worker-manager-stop
+                  (application-worker application))))
+             (application-publish-recovery-session new-application)
+             new-application))
+             (unless completed-p
+               (mcp--registry-restore mcp-registration-snapshot)
+               (context--registry-restore context-registration-snapshot)
+               (application-command--registry-restore
+                command-registration-snapshot))))
+          (unless completed-p
+            (setf rollback-failures
+                  (application--discard-connection-resources
+                   new-application registry worker))
+            (when retirement-started-p
+              (setf rollback-failures
+                    (nconc
+                     rollback-failures
+                     (application--restore-retired-tool-registry
+                      application
+                      old-registry
+                      quiesced-tools
+                      :reconnect-p presentation-disconnected-p))))))
+      (serious-condition (condition)
+        (if retirement-started-p
+            (application--raise-runtime-replacement-error
+             :operation ':reconnect
+             :stage failure-stage
+             :cause condition
+             :rollback-causes rollback-failures)
+            (error condition))))))
 
 (-> application--quiesce-update-check (application) null)
 (defun application--quiesce-update-check (application)
@@ -616,6 +909,9 @@
 (defmethod checkpoint-detach-state ((application application))
   "Detach APPLICATION's ephemeral object graph in a checkpoint saver child."
   (context-runtime-reset)
+  (let ((conversation (application-conversation application)))
+    (setf (conversation-turn-state conversation) nil)
+    (conversation-clear-ephemeral-input-items conversation))
   (tool-registry-detach-runtime-state
    (application-tool-registry application))
   (setf (application-provider application) nil
@@ -653,6 +949,37 @@
           (application-agent application) agent))
   nil)
 
+(-> application--prepare-runtime-replacement
+    (application configuration conversation)
+    (values model-provider tool-registry agent))
+(defun application--prepare-runtime-replacement
+    (application configuration conversation)
+  "Prepare a fresh provider, registry, and agent without touching APPLICATION."
+  (let ((registry nil)
+        (completed-p nil))
+    (unwind-protect
+         (let* ((previous-provider (application-provider application))
+                (provider
+                  (if previous-provider
+                      (provider-with-configuration
+                       previous-provider configuration)
+                      (provider-create configuration))))
+           (setf registry
+                 (application--create-tool-registry configuration))
+           (let ((agent
+                   (agent-create
+                    :configuration configuration
+                    :provider provider
+                    :conversation conversation
+                    :tool-registry registry
+                    :worker (application-worker application))))
+             (setf completed-p t)
+             (values provider registry agent)))
+      (unless completed-p
+        (when registry
+          (ignore-errors
+            (tool-registry-close-runtime-state registry)))))))
+
 (-> application--working-directory-failure
     (&key (:requested-path t)
           (:previous-directory pathname)
@@ -682,7 +1009,7 @@
     (application (or pathname string))
     pathname)
 (defun application-set-working-directory (application location)
-  "Move APPLICATION and its Lisp workers to existing directory LOCATION."
+  "Atomically replace APPLICATION's runtime in existing directory LOCATION."
   (let* ((previous-configuration (application-configuration application))
          (configuration
            (configuration-with-working-directory previous-configuration location))
@@ -692,77 +1019,235 @@
          (manager (application-worker application))
          (previous-process-directory (uiop:getcwd))
          (previous-defaults *default-pathname-defaults*)
+         (previous-conversation (application-conversation application))
+         (previous-provider (application-provider application))
+         (previous-registry (application-tool-registry application))
+         (previous-agent (application-agent application))
+         (provider nil)
+         (registry nil)
+         (agent nil)
          (workers-moved-p nil)
-         (process-moved-p nil))
-    (labels ((restore-previous-workspace ()
-               "Restore changed process and worker state, returning rollback failures."
-               (let ((failures nil))
-                 (when process-moved-p
-                   (handler-case
-                       (progn
-                         (uiop:chdir previous-process-directory)
-                         (setf *default-pathname-defaults* previous-defaults))
-                     (error (condition)
-                       (push condition failures))))
-                 (when workers-moved-p
-                   (handler-case
-                       (lisp-worker-manager-change-working-directory
-                        manager previous-configuration)
-                     (error (condition)
-                       (push condition failures))))
-                 (nreverse failures)))
-
-             (fail (stage cause)
-               "Restore prior state and signal the failure at STAGE caused by CAUSE."
-               (application--working-directory-failure
-                :requested-path location
-                :previous-directory previous-directory
-                :stage stage
-                :cause cause
-                :rollback-cause (restore-previous-workspace))))
-      (handler-case
-          (tool-registry-close-runtime-state
-           (application-tool-registry application))
-        (error (condition)
-          (fail ':tools condition)))
-      (handler-case
-          (lisp-worker-manager-change-working-directory manager configuration)
-        (error (condition)
-          (fail ':workers condition)))
-      (setf workers-moved-p t)
-      (handler-case
-          (progn
-            (uiop:chdir directory)
-            (setf process-moved-p t
-                  *default-pathname-defaults* directory))
-        (error (condition)
-          (fail ':process condition)))
-      (handler-case
-          (application--install-configuration application configuration)
-        (error (condition)
-          (fail ':application condition)))
-      directory)))
+         (process-moved-p nil)
+         (application-swapped-p nil)
+         (retirement-started-p nil)
+         (presentation-disconnected-p nil)
+         (quiesced-tools nil)
+         (committed-p nil)
+         (failure nil)
+         (failure-stage ':tools)
+         (rollback-failures nil))
+    (handler-case
+        (multiple-value-setq (provider registry agent)
+          (application--prepare-runtime-replacement
+           application configuration previous-conversation))
+      (error (condition)
+        (application--working-directory-failure
+         :requested-path location
+         :previous-directory previous-directory
+         :stage ':tools
+         :cause condition
+         :rollback-cause nil)))
+    (unwind-protect
+         (handler-case
+             (progn
+               (setf retirement-started-p t
+                     failure-stage ':tools)
+               (application-disconnect-task-presentation application)
+               (setf presentation-disconnected-p t)
+               (multiple-value-bind (completed retirement-failure)
+                   (tool-registry-quiesce-runtime-state previous-registry)
+                 (setf quiesced-tools completed)
+                 (when retirement-failure
+                   (error retirement-failure)))
+               (setf failure-stage ':workers)
+               (lisp-worker-manager-change-working-directory
+                manager configuration)
+               (setf workers-moved-p t
+                     failure-stage ':process)
+               (uiop:chdir directory)
+               (setf process-moved-p t
+                     *default-pathname-defaults* directory
+                     failure-stage ':application)
+               (setf application-swapped-p t)
+               (setf (application-configuration application) configuration
+                     (application-provider application) provider
+                     (application-tool-registry application) registry
+                     (application-agent application) agent)
+               (application-connect-task-presentation application)
+               (context-runtime-reset)
+               (setf committed-p t))
+           (serious-condition (condition)
+             (setf failure condition)))
+      (unless committed-p
+        (when application-swapped-p
+          (handler-case
+              (application-disconnect-task-presentation application)
+            (serious-condition (condition)
+              (push condition rollback-failures)))
+          (setf (application-configuration application)
+                previous-configuration
+                (application-conversation application)
+                previous-conversation
+                (application-provider application)
+                previous-provider
+                (application-tool-registry application)
+                previous-registry
+                (application-agent application)
+                previous-agent))
+        (when process-moved-p
+          (handler-case
+              (progn
+                (uiop:chdir previous-process-directory)
+                (setf *default-pathname-defaults* previous-defaults))
+            (serious-condition (condition)
+              (push condition rollback-failures))))
+        (when workers-moved-p
+          (handler-case
+              (lisp-worker-manager-change-working-directory
+               manager previous-configuration)
+            (serious-condition (condition)
+              (push condition rollback-failures))))
+        (when registry
+          (handler-case
+              (tool-registry-close-runtime-state registry)
+            (serious-condition (condition)
+              (push condition rollback-failures))))
+        (when retirement-started-p
+          (setf rollback-failures
+                (nconc
+                 rollback-failures
+                 (application--restore-retired-tool-registry
+                  application
+                  previous-registry
+                  quiesced-tools
+                  :reconnect-p presentation-disconnected-p))))))
+    (when failure
+      (application--working-directory-failure
+       :requested-path location
+       :previous-directory previous-directory
+       :stage failure-stage
+       :cause failure
+       :rollback-cause (nreverse rollback-failures)))
+    directory))
 
 (-> application-install-conversation (application conversation) application)
 (defun application-install-conversation (application conversation)
-  "Make CONVERSATION active and restore its model selection."
-  (tool-registry-close-runtime-state
-   (application-tool-registry application))
-  (application--install-configuration
-   application
-   (application--configuration-for-conversation
-    (application-configuration application)
-    conversation)
-   :conversation conversation)
-  (setf (application-rendered-sequence application) 0
-        (application-render-position application) 0
-        (application-render-generation application)
-        (conversation-log-generation conversation)
-        (application-transcript-synchronized-p application) nil
-        (application-history-floor-sequence application) nil)
-  (application--load-goal application)
-  (application-publish-recovery-session application)
-  application)
+  "Atomically install CONVERSATION with a fresh tool runtime and agent."
+  (let* ((configuration
+           (application--configuration-for-conversation
+            (application-configuration application)
+            conversation))
+         (previous-configuration (application-configuration application))
+         (previous-conversation (application-conversation application))
+         (previous-provider (application-provider application))
+         (previous-registry (application-tool-registry application))
+         (previous-agent (application-agent application))
+         (previous-rendered-sequence
+           (application-rendered-sequence application))
+         (previous-render-position
+           (application-render-position application))
+         (previous-render-generation
+           (application-render-generation application))
+         (previous-transcript-synchronized-p
+           (application-transcript-synchronized-p application))
+         (previous-history-floor-sequence
+           (application-history-floor-sequence application))
+         (previous-goal (copy-list (application-goal application)))
+         (provider nil)
+         (registry nil)
+         (agent nil)
+         (application-swapped-p nil)
+         (retirement-started-p nil)
+         (presentation-disconnected-p nil)
+         (quiesced-tools nil)
+         (committed-p nil)
+         (failure nil)
+         (failure-stage ':retire)
+         (rollback-failures nil))
+    (multiple-value-setq (provider registry agent)
+      (application--prepare-runtime-replacement
+       application configuration conversation))
+    (unwind-protect
+         (handler-case
+             (progn
+               (setf retirement-started-p t
+                     failure-stage ':retire)
+               (application-disconnect-task-presentation application)
+               (setf presentation-disconnected-p t)
+               (multiple-value-bind (completed retirement-failure)
+                   (tool-registry-quiesce-runtime-state previous-registry)
+                 (setf quiesced-tools completed)
+                 (when retirement-failure
+                   (error retirement-failure)))
+               (setf failure-stage ':install
+                     application-swapped-p t)
+               (setf (application-configuration application) configuration
+                     (application-conversation application) conversation
+                     (application-provider application) provider
+                     (application-tool-registry application) registry
+                     (application-agent application) agent)
+               (application-connect-task-presentation application)
+               (setf (application-rendered-sequence application) 0
+                     (application-render-position application) 0
+                     (application-render-generation application)
+                     (conversation-log-generation conversation)
+                     (application-transcript-synchronized-p application) nil
+                     (application-history-floor-sequence application) nil)
+               (application--load-goal application)
+               (context-runtime-reset)
+               (application-publish-recovery-session application)
+               (setf committed-p t))
+           (serious-condition (condition)
+             (setf failure condition)))
+      (unless committed-p
+        (when application-swapped-p
+          (handler-case
+              (application-disconnect-task-presentation application)
+            (serious-condition (condition)
+              (push condition rollback-failures)))
+          (setf (application-configuration application)
+                previous-configuration
+                (application-conversation application)
+                previous-conversation
+                (application-provider application)
+                previous-provider
+                (application-tool-registry application)
+                previous-registry
+                (application-agent application)
+                previous-agent
+                (application-rendered-sequence application)
+                previous-rendered-sequence
+                (application-render-position application)
+                previous-render-position
+                (application-render-generation application)
+                previous-render-generation
+                (application-transcript-synchronized-p application)
+                previous-transcript-synchronized-p
+                (application-history-floor-sequence application)
+                previous-history-floor-sequence
+                (application-goal application)
+                previous-goal))
+        (when registry
+          (handler-case
+              (tool-registry-close-runtime-state registry)
+            (serious-condition (condition)
+              (push condition rollback-failures))))
+        (when retirement-started-p
+          (setf rollback-failures
+                (nconc
+                 rollback-failures
+                 (application--restore-retired-tool-registry
+                  application
+                  previous-registry
+                  quiesced-tools
+                  :reconnect-p presentation-disconnected-p))))))
+    (when failure
+      (application--raise-runtime-replacement-error
+       :operation ':conversation
+       :stage failure-stage
+       :cause failure
+       :rollback-causes rollback-failures))
+    application))
 
 
 ;;;; -- Transcript Projection --
@@ -861,6 +1346,37 @@
       (tool-registry-find registry
                           (subseq canonical-name 0 separator)
                           (subseq canonical-name (1+ separator))))))
+
+(defmethod tool-compact-result-visible-p ((tool fs-write-tool))
+  "Keep successful file creations visible in compact presentation."
+  t)
+
+(defmethod tool-compact-result-visible-p ((tool fs-edit-tool))
+  "Keep successful file edits visible in compact presentation."
+  t)
+
+(defmethod tool-compact-result-visible-p ((tool shell-run-tool))
+  "Keep successful external commands visible in compact presentation."
+  t)
+
+(defmethod tool-compact-result-visible-p ((tool lisp-eval-tool))
+  "Keep successful Lisp evaluation visible in compact presentation."
+  t)
+
+(defmethod tool-compact-result-visible-p ((tool self-eval-tool))
+  "Keep successful active-image evaluation visible in compact presentation."
+  t)
+
+(-> application--compact-tool-result-visible-p
+    (application (option string))
+    boolean)
+(defun application--compact-tool-result-visible-p
+    (application canonical-name)
+  "Return true when CANONICAL-NAME remains visible in compact presentation."
+  (let ((tool (and (stringp canonical-name)
+                   (application--find-tool application canonical-name))))
+    (and tool
+         (tool-compact-result-visible-p tool))))
 
 
 (-> application--field-spans (string string) list)
@@ -992,10 +1508,8 @@
             (tool (application--find-tool application canonical-name)))
        (when (or (not (application-compact-view-p application))
                  (not (eq (getf (rest record) :status) ':ok))
-                 (member canonical-name
-                         '("fs.write" "fs.edit" "shell.run"
-                           "lisp.eval" "self.eval")
-                         :test #'string=))
+                 (application--compact-tool-result-visible-p
+                  application canonical-name))
          (application-tool-result-entry tool application record))))
     (:summary
      (list (terminal-span
@@ -1090,13 +1604,8 @@
      (let ((canonical-name (getf (rest record) :tool)))
        (or (not (application-compact-view-p application))
            (not (eq (getf (rest record) :status) ':ok))
-           (not
-            (null
-             (and (stringp canonical-name)
-                  (member canonical-name
-                          '("fs.write" "fs.edit" "shell.run"
-                            "lisp.eval" "self.eval")
-                          :test #'string=)))))))
+           (application--compact-tool-result-visible-p
+            application canonical-name))))
     (:summary
      t)
     (otherwise
@@ -1800,7 +2309,10 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
        :steering-callback steering-function
        :command-authorization-callback
        (lambda (command directory)
-         (application-authorize-command application command directory))))))
+         (application-authorize-command application command directory))
+       :tool-authorization-callback
+       (lambda (tool arguments)
+         (application-authorize-tool application tool arguments))))))
 
 (-> application--turn-final-text (provider-result) (option string))
 (defun application--turn-final-text (result)

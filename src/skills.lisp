@@ -14,6 +14,9 @@
 (defparameter *skill-file-character-limit* (* 64 1024)
   "The maximum characters read from one SKILL.sexp.")
 
+(defparameter *skill-discovery-character-limit* (* 8 1024 1024)
+  "The maximum SKILL.sexp characters read during one catalog discovery.")
+
 (defparameter *skill-form-depth-limit* 32
   "The maximum structural depth accepted in one SKILL.sexp form.")
 
@@ -25,6 +28,9 @@
 
 (defparameter *skill-selection-character-limit* (* 128 1024)
   "The maximum selected skill instruction characters injected in one request.")
+
+(defparameter *skill-selection-count-limit* 32
+  "The maximum distinct skills selected during one logical user turn.")
 
 (defparameter *skill-name-character-limit* 64
   "The maximum characters in a skill name.")
@@ -41,6 +47,9 @@
 (defparameter *skill-warning-character-limit* 1000
   "The maximum characters in one request-local skill warning.")
 
+(defparameter *skill-warning-aggregate-character-limit* 4000
+  "The maximum selected-skill warning characters injected in one request.")
+
 (defparameter *skill-native-keywords*
   '(:autolith-skill :version :name :description :instructions)
   "The complete keyword vocabulary accepted by native skill forms.")
@@ -54,6 +63,9 @@
 (defvar *skill-logical-turn-selection-metadata* nil
   "Definition identities selected during the current logical user turn.")
 
+(defvar *skill-definition-source-character-count* 0
+  "Characters read while validating the dynamically active skill definition.")
+
 
 ;;;; -- Skill Values and Diagnostics --
 
@@ -64,6 +76,7 @@
            :scan-depth-limit
            :scan-directory-limit
            :scan-entry-limit
+           :scan-character-limit
            :outside-root
            :not-regular-file
            :identity-changed
@@ -216,7 +229,7 @@
    (reason
     :initarg :reason
     :reader skill-selection-error-reason
-    :type (member :inactive-turn :unknown-skill)
+    :type (member :inactive-turn :unknown-skill :selection-limit)
     :documentation "The machine-readable reason selection could not proceed."))
   (:documentation "A skill could not be selected for the active logical turn."))
 
@@ -230,7 +243,13 @@
     :initarg :message
     :reader skill--definition-error-message
     :type non-empty-string
-    :documentation "The validation failure explanation."))
+    :documentation "The validation failure explanation.")
+   (source-character-count
+    :initarg :source-character-count
+    :initform 0
+    :reader skill--definition-error-source-character-count
+    :type (integer 0)
+    :documentation "Characters read before this definition failed."))
   (:documentation "An internal non-fatal SKILL.sexp validation failure.")
   (:report (lambda (condition stream)
              (write-string (skill--definition-error-message condition)
@@ -260,18 +279,6 @@
 (defun skill--pathname< (left right)
   "Return true when LEFT sorts before RIGHT by its namestring."
   (not (null (string< (namestring left) (namestring right)))))
-
-(-> skill--hidden-directory-p (pathname) boolean)
-(defun skill--hidden-directory-p (pathname)
-  "Return true when PATHNAME's final directory component begins with a dot."
-  (let ((component
-          (first
-           (last
-            (pathname-directory
-             (uiop:ensure-directory-pathname pathname))))))
-    (and (stringp component)
-         (plusp (length component))
-         (char= (char component 0) #\.))))
 
 (-> skill--skill-pathname-p (pathname) boolean)
 (defun skill--skill-pathname-p (pathname)
@@ -480,11 +487,8 @@ directory listing."
                  (cond
                    ((< depth max-depth)
                     (dolist (subdirectory subdirectories)
-                      (unless (skill--hidden-directory-p subdirectory)
-                        (walk subdirectory (1+ depth)))))
-                   ((some (lambda (subdirectory)
-                            (not (skill--hidden-directory-p subdirectory)))
-                          subdirectories)
+                      (walk subdirectory (1+ depth))))
+                   (subdirectories
                     (record-diagnostic
                      :scan-depth-limit
                      directory
@@ -524,6 +528,7 @@ directory listing."
   "Signal one internal skill definition failure of KIND."
   (error 'skill--definition-error
          :kind kind
+         :source-character-count *skill-definition-source-character-count*
          :message (apply #'format nil control arguments)))
 
 (-> skill--read-file-bounded
@@ -599,8 +604,14 @@ stall discovery."
                             :auto-close t)))
                      (setf descriptor nil)
                      (with-open-stream (stream stream)
+                       ;; A decoding or stream failure does not report its
+                       ;; partial progress. Charge the complete allowance
+                       ;; until a successful read supplies the exact count.
+                       (setf *skill-definition-source-character-count*
+                             character-limit)
                        (let* ((buffer (make-string (1+ character-limit)))
                               (count (read-sequence buffer stream)))
+                         (setf *skill-definition-source-character-count* count)
                          (when (> count character-limit)
                            (skill--definition-fail
                             :file-too-large
@@ -752,6 +763,8 @@ stall discovery."
         (unwind-protect
              (let ((*package* reader-package)
                    (*read-eval* nil)
+                   (*read-suppress* nil)
+                   (*read-base* 10)
                    (*readtable* (skill--fresh-readtable))
                    (end (list :end)))
                (with-input-from-string (stream source)
@@ -928,100 +941,116 @@ stall discovery."
 
 (-> skill--parse-definition
     (pathname &key (:instruction-character-limit (integer 1))
+                   (:file-character-limit (integer 1))
                    (:root (option pathname)))
-    (values string string string pathname (integer 0) (integer 0)))
+    (values string string string pathname
+            (integer 0) (integer 0) (integer 0)))
 (defun skill--parse-definition
     (pathname
      &key
        (instruction-character-limit *skill-instruction-character-limit*)
+       (file-character-limit *skill-file-character-limit*)
        root)
   "Read and validate PATHNAME as one native Autolith skill definition."
-  (multiple-value-bind (source canonical-pathname device inode)
-      (skill--read-file-bounded
-       pathname
-       *skill-file-character-limit*
-       :root root)
-    (let ((form (skill--read-one-form source)))
-      (skill--validate-tree form)
-      (unless (and (consp form)
-                   (eq (first form) ':autolith-skill))
-        (skill--definition-fail
-         :invalid-structure
-         "SKILL.sexp must begin with :autolith-skill."))
-      (let ((fields (rest form))
-            (values (make-hash-table :test #'eq)))
-        (loop while fields
-              do
-                 (unless (rest fields)
-                   (skill--definition-fail
-                    :invalid-structure
-                    "SKILL.sexp contains a field without a value."))
-                 (let ((key (first fields))
-                       (value (second fields)))
-                   (unless (member key
-                                   '(:version
-                                     :name
-                                     :description
-                                     :instructions)
-                                   :test #'eq)
+  (let ((*skill-definition-source-character-count* 0))
+    (multiple-value-bind (source canonical-pathname device inode)
+        (skill--read-file-bounded
+         pathname
+         file-character-limit
+         :root root)
+      (let ((form (skill--read-one-form source)))
+        (skill--validate-tree form)
+        (unless (and (consp form)
+                     (eq (first form) ':autolith-skill))
+          (skill--definition-fail
+           :invalid-structure
+           "SKILL.sexp must begin with :autolith-skill."))
+        (let ((fields (rest form))
+              (values (make-hash-table :test #'eq)))
+          (loop while fields
+                do
+                   (unless (rest fields)
                      (skill--definition-fail
-                      :unknown-field
-                      "SKILL.sexp contains unknown field ~S."
-                      key))
-                   (multiple-value-bind (present-value present-p)
-                       (gethash key values)
-                     (declare (ignore present-value))
-                     (when present-p
+                      :invalid-structure
+                      "SKILL.sexp contains a field without a value."))
+                   (let ((key (first fields))
+                         (value (second fields)))
+                     (unless (member key
+                                     '(:version
+                                       :name
+                                       :description
+                                       :instructions)
+                                     :test #'eq)
                        (skill--definition-fail
-                        :duplicate-field
-                        "SKILL.sexp contains duplicate field ~S."
-                        key)))
-                   (setf (gethash key values) value))
-                 (setf fields (rest (rest fields))))
-        (dolist (key '(:version :name :description :instructions))
-          (multiple-value-bind (value present-p)
-              (gethash key values)
-            (declare (ignore value))
-            (unless present-p
+                        :unknown-field
+                        "SKILL.sexp contains unknown field ~S."
+                        key))
+                     (multiple-value-bind (present-value present-p)
+                         (gethash key values)
+                       (declare (ignore present-value))
+                       (when present-p
+                         (skill--definition-fail
+                          :duplicate-field
+                          "SKILL.sexp contains duplicate field ~S."
+                          key)))
+                     (setf (gethash key values) value))
+                   (setf fields (rest (rest fields))))
+          (dolist (key '(:version :name :description :instructions))
+            (multiple-value-bind (value present-p)
+                (gethash key values)
+              (declare (ignore value))
+              (unless present-p
+                (skill--definition-fail
+                 :missing-field
+                 "SKILL.sexp requires field ~S."
+                 key))))
+          (let ((version (gethash ':version values))
+                (name (skill--validate-name (gethash ':name values)))
+                (description
+                  (skill--validate-description
+                   (gethash ':description values)))
+                (instructions
+                  (skill--validate-instructions
+                   (gethash ':instructions values)
+                   instruction-character-limit)))
+            (unless (eql version 1)
               (skill--definition-fail
-               :missing-field
-               "SKILL.sexp requires field ~S."
-               key))))
-        (let ((version (gethash ':version values))
-              (name (skill--validate-name (gethash ':name values)))
-              (description
-                (skill--validate-description
-                 (gethash ':description values)))
-              (instructions
-                (skill--validate-instructions
-                 (gethash ':instructions values)
-                 instruction-character-limit)))
-          (unless (eql version 1)
-            (skill--definition-fail
-             :invalid-version
-             "SKILL.sexp :version must be the integer 1."))
-          (unless (string= name (or (skill--directory-name pathname) ""))
-            (skill--definition-fail
-             :name-directory-mismatch
-             "Skill name ~S must match its containing directory name."
-             name))
-          (values name
-                  description
-                  instructions
-                  canonical-pathname
-                  device
-                  inode))))))
+               :invalid-version
+               "SKILL.sexp :version must be the integer 1."))
+            (unless (string= name (or (skill--directory-name pathname) ""))
+              (skill--definition-fail
+               :name-directory-mismatch
+               "Skill name ~S must match its containing directory name."
+               name))
+            (values name
+                    description
+                    instructions
+                    canonical-pathname
+                    device
+                    inode
+                    *skill-definition-source-character-count*)))))))
 
-(-> skill--load-metadata (pathname pathname (integer 0))
-    (values (option skill-metadata) (option skill-diagnostic)))
-(defun skill--load-metadata (pathname root root-index)
+(-> skill--load-metadata
+    (pathname pathname (integer 0)
+     &key (:file-character-limit (integer 1))
+          (:aggregate-limit-p boolean))
+    (values (option skill-metadata)
+            (option skill-diagnostic)
+            (integer 0)))
+(defun skill--load-metadata
+    (pathname root root-index
+     &key
+       (file-character-limit *skill-file-character-limit*)
+       aggregate-limit-p)
   "Return metadata or one typed diagnostic for PATHNAME."
   (handler-case
       (multiple-value-bind
-            (name description instructions canonical-pathname device inode)
+            (name description instructions canonical-pathname device inode
+             source-character-count)
           (skill--parse-definition
            pathname
            :instruction-character-limit *skill-file-character-limit*
+           :file-character-limit file-character-limit
            :root root)
         (declare (ignore instructions))
         (values
@@ -1034,15 +1063,27 @@ stall discovery."
                         :inode inode
                         :root root
                         :root-index root-index)
-         nil))
+         nil
+         source-character-count))
     (skill--definition-error (condition)
       (values
        nil
        (skill--diagnostic
-        :kind (skill--definition-error-kind condition)
+        :kind
+        (if (and aggregate-limit-p
+                 (eq (skill--definition-error-kind condition)
+                     ':file-too-large))
+            ':scan-character-limit
+            (skill--definition-error-kind condition))
         :pathname pathname
         :root-index root-index
-        :message (skill--definition-error-message condition))))))
+        :message
+        (if (and aggregate-limit-p
+                 (eq (skill--definition-error-kind condition)
+                     ':file-too-large))
+            "The aggregate skill discovery character budget was exhausted."
+            (skill--definition-error-message condition)))
+       (skill--definition-error-source-character-count condition)))))
 
 
 ;;;; -- Catalog Assembly and Fresh Reads --
@@ -1051,32 +1092,42 @@ stall discovery."
     (list
      &key (:max-depth (integer 0))
           (:max-directories (integer 1))
-          (:max-entries (integer 1)))
+          (:max-entries (integer 1))
+          (:max-characters (integer 1)))
     skill-catalog)
 (defun skill-catalog-discover
     (roots
      &key
        (max-depth *skill-scan-depth-limit*)
        (max-directories *skill-scan-directory-limit*)
-       (max-entries *skill-scan-entry-limit*))
+       (max-entries *skill-scan-entry-limit*)
+       (max-characters *skill-discovery-character-limit*))
   "Discover skills beneath ordered ROOTS, with earlier roots taking precedence."
   (let ((skills nil)
         (diagnostics nil)
         (reserved (make-hash-table :test #'equal))
         (remaining-directories max-directories)
-        (remaining-entries max-entries))
+        (remaining-entries max-entries)
+        (remaining-characters max-characters)
+        (character-budget-exhausted-p nil))
     (loop for root-designator in roots
           for root-index from 0
           for root = (uiop:ensure-directory-pathname
                       (pathname root-designator))
           do
              (when (or (zerop remaining-directories)
-                       (zerop remaining-entries))
+                       (zerop remaining-entries)
+                       (zerop remaining-characters))
                (push
                 (skill--diagnostic
-                 :kind (if (zerop remaining-directories)
-                           ':scan-directory-limit
-                           ':scan-entry-limit)
+                 :kind
+                 (cond
+                   ((zerop remaining-directories)
+                    ':scan-directory-limit)
+                   ((zerop remaining-entries)
+                    ':scan-entry-limit)
+                   (t
+                    ':scan-character-limit))
                  :pathname root
                  :root-index root-index
                  :message
@@ -1115,6 +1166,20 @@ stall discovery."
                               (rest event)
                               (skill-diagnostic-pathname (rest event))))))
                  (dolist (event events)
+                   (when (zerop remaining-characters)
+                     (push
+                      (skill--diagnostic
+                       :kind ':scan-character-limit
+                       :pathname
+                       (if (eq (first event) ':pathname)
+                           (rest event)
+                           (skill-diagnostic-pathname (rest event)))
+                       :root-index root-index
+                       :message
+                       "The aggregate skill discovery character budget was exhausted.")
+                      diagnostics)
+                     (setf character-budget-exhausted-p t)
+                     (loop-finish))
                    (if (eq (first event) ':diagnostic)
                        (let* ((diagnostic (rest event))
                               (name
@@ -1130,9 +1195,28 @@ stall discovery."
                               (reservation
                                 (and
                                  (skill--valid-name-p directory-name)
-                                 (gethash directory-name reserved))))
-                         (multiple-value-bind (metadata diagnostic)
-                             (skill--load-metadata pathname root root-index)
+                                 (gethash directory-name reserved)))
+                              (file-character-limit
+                                (min *skill-file-character-limit*
+                                     remaining-characters)))
+                         (multiple-value-bind
+                               (metadata diagnostic source-character-count)
+                             (skill--load-metadata
+                              pathname
+                              root
+                              root-index
+                              :file-character-limit file-character-limit
+                              :aggregate-limit-p
+                              (<= remaining-characters
+                                  *skill-file-character-limit*))
+                           (decf remaining-characters
+                                 (min remaining-characters
+                                      source-character-count))
+                           (when (and diagnostic
+                                      (eq
+                                       (skill-diagnostic-kind diagnostic)
+                                       ':scan-character-limit))
+                             (setf character-budget-exhausted-p t))
                            (cond
                              (diagnostic
                               (push diagnostic diagnostics)
@@ -1161,7 +1245,9 @@ stall discovery."
                                 (skill-metadata-name metadata)
                                 reserved)
                                pathname)
-                              (push metadata skills))))))))))
+                              (push metadata skills))))))))
+               (when character-budget-exhausted-p
+                 (loop-finish))))
     (make-instance 'skill-catalog
                    :skills (nreverse skills)
                    :diagnostics (nreverse diagnostics))))
@@ -1272,6 +1358,15 @@ survive."
     (if (member name *skill-logical-turn-selection-names* :test #'string=)
         nil
         (progn
+          (when (>= (length *skill-logical-turn-selection-names*)
+                    *skill-selection-count-limit*)
+            (error 'skill-selection-error
+                   :message
+                   (format nil
+                           "A logical turn may select at most ~D distinct skills."
+                           *skill-selection-count-limit*)
+                   :name name
+                   :reason ':selection-limit))
           (setf *skill-logical-turn-selection-names*
                 (append *skill-logical-turn-selection-names* (list name))
                 *skill-logical-turn-selection-metadata*
@@ -1335,7 +1430,7 @@ SKILL.LOAD selects a skill; catalog text and durable conversation text do not."
 (defun skill--catalog-guidance ()
   "Return concise skill selection and progressive-disclosure guidance."
   (format nil
-          "~%### Skill rules~%When the user names a listed skill or the task clearly matches a description, call `skill.load` with its exact name before other task actions. Call it once for every applicable skill. Do not read SKILL.sexp through `fs.read`; `skill.load` makes Autolith inject only its :instructions string ephemerally in the next model request. Do not carry a skill into later turns unless it is selected again.~2%Before acting, read every selected instruction string completely from request-local context. Resolve linked relative paths from the SKILL.sexp directory and load only resources needed for the task. Prefer provided scripts and assets. If a skill cannot be read or applied, state that briefly and continue with the best fallback."))
+          "~%### Skill rules~%When the user names a listed skill or the task clearly matches a description, call `skill.load` with its exact name before other task actions. Call it once for every applicable skill. Do not read SKILL.sexp through `fs.read`; `skill.load` makes Autolith inject only its :instructions string ephemerally into subsequent provider requests in this logical turn. Do not carry a skill into later turns unless it is selected again.~2%Before acting, read every selected instruction string completely from request-local context. Resolve linked relative paths from the SKILL.sexp directory and load only resources needed for the task. Prefer provided scripts and assets. If a skill cannot be read or applied, state that briefly and continue with the best fallback."))
 
 (-> skill--catalog-line (skill-metadata &key (:description (option string)))
     string)
@@ -1535,17 +1630,22 @@ The function never retains a skill instruction string."
   "Return a stable context contribution identifier from PREFIX and skill NAME."
   (format nil "~A-~A" prefix name))
 
+(-> skill--truncate-string (string (integer 1)) string)
+(defun skill--truncate-string (text character-limit)
+  "Return TEXT truncated to exactly CHARACTER-LIMIT characters at most."
+  (if (<= (length text) character-limit)
+      text
+      (if (<= character-limit 3)
+          (subseq text 0 character-limit)
+          (concatenate
+           'string
+           (subseq text 0 (- character-limit 3))
+           "..."))))
+
 (-> skill--bounded-warning (string) string)
 (defun skill--bounded-warning (warning)
   "Return WARNING truncated to the exact request-local warning limit."
-  (if (<= (length warning) *skill-warning-character-limit*)
-      warning
-      (if (<= *skill-warning-character-limit* 3)
-          (subseq warning 0 *skill-warning-character-limit*)
-          (concatenate
-           'string
-           (subseq warning 0 (- *skill-warning-character-limit* 3))
-           "..."))))
+  (skill--truncate-string warning *skill-warning-character-limit*))
 
 (-> skill--warning-contribution (skill-metadata string) context-contribution)
 (defun skill--warning-contribution (metadata warning)
@@ -1584,6 +1684,81 @@ The function never retains a skill instruction string."
    (format nil
            "Skill ~A was selected for this request, but its winning SKILL.sexp path or filesystem identity changed before use. The replacement was not applied. Continue with the best fallback and do not claim that the selected instructions were applied."
            (skill-metadata-name metadata))))
+
+(-> skill--warning-contribution-p (context-contribution) boolean)
+(defun skill--warning-contribution-p (contribution)
+  "Return true when CONTRIBUTION is one selected-skill warning."
+  (let ((identifier (context-contribution-identifier contribution)))
+    (and (>= (length identifier) (length "skill-warning-"))
+         (string= identifier
+                  "skill-warning-"
+                  :end1 (length "skill-warning-")
+                  :end2 (length "skill-warning-")))))
+
+(-> skill--warning-overflow-contribution ((integer 1) (integer 1))
+    context-contribution)
+(defun skill--warning-overflow-contribution (omitted-count character-limit)
+  "Return one bounded mandatory warning for OMITTED-COUNT collapsed warnings."
+  (let ((identifier "skill-warning-overflow"))
+    (make-context-contribution
+     :identifier identifier
+     :instruction
+     (skill--truncate-string
+      (format nil
+              "~D additional selected-skill warning~:P were omitted because their aggregate output reached the ~D-character limit. Treat those skills as unavailable and do not claim their instructions were applied."
+              omitted-count
+              *skill-warning-aggregate-character-limit*)
+      character-limit)
+     :priority 910
+     :class ':mandatory
+     :deduplication-key identifier)))
+
+(-> skill--bound-warning-contributions (list) list)
+(defun skill--bound-warning-contributions (contributions)
+  "Bound warning payloads in CONTRIBUTIONS and collapse every excess warning."
+  (let* ((warnings
+           (remove-if-not #'skill--warning-contribution-p contributions))
+         (ordinary
+           (remove-if #'skill--warning-contribution-p contributions))
+         (total
+           (loop for warning in warnings
+                 sum (length
+                      (context-contribution-instruction warning)))))
+    (if (<= total *skill-warning-aggregate-character-limit*)
+        contributions
+        (let ((kept nil)
+              (used 0)
+              (remaining (length warnings)))
+          (dolist (warning warnings)
+            (let* ((warning-length
+                     (length
+                      (context-contribution-instruction warning)))
+                   (next-remaining (1- remaining))
+                   (overflow
+                     (skill--warning-overflow-contribution
+                      (max 1 next-remaining)
+                      *skill-warning-aggregate-character-limit*))
+                   (overflow-length
+                     (length
+                      (context-contribution-instruction overflow))))
+              (if (and (plusp next-remaining)
+                       (<= (+ used warning-length overflow-length)
+                           *skill-warning-aggregate-character-limit*))
+                  (progn
+                    (push warning kept)
+                    (incf used warning-length)
+                    (setf remaining next-remaining))
+                  (return))))
+          (let* ((omitted (- (length warnings) (length kept)))
+                 (available
+                   (max 1
+                        (- *skill-warning-aggregate-character-limit*
+                           used)))
+                 (overflow
+                   (skill--warning-overflow-contribution omitted available)))
+            (append ordinary
+                    (nreverse kept)
+                    (list overflow)))))))
 
 (-> skill--request-contributions-for-catalog
     (skill-catalog conversation)
@@ -1687,7 +1862,7 @@ The function never retains a skill instruction string."
                             (skill--read-failure-instruction
                              metadata
                              condition)))))))))))
-        contributions))))
+        (skill--bound-warning-contributions contributions)))))
 
 (-> skill-request-contributions
     (configuration conversation)

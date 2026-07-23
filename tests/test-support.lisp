@@ -5,6 +5,10 @@
 (defvar *test-count* 0
   "The number of assertions attempted by the current test run.")
 
+(defparameter *test-conversation-tiny-png*
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+  "A one-pixel PNG used to exercise durable image input.")
+
 (-> test-assert (t string) null)
 (defun test-assert (value description)
   "Record one assertion and signal an error when VALUE is false."
@@ -12,6 +16,73 @@
   (unless value
     (error "Test failed: ~A" description))
   nil)
+
+(-> test-call-with-function-replacements (list function) t)
+(defun test-call-with-function-replacements (replacements function)
+  "Call FUNCTION while REPLACEMENTS temporarily replace global functions."
+  (let ((originals
+          (mapcar
+           (lambda (replacement)
+             (cons (first replacement)
+                   (symbol-function (first replacement))))
+           replacements)))
+    (unwind-protect
+         (progn
+           (dolist (replacement replacements)
+             (setf (symbol-function (first replacement))
+                   (second replacement)))
+           (funcall function))
+      (dolist (original originals)
+        (setf (symbol-function (first original))
+              (rest original))))))
+
+(-> test-object-contains-string-p (t string) boolean)
+(defun test-object-contains-string-p (root needle)
+  "Return true when an ordinary object reachable from ROOT contains NEEDLE."
+  (let ((seen (make-hash-table :test #'eq)))
+    (labels ((visit (value)
+               "Search VALUE without invoking application accessors."
+               (cond
+                 ((stringp value)
+                  (not (null (search needle value))))
+                 ((or (null value)
+                      (numberp value)
+                      (characterp value)
+                      (symbolp value)
+                      (pathnamep value)
+                      (functionp value))
+                  nil)
+                 ((gethash value seen)
+                  nil)
+                 ((consp value)
+                  (setf (gethash value seen) t)
+                  (or (visit (first value))
+                      (visit (rest value))))
+                 ((hash-table-p value)
+                  (setf (gethash value seen) t)
+                  (loop for key being the hash-keys of value
+                          using (hash-value child)
+                        thereis
+                        (or (visit key) (visit child))))
+                 ((vectorp value)
+                  (setf (gethash value seen) t)
+                  (loop for child across value
+                        thereis (visit child)))
+                 ((or (typep value 'condition)
+                      (typep value 'standard-object))
+                  (setf (gethash value seen) t)
+                  (handler-case
+                      (loop for slot in (class-slots (class-of value))
+                            for name = (slot-definition-name slot)
+                            thereis
+                            (and
+                             (slot-boundp value name)
+                             (visit (slot-value value name))))
+                    (error ()
+                      nil)))
+                 (t
+                  nil))))
+      (and (visit root) t))))
 
 (-> test-configuration () configuration)
 (defun test-configuration ()

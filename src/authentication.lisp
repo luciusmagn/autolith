@@ -5,6 +5,67 @@
 (defvar *credentials-in-request-scope* nil
   "True only while provider credentials are dynamically available to a request.")
 
+(defvar *active-secret-use-lock*
+  (make-lock "Autolith active secret use")
+  "The lock protecting the process-wide active secret-use counter.")
+
+(defvar *active-secret-use-count* 0
+  "The number of live provider or MCP operations that may retain secrets.")
+
+(defvar *secret-use-depth* 0
+  "The dynamic nesting depth of secret-bearing operations on this thread.")
+
+(defvar *secret-use-quiescence-owner* nil
+  "The thread temporarily preventing new transient secret use.")
+
+(-> call-with-secret-use (function) t)
+(defun call-with-secret-use (function)
+  "Call FUNCTION while checkpointing can observe active transient secrets."
+  (with-lock-held (*active-secret-use-lock*)
+    (when (and *secret-use-quiescence-owner*
+               (zerop *secret-use-depth*)
+               (not (eq *secret-use-quiescence-owner*
+                        sb-thread:*current-thread*)))
+      (error 'authentication-error
+             :message
+             "A checkpoint is temporarily preventing new credential-bearing operations."))
+    (incf *active-secret-use-count*))
+  (let ((*secret-use-depth* (1+ *secret-use-depth*)))
+    (unwind-protect
+         (funcall function)
+      (with-lock-held (*active-secret-use-lock*)
+        (decf *active-secret-use-count*)
+        (when (minusp *active-secret-use-count*)
+          (setf *active-secret-use-count* 0)
+          (error 'authentication-error
+                 :message
+                 "The active secret-use counter became inconsistent."))))))
+
+(-> call-with-secret-use-quiescence (function) t)
+(defun call-with-secret-use-quiescence (function)
+  "Call FUNCTION while preventing other threads from beginning secret use.
+
+Existing operations remain counted and may finish nested cleanup. Nested
+secret use by the owner is also allowed so runtime shutdown can authenticate
+its protocol-level close operation."
+  (let ((owner sb-thread:*current-thread*))
+    (with-lock-held (*active-secret-use-lock*)
+      (when *secret-use-quiescence-owner*
+        (error 'authentication-error
+               :message "Another secret-use quiescence operation is active."))
+      (setf *secret-use-quiescence-owner* owner))
+    (unwind-protect
+         (funcall function)
+      (with-lock-held (*active-secret-use-lock*)
+        (when (eq *secret-use-quiescence-owner* owner)
+          (setf *secret-use-quiescence-owner* nil))))))
+
+(-> secret-use-active-p () boolean)
+(defun secret-use-active-p ()
+  "Return true while any thread may retain transient secret values."
+  (with-lock-held (*active-secret-use-lock*)
+    (plusp *active-secret-use-count*)))
+
 (defclass oauth-credentials ()
   ((access-token
     :initarg :access-token
@@ -37,6 +98,71 @@
     :type pathname
     :documentation "The file from which these request-scoped credentials came."))
   (:documentation "ChatGPT OAuth material held only inside request scope."))
+
+(-> oauth-credentials-secret-values (oauth-credentials) list)
+(defun oauth-credentials-secret-values (credentials)
+  "Return CREDENTIALS' nonempty secret-bearing values longest first."
+  (stable-sort
+   (remove-duplicates
+    (remove-if-not
+     #'non-empty-string-p
+     (list
+      (oauth-credentials-access-token credentials)
+      (oauth-credentials-refresh-token credentials)
+      (oauth-credentials-id-token credentials)
+      (oauth-credentials-account-id credentials)))
+    :test #'string=)
+   #'>
+   :key #'length))
+
+(-> redact-exact-string-value (string string string) string)
+(defun redact-exact-string-value (source secret marker)
+  "Replace every exact SECRET occurrence in SOURCE with MARKER."
+  (if (zerop (length secret))
+      source
+      (with-output-to-string (stream)
+        (loop with start = 0
+              for position = (search secret source :start2 start)
+              do
+                 (write-string source stream :start start :end position)
+                 (if position
+                     (progn
+                       (write-string marker stream)
+                       (setf start (+ position (length secret))))
+                     (return))))))
+
+(-> redact-exact-string-values (string list string) string)
+(defun redact-exact-string-values (source secrets marker)
+  "Replace exact SECRETS in SOURCE with MARKER."
+  (reduce
+   (lambda (current secret)
+     (redact-exact-string-value current secret marker))
+   (remove-if-not #'non-empty-string-p secrets)
+   :initial-value source))
+
+(-> safe-redaction-marker (string list) string)
+(defun safe-redaction-marker (preferred secrets)
+  "Return a marker that cannot contain or form any exact nonempty SECRET."
+  (let* ((nonempty-secrets
+           (remove-if-not #'non-empty-string-p secrets))
+         (sentinel
+           (loop for code from #x2588 below char-code-limit
+                 for character = (code-char code)
+                 when (and
+                       character
+                       (notany
+                        (lambda (secret)
+                          (find character secret :test #'char=))
+                        nonempty-secrets))
+                   return character)))
+    (unless sentinel
+      (error 'authentication-error
+             :message "No credential-safe redaction marker is available."))
+    (if (notany (lambda (secret)
+                  (search secret preferred))
+                nonempty-secrets)
+        (format nil "~C~A~C" sentinel preferred sentinel)
+        (string sentinel))))
 
 (-> padded-base64url (string) string)
 (defun padded-base64url (source)
@@ -323,12 +449,17 @@
       (let ((document (and (stringp body) (json-decode body))))
         (when (json-object-p document)
           (let ((error-value (json-get document "error")))
-            (cond
-              ((stringp error-value)
-               error-value)
-              ((json-object-p error-value)
-               (or (json-get error-value "code")
-                   (json-get error-value "type")))))))
+            (let ((code
+                    (cond
+                      ((stringp error-value)
+                       error-value)
+                      ((json-object-p error-value)
+                       (or (json-get error-value "code")
+                           (json-get error-value "type")))
+                      (t
+                       nil))))
+              (and (non-empty-string-p code)
+                   (subseq code 0 (min 256 (length code))))))))
     (error ()
       nil)))
 
@@ -435,7 +566,18 @@
             (credential-source-save primary-source refreshed))
         (http-request-failed (condition)
           (let* ((body (response-body condition))
-                 (code (oauth-error-code body))
+                 (raw-code (oauth-error-code body))
+                 (code
+                   (and
+                    raw-code
+                    (let ((secrets
+                            (oauth-credentials-secret-values credentials)))
+                      (redact-exact-string-values
+                       raw-code
+                       secrets
+                       (safe-redaction-marker
+                        "[OAUTH CREDENTIAL REDACTED]"
+                        secrets)))))
                  (newer-primary
                    (and (string= (or code "") "refresh_token_reused")
                         (credential-source-load primary-source))))
@@ -470,11 +612,13 @@
     t)
 (defun call-with-credentials (manager function &key force-refresh)
   "Call FUNCTION with request-scoped credentials managed by MANAGER."
-  (let ((*credentials-in-request-scope* t))
-    (funcall function
-             (credential-manager-credentials
-              manager
-              :force-refresh force-refresh))))
+  (call-with-secret-use
+   (lambda ()
+     (let ((*credentials-in-request-scope* t))
+       (funcall function
+                (credential-manager-credentials
+                 manager
+                 :force-refresh force-refresh))))))
 
 (defmacro with-credentials ((variable manager &key force-refresh) &body body)
   "Bind VARIABLE to request-scoped credentials from MANAGER while evaluating BODY."

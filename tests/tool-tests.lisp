@@ -13,6 +13,17 @@
     :reader tool-test-runtime-close-function
     :type function
     :documentation "The callback recording runtime closure.")
+   (resume-function
+    :initarg :resume-function
+    :reader tool-test-runtime-resume-function
+    :type function
+    :documentation "The callback recording runtime restart.")
+   (close-priority
+    :initarg :close-priority
+    :initform 0
+    :reader tool-test-runtime-close-priority
+    :type integer
+    :documentation "The deterministic test runtime dependency priority.")
    (detach-function
     :initarg :detach-function
     :reader tool-test-runtime-detach-function
@@ -27,6 +38,17 @@
 (defmethod tool-runtime-close ((tool tool-test-runtime-tool))
   "Invoke TOOL's deterministic close callback."
   (funcall (tool-test-runtime-close-function tool))
+  nil)
+
+(defmethod tool-runtime-close-priority ((tool tool-test-runtime-tool))
+  "Return TOOL's deterministic dependency priority."
+  (tool-test-runtime-close-priority tool))
+
+(defmethod tool-runtime-resume
+    ((tool tool-test-runtime-tool) (registry tool-registry))
+  "Invoke TOOL's deterministic resume callback."
+  (declare (ignore registry))
+  (funcall (tool-test-runtime-resume-function tool))
   nil)
 
 (defmethod tool-runtime-detach ((tool tool-test-runtime-tool))
@@ -57,10 +79,10 @@
                                "arguments" "{}"))
                 (result (tool-registry-execute-call
                          registry unknown-call context)))
-           (test-assert (= (length (tool-registry-tools registry)) 46)
+           (test-assert (= (length (tool-registry-tools registry)) 47)
                         "the default registry exposes the complete initial tool set")
-           (test-assert (= (length schemas) 7)
-                        "the provider schemas contain seven namespaces")
+           (test-assert (= (length schemas) 8)
+                        "the provider schemas contain eight namespaces")
            (test-assert (string= (json-get (aref schemas 0) "name") "fs")
                         "the workspace filesystem namespace is first")
            (test-assert (= (length (json-get (aref schemas 0) "tools")) 5)
@@ -93,12 +115,14 @@
                         "the self namespace exposes fourteen active-image operations")
            (test-assert (tool-registry-find registry "self" "source")
                         "tracked source inspection has a dedicated self tool")
+           (test-assert (string= (json-get (aref schemas 7) "name") "skill")
+                        "request-local Skill selection follows core tools")
            (let* ((immutable-registry
                     (make-default-tool-registry :immutable-p t))
                   (immutable-schemas
                     (tool-registry-provider-schemas immutable-registry))
                   (self-schema (aref immutable-schemas 6)))
-             (test-assert (= (length (tool-registry-tools immutable-registry)) 37)
+             (test-assert (= (length (tool-registry-tools immutable-registry)) 38)
                           "immutable mode omits nine active-image state tools")
              (test-assert (= (length (json-get self-schema "tools")) 5)
                           "immutable mode advertises five self inspection tools")
@@ -117,6 +141,7 @@
   (let ((registry (make-instance 'tool-registry))
         (runtime-identity (list ':shared-runtime))
         (close-count 0)
+        (resume-count 0)
         (detach-count 0))
     (flet ((make-runtime-tool (name)
              "Return one test tool sharing the lexical runtime counters."
@@ -128,19 +153,25 @@
               :parameters (tool-object-schema (json-object) nil)
               :runtime-identity runtime-identity
               :close-function (lambda () (incf close-count))
+              :resume-function (lambda () (incf resume-count))
               :detach-function (lambda () (incf detach-count)))))
       (tool-registry-register registry (make-runtime-tool "first"))
       (tool-registry-register registry (make-runtime-tool "second"))
       (tool-registry-close-runtime-state registry)
+      (tool-registry-resume-runtime-state registry)
       (tool-registry-detach-runtime-state registry)
       (test-assert (= close-count 1)
                    "a shared tool runtime closes exactly once per registry")
+      (test-assert (= resume-count 1)
+                   "a shared tool runtime resumes exactly once per registry")
       (test-assert (= detach-count 1)
                    "a shared tool runtime detaches exactly once per registry")))
   (let ((registry (make-instance 'tool-registry))
         (close-order nil)
+        (resume-order nil)
         (failure nil))
-    (flet ((make-runtime-tool (name identity close-function)
+    (flet ((make-runtime-tool
+               (&key name identity priority close-function resume-function)
              "Return one independently identified close-test tool."
              (make-instance
               'tool-test-runtime-tool
@@ -149,22 +180,30 @@
               :description "Exercise complete runtime cleanup after failure."
               :parameters (tool-object-schema (json-object) nil)
               :runtime-identity identity
+              :close-priority priority
               :close-function close-function
+              :resume-function resume-function
               :detach-function (lambda () nil))))
       (tool-registry-register
        registry
        (make-runtime-tool
-        "failure"
-        (list ':failure)
+        :name "failure"
+        :identity (list ':failure)
+        :priority 50
+        :close-function
         (lambda ()
           (push ':failure close-order)
-          (error "expected runtime close failure"))))
+          (error "expected runtime close failure"))
+        :resume-function
+        (lambda () (push ':failure resume-order))))
       (tool-registry-register
        registry
        (make-runtime-tool
-        "later"
-        (list ':later)
-        (lambda () (push ':later close-order))))
+        :name "later"
+        :identity (list ':later)
+        :priority 100
+        :close-function (lambda () (push ':later close-order))
+        :resume-function (lambda () (push ':later resume-order))))
       (setf failure
             (handler-case
                 (progn
@@ -175,7 +214,10 @@
       (test-assert failure
                    "runtime closure reports the first cleanup failure")
       (test-assert (equal (nreverse close-order) '(:later :failure))
-                   "runtime closure unwinds registrations and survives a failure")))
+                   "runtime closure unwinds dependencies and survives a failure")
+      (tool-registry-resume-runtime-state registry)
+      (test-assert (equal (nreverse resume-order) '(:failure :later))
+                   "runtime restart restores dependencies before dependents")))
   nil)
 
 (-> test-workspace-tools () null)

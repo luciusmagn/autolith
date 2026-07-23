@@ -374,8 +374,7 @@
                                        (first
                                         (multiple-value-list
                                          (task-orchestrator-start-jobs
-                                          orchestrator viewer entries
-                                          nil nil))))
+                                          orchestrator viewer entries))))
                                (condition (condition)
                                  (setf admission-condition condition))))
                            :name "Autolith admission race"))
@@ -452,7 +451,7 @@
               (handler-case
                   (progn
                     (task-orchestrator-start-jobs
-                     orchestrator viewer (list entry) nil nil)
+                     orchestrator viewer (list entry))
                     nil)
                 (task-aborted ()
                   t))
@@ -1243,8 +1242,7 @@
              (dotimes (batch 4)
                (task-orchestrator-start-jobs
                 orchestrator primary
-                (funcall entries (* batch 16) 16)
-                nil nil))
+                (funcall entries (* batch 16) 16)))
              (let ((next-index (task-orchestrator-next-index orchestrator))
                    (job-count
                      (hash-table-count
@@ -1262,8 +1260,7 @@
                     (progn
                       (task-orchestrator-start-jobs
                        orchestrator primary
-                       (funcall entries 64 1)
-                       nil nil)
+                       (funcall entries 64 1))
                       nil)
                   (task-error ()
                     t))
@@ -1486,6 +1483,8 @@
                           (and (null (task-job-parent-agent job))
                                (null
                                 (task-job-command-authorization-function job))
+                               (null
+                                (task-job-tool-authorization-function job))
                                (null (task-job-thread job))))
                         jobs)
                  :worker-count (length workers)

@@ -153,6 +153,52 @@
 (defparameter *provider-stream-retry-sleep-function* #'sleep
   "Function used to wait between provider stream reconnect attempts.")
 
+(defparameter *provider-credential-redaction-marker*
+  "[PROVIDER CREDENTIAL REDACTED]"
+  "The preferred replacement for a credential echoed by a provider response.")
+
+(defvar *provider-active-credential-values* nil
+  "Exact credential strings available only inside one provider attempt.")
+
+(defvar *provider-active-credential-redaction-marker* nil
+  "A request-local marker containing none of the active credential values.")
+
+(-> provider--sanitize-wire-string (string) string)
+(defun provider--sanitize-wire-string (source)
+  "Redact active exact provider credentials from untrusted wire SOURCE."
+  (redact-exact-string-values
+   source
+   *provider-active-credential-values*
+   (or *provider-active-credential-redaction-marker*
+       *provider-credential-redaction-marker*)))
+
+(-> provider--sanitize-wire-value (t) t)
+(defun provider--sanitize-wire-value (value)
+  "Return a detached provider wire VALUE with active credentials redacted."
+  (cond
+    ((stringp value)
+     (provider--sanitize-wire-string value))
+    ((hash-table-p value)
+     (let ((copy
+             (make-hash-table
+              :test (hash-table-test value)
+              :size (hash-table-count value))))
+       (maphash
+        (lambda (key child)
+          (setf
+           (gethash (provider--sanitize-wire-value key) copy)
+           (provider--sanitize-wire-value child)))
+        value)
+       copy))
+    ((vectorp value)
+     (map 'vector #'provider--sanitize-wire-value value))
+    ((consp value)
+     (cons
+      (provider--sanitize-wire-value (first value))
+      (provider--sanitize-wire-value (rest value))))
+    (t
+     value)))
+
 (defmethod provider-rate-limits ((provider model-provider))
   "Return no rate limit snapshot for providers that do not report one."
   (declare (ignore provider))
@@ -335,10 +381,11 @@ at reference commit 5c19155c."
 
 The request never carries a service_tier, keeping Autolith on the standard path.
 GOAL-CONTEXT and resolved context contributions ride as transient developer
-messages that are never persisted in the durable conversation. COMPACTION-P
-builds a tool-free summarization request whose trailing developer message asks
-for a context checkpoint handoff. The second value is the context delivery that
-the transport consumes only after a completed response."
+messages that are never persisted in the durable conversation. Skill catalogs
+and explicitly selected bodies participate through that same context delivery.
+COMPACTION-P builds a tool-free summarization request whose trailing developer
+message asks for a context checkpoint handoff. The second value is the context
+delivery that the transport consumes only after a completed response."
   (let* ((configuration (provider-configuration provider))
          (web-search-tool (and (not compaction-p)
                                (provider-web-search-tool configuration)))
@@ -376,7 +423,9 @@ the transport consumes only after a completed response."
                 (responses-lite-developer-message
                  (context-delivery-rendered delivery))))
          (input (coerce (append prefix
-                                (conversation-input-items conversation)
+                                (conversation-input-items-for-request
+                                 conversation
+                                 :include-ephemeral-p (not compaction-p))
                                 (when context-message (list context-message))
                                 (when compaction-p
                                   (list (responses-lite-developer-message
@@ -628,10 +677,14 @@ the transport consumes only after a completed response."
 (defun provider-signal-http-failure (provider condition)
   "Record CONDITION headers and signal a typed provider or authentication error."
   (let ((status (response-status condition))
-        (headers (response-headers condition))
+        (headers
+          (provider--sanitize-wire-value
+           (response-headers condition)))
         (body (handler-case
                   (let ((content (response-body condition)))
-                    (and (stringp content) content))
+                    (and
+                     (stringp content)
+                     (provider--sanitize-wire-string content)))
                 (error ()
                   nil))))
     (provider-record-rate-limits provider headers)
@@ -690,17 +743,25 @@ the transport consumes only after a completed response."
     (end-of-file ()
       (provider--signal-stream-interruption
        headers
-       "The provider connection closed during an SSE event."))))
+       "The provider connection closed during an SSE event."))
+    (error ()
+      (provider--signal-stream-interruption
+       headers
+       "The provider stream could not be read."))))
 
 (-> provider--decode-sse-data (string t) t)
 (defun provider--decode-sse-data (data headers)
   "Decode one SSE DATA payload, normalizing truncation into a provider condition."
   (handler-case
-      (json-decode data)
+      (provider--sanitize-wire-value (json-decode data))
     (end-of-file ()
       (provider--signal-stream-interruption
        headers
-       "The provider connection closed during an SSE event."))))
+       "The provider connection closed during an SSE event."))
+    (error ()
+      (provider--signal-stream-interruption
+       headers
+       "The provider returned a malformed SSE event."))))
 
 (-> provider--event-response (json-object) (option json-object))
 (defun provider--event-response (event)
@@ -810,7 +871,10 @@ the transport consumes only after a completed response."
            :code code
            :request-id (provider--event-request-id event error-object headers)
            :response-id (provider--event-response-id event response-id)
-           :response (bounded-string data :limit 2000))))
+           :response
+           (bounded-string
+            (provider--sanitize-wire-string data)
+            :limit 2000))))
 
 (-> provider--consume-stream (stream t function) provider-result)
 (defun provider--consume-stream (stream headers event-callback)
@@ -933,9 +997,15 @@ the transport consumes only after a completed response."
   (declare (type vector tool-namespaces)
            (type function event-callback)
            (type boolean force-refresh))
-  (handler-case
-      (with-credentials (credentials (provider-credential-manager provider)
-                                     :force-refresh force-refresh)
+  (with-credentials (credentials (provider-credential-manager provider)
+                                 :force-refresh force-refresh)
+    (let* ((*provider-active-credential-values*
+             (oauth-credentials-secret-values credentials))
+           (*provider-active-credential-redaction-marker*
+             (safe-redaction-marker
+              *provider-credential-redaction-marker*
+              *provider-active-credential-values*)))
+      (handler-case
         (multiple-value-bind (request delivery)
             (provider-request-object
              provider
@@ -943,38 +1013,50 @@ the transport consumes only after a completed response."
              tool-namespaces
              :goal-context goal-context
              :compaction-p compaction-p)
-          (multiple-value-bind (stream status headers)
+          (multiple-value-bind (stream status raw-headers)
               (provider-open-response-stream
                provider
                request
                :credentials credentials
                :conversation conversation)
-            (provider-record-rate-limits provider headers)
-            (unless (= status 200)
-              (let ((body (provider--drain-error-body stream)))
-                (if (= status 401)
-                    (error 'provider-unauthorized
-                           :message "The provider rejected the current ChatGPT credentials."
-                           :status status
-                           :request-id (response-header headers "x-request-id")
-                           :response nil)
-                    (error 'provider-error
-                           :message (provider--http-error-message status body)
-                           :status status
-                           :request-id (response-header headers "x-request-id")
-                           :response (and body
-                                          (bounded-string body :limit 2000))))))
-            (let ((result
-                    (unwind-protect
-                         (provider--consume-stream stream headers event-callback)
-                      (when (open-stream-p stream)
-                        (close stream)))))
-              (context-delivery-complete delivery)
-              result))))
-    (dexador.error:http-request-unauthorized (condition)
-      (provider-signal-http-failure provider condition))
-    (http-request-failed (condition)
-      (provider-signal-http-failure provider condition))))
+            (let ((headers
+                    (provider--sanitize-wire-value raw-headers)))
+              (provider-record-rate-limits provider headers)
+              (unless (= status 200)
+                (let* ((raw-body (provider--drain-error-body stream))
+                       (body
+                         (and
+                          raw-body
+                          (provider--sanitize-wire-string raw-body))))
+                  (if (= status 401)
+                      (error
+                       'provider-unauthorized
+                       :message
+                       "The provider rejected the current ChatGPT credentials."
+                       :status status
+                       :request-id
+                       (response-header headers "x-request-id")
+                       :response nil)
+                      (error
+                       'provider-error
+                       :message (provider--http-error-message status body)
+                       :status status
+                       :request-id
+                       (response-header headers "x-request-id")
+                       :response
+                       (and body (bounded-string body :limit 2000))))))
+              (let ((result
+                      (unwind-protect
+                           (provider--consume-stream
+                            stream headers event-callback)
+                        (when (open-stream-p stream)
+                          (close stream)))))
+                (context-delivery-complete delivery)
+                result))))
+        (dexador.error:http-request-unauthorized (condition)
+          (provider-signal-http-failure provider condition))
+        (http-request-failed (condition)
+          (provider-signal-http-failure provider condition))))))
 
 (defmethod provider-stream-turn
     ((provider codex-subscription-provider)

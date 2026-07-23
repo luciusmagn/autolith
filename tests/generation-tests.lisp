@@ -74,6 +74,268 @@
     (write-byte 42 stream))
   (generation-core-pathname generation))
 
+(-> generation-tests--test-checkpoint-runtime-resume () null)
+(defun generation-tests--test-checkpoint-runtime-resume ()
+  "Test failed checkpoint preparation resumes every quiesced tool runtime."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (registry (make-instance 'tool-registry))
+         (runtime-identity (list ':checkpoint-runtime))
+         (close-count 0)
+         (resume-count 0)
+         (secret-lock (make-lock "Autolith checkpoint secret drain"))
+         (secret-condition
+           (make-condition-variable
+            :name "Autolith checkpoint secret drain"))
+         (secret-ready-p nil)
+         (release-secret-p nil)
+         (secret-thread nil)
+         (tool
+           (make-instance
+            'tool-test-runtime-tool
+            :namespace "checkpoint-test"
+            :name "runtime"
+            :description "Exercise checkpoint runtime recovery."
+            :parameters (tool-object-schema (json-object) nil)
+            :runtime-identity runtime-identity
+            :close-function
+            (lambda ()
+              (incf close-count)
+              (with-lock-held (secret-lock)
+                (setf release-secret-p t)
+                (condition-notify secret-condition))
+              (join-thread secret-thread))
+            :resume-function (lambda () (incf resume-count))
+            :detach-function (lambda () nil)))
+         (backend
+           (make-instance
+            'linux-sbcl-checkpoint-backend
+            :configuration configuration
+            :worker nil
+            :tool-registry registry)))
+    (unwind-protect
+         (progn
+           (tool-registry-register registry tool)
+           (setf
+            secret-thread
+            (make-thread
+             (lambda ()
+               (call-with-secret-use
+                (lambda ()
+                  (with-lock-held (secret-lock)
+                    (setf secret-ready-p t)
+                    (condition-notify secret-condition)
+                    (loop until release-secret-p
+                          do (condition-wait
+                              secret-condition secret-lock))))))
+             :name "Autolith checkpoint active secret test"))
+           (with-lock-held (secret-lock)
+             (loop until secret-ready-p
+                   do (condition-wait secret-condition secret-lock)))
+           (let ((*checkpoint-thread-quiescer* nil))
+             (test-assert
+              (test-call-with-function-replacements
+               (list
+                (list
+                 'checkpoint--source-snapshot
+                 (lambda (active-configuration)
+                   (declare (ignore active-configuration))
+                   "test-source-commit"))
+                (list
+                 'checkpoint--revalidate-source
+                 (lambda (active-configuration source-commit)
+                   (declare
+                    (ignore active-configuration source-commit))
+                   nil))
+                (list
+                 'checkpoint--single-threaded-p
+                 (lambda ()
+                   nil)))
+               (lambda ()
+                 (handler-case
+                     (progn
+                       (checkpoint-create backend)
+                       nil)
+                   (checkpoint-error (condition)
+                     (eq (checkpoint-error-stage condition) ':fork)))))
+              "post-quiesce checkpoint validation failure remains structured"))
+           (test-assert
+            (and (= close-count 1)
+                 (= resume-count 1))
+            "failed checkpoint preparation resumes its quiesced runtime once")
+           (test-assert
+            (not (secret-use-active-p))
+            "checkpoint preparation drains a runtime's existing secret use"))
+      (when (and secret-thread
+                 (sb-thread:thread-alive-p secret-thread))
+        (with-lock-held (secret-lock)
+          (setf release-secret-p t)
+          (condition-notify secret-condition))
+        (join-thread secret-thread))
+      (uiop:delete-directory-tree
+       root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> generation-tests--test-partial-runtime-quiescence () null)
+(defun generation-tests--test-partial-runtime-quiescence ()
+  "Test checkpoint failure resumes only runtimes whose close completed."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (registry (make-instance 'tool-registry))
+         (successful-close-count 0)
+         (successful-resume-count 0)
+         (failed-resume-count 0)
+         (close-failure
+           (make-condition
+            'simple-error
+            :format-control "Synthetic checkpoint close failure."
+            :format-arguments nil))
+         (backend
+           (make-instance
+            'linux-sbcl-checkpoint-backend
+            :configuration configuration
+            :worker nil
+            :tool-registry registry)))
+    (labels
+        ((runtime-tool
+             (&key name identity priority close-function resume-function)
+           "Return one checkpoint runtime test tool."
+           (make-instance
+            'tool-test-runtime-tool
+            :namespace "checkpoint-partial"
+            :name name
+            :description "Exercise partial checkpoint runtime quiescence."
+            :parameters (tool-object-schema (json-object) nil)
+            :runtime-identity identity
+            :close-priority priority
+            :close-function close-function
+            :resume-function resume-function
+            :detach-function (lambda () nil))))
+      (unwind-protect
+           (progn
+             (tool-registry-register
+             registry
+              (runtime-tool
+               :name "closed"
+               :identity (list ':closed)
+               :priority 100
+               :close-function
+               (lambda ()
+                 (incf successful-close-count))
+               :resume-function
+               (lambda ()
+                 (incf successful-resume-count))))
+             (tool-registry-register
+              registry
+              (runtime-tool
+               :name "still-live"
+               :identity (list ':still-live)
+               :priority 50
+               :close-function
+               (lambda ()
+                 (error close-failure))
+               :resume-function
+               (lambda ()
+                 (incf failed-resume-count))))
+             (let ((*checkpoint-thread-quiescer* nil))
+               (test-assert
+                (handler-case
+                    (test-call-with-function-replacements
+                     (list
+                      (list
+                       'checkpoint--source-snapshot
+                       (lambda (active-configuration)
+                         (declare (ignore active-configuration))
+                         "test-source-commit"))
+                      (list
+                       'checkpoint--revalidate-source
+                       (lambda (active-configuration source-commit)
+                         (declare
+                          (ignore active-configuration source-commit))
+                         nil)))
+                     (lambda ()
+                       (checkpoint-create backend)))
+                  (checkpoint-error (condition)
+                    (eq (checkpoint-error-cause condition)
+                        close-failure)))
+                "a partial runtime close reports its structured underlying cause"))
+             (test-assert
+              (and (= successful-close-count 1)
+                   (= successful-resume-count 1)
+                   (zerop failed-resume-count))
+              "checkpoint recovery resumes only the runtime that actually closed"))
+        (uiop:delete-directory-tree
+         root :validate t :if-does-not-exist :ignore))))
+  nil)
+
+(-> generation-tests--test-active-provider-secret-refusal () null)
+(defun generation-tests--test-active-provider-secret-refusal ()
+  "Test checkpoint preparation refuses an undrained provider secret scope."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (barrier-lock (make-lock "Autolith checkpoint provider secret"))
+         (barrier
+           (make-condition-variable
+            :name "Autolith checkpoint provider secret"))
+         (ready-p nil)
+         (release-p nil)
+         (thread
+           (make-thread
+            (lambda ()
+              (call-with-secret-use
+               (lambda ()
+                 (with-lock-held (barrier-lock)
+                   (setf ready-p t)
+                   (condition-notify barrier)
+                   (loop until release-p
+                         do (condition-wait barrier barrier-lock))))))
+            :name "Autolith active provider secret test"))
+         (backend
+           (make-instance
+            'linux-sbcl-checkpoint-backend
+            :configuration configuration
+            :worker nil
+            :tool-registry nil)))
+    (unwind-protect
+         (progn
+           (with-lock-held (barrier-lock)
+             (loop until ready-p
+                   do (condition-wait barrier barrier-lock)))
+           (let ((*checkpoint-thread-quiescer* nil))
+             (test-assert
+              (test-call-with-function-replacements
+               (list
+                (list
+                 'checkpoint--source-snapshot
+                 (lambda (active-configuration)
+                   (declare (ignore active-configuration))
+                   "test-source-commit"))
+                (list
+                 'checkpoint--revalidate-source
+                 (lambda (active-configuration source-commit)
+                   (declare
+                    (ignore active-configuration source-commit))
+                   nil)))
+               (lambda ()
+                 (handler-case
+                     (progn
+                       (checkpoint-create backend)
+                       nil)
+                   (checkpoint-error (condition)
+                     (and
+                      (eq (checkpoint-error-stage condition) ':fork)
+                      (search
+                       "retained a secret"
+                       (autolith-error-message condition)))))))
+              "checkpoint preparation refuses an active provider secret scope")))
+      (with-lock-held (barrier-lock)
+        (setf release-p t)
+        (condition-notify barrier))
+      (join-thread thread)
+      (uiop:delete-directory-tree
+       root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> generation-tests--unpublished-p (configuration generation) boolean)
 (defun generation-tests--unpublished-p (configuration generation)
   "Return true when failed GENERATION left no visible publication artifacts."
@@ -254,6 +516,9 @@
 (-> test-generation-manifest () null)
 (defun test-generation-manifest ()
   "Test generation publication, loading, selection, and compatibility checks."
+  (generation-tests--test-checkpoint-runtime-resume)
+  (generation-tests--test-partial-runtime-quiescence)
+  (generation-tests--test-active-provider-secret-refusal)
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (generation

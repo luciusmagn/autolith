@@ -1,7 +1,7 @@
 (asdf:defsystem #:autolith
   :description "A live, self-modifying Common Lisp agent."
   :author "Lukáš Hozda"
-  :version "0.15.1"
+  :version "0.16.0"
   :serial t
   :depends-on (#:cl-base64
                #:cl-colorist
@@ -11,7 +11,9 @@
                #:colorlisp
                #:closer-mop
                #:dexador
+               #:ironclad/mac/siphash
                #:bordeaux-threads
+               #:mcparen
                #:opticl
                #:quri
                #:serapeum
@@ -44,11 +46,15 @@
                              (:file "agendas")
                              (:file "prompt")
                              (:file "context")
+                             (:file "mcp-configuration")
+                             (:file "skills")
                              (:file "application-command")
                              (:file "project-adaptations")
                              (:file "memory-context")
                              (:file "provider")
                              (:file "tools")
+                             (:file "skill-tools")
+                             (:file "mcp-tools")
                              (:file "memory-tools")
                              (:file "agenda-tools")
                              (:file "workspace-tools")
@@ -116,6 +122,10 @@
                              (:file "permissions-tests")
                              (:file "later-tests")
                              (:file "context-tests")
+                             (:file "skill-tests")
+                             (:file "skill-tool-tests")
+                             (:file "mcp-configuration-tests")
+                             (:file "mcp-tool-tests")
                              (:file "application-command-tests")
                              (:file "project-adaptation-tests")
                              (:file "conversation-identifier-tests")

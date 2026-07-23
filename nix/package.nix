@@ -34,8 +34,8 @@ let
     src = pkgs.fetchFromGitHub {
       owner = "luciusmagn";
       repo = "mcparen";
-      rev = "a2199d70960f1fd8f24015b553f9b921c4a0b8aa";
-      hash = "sha256-LqetxgsDgNZJU3oTl3Kh7LT0x+cFgSg9utdBfd9y3v0=";
+      rev = "a0981df8ca0910fc0676e1b34b5507fbd54ac901";
+      hash = "sha256-2Tc7m/5isu0wxo0rPJ5iL+HJhPDQbwGSL93UGlFaxA4=";
     };
     lispLibs = with pkgs.sbclPackages; [
       bordeaux-threads
@@ -95,8 +95,8 @@ let
     src = pkgs.fetchFromGitHub {
       owner = "luciusmagn";
       repo = "clifff";
-      rev = "a57058ba3ffd222af57513e412a1d01508b4d1b3";
-      hash = "sha256-kDpXHkNfuDPN16kEuLSHEY57N8q7BD/4Cja+rSAkTUM=";
+      rev = "29c19b6bdb1d19e1ceb3ed5279eed5b81b0872d8";
+      hash = "sha256-oDAr7M8uqS7P4YGp3Azw9V83cy7ik1MQ3q1shW/3tZs=";
     };
     lispLibs = with pkgs.sbclPackages; [
       bordeaux-threads
@@ -187,7 +187,7 @@ let
 
   autolithSystem = pkgs.sbcl.buildASDFSystem {
     pname = "autolith";
-    version = "0.15.1";
+    version = "0.16.0";
     inherit src;
     systems = [ "autolith" "autolith/tests" ];
     lispLibs = with pkgs.sbclPackages; [
@@ -197,6 +197,7 @@ let
       closer-mop
       colorlisp
       dexador
+      ironclad
       opticl
       quri
       serapeum

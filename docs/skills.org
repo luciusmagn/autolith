@@ -53,7 +53,8 @@ Autolith searches these roots in order:
 
 For a workspace outside Git, the workspace directory acts as the project root.
 Discovery below each root is recursive, deterministic by pathname, and accepts
-only the exact case-sensitive filename =SKILL.sexp=. Missing roots are harmless.
+only the exact case-sensitive filename =SKILL.sexp=. Hidden directory names do
+not disable recursion. Missing roots are harmless.
 Canonical traversal never leaves the canonical discovery root. A symbolic link
 that escapes the root, a broken link, or a non-regular =SKILL.sexp= is rejected
 without opening it as skill data. Its valid lexical skill directory name remains
@@ -75,14 +76,22 @@ that depend on it.
 
 =skill.load= records the name and filesystem identity in the active logical
 turn and returns a short confirmation. It does not return the instructions.
-At the next provider boundary, Autolith rereads the selected =SKILL.sexp= and
-injects its complete current =:instructions= string as mandatory request-local
-context.
+The call and its correlated result remain in the in-memory provider projection
+only until the next successful response. They never enter the conversation
+file, replay, or compaction input. At subsequent provider boundaries in the
+logical turn, Autolith rereads the selected =SKILL.sexp= and injects its
+complete current =:instructions= string as mandatory request-local context.
+
+=skill.load= is a provider round-trip barrier. Calls before it in one provider
+result run normally. Calls after it are not executed; they receive a
+request-local failure telling the model to retry after inspecting the selection
+result and refreshed instructions.
 
 Multiple selected Skills stack in deterministic catalog order. Calls made
 after steering input join earlier selections in the same logical turn.
 Repeating =skill.load= for an already selected name is harmless. Selection
-ends with the logical turn and never carries into a later turn.
+ends with the logical turn and never carries into a later turn. A reloadable
+count bound limits distinct selections in one turn.
 
 The tool is child-safe, so a child agent whose role permits =skill.load= may
 select a Skill in its own isolated request context.
@@ -109,6 +118,10 @@ requests receive neither the catalog nor Skill instructions.
 
 Discovery, catalog rendering, individual files, individual instructions,
 cumulative selected instructions, status output, and diagnostic text all have
-reloadable bounds. Exhausting a discovery bound stops the remaining applicable
-scan and records a typed diagnostic. Exhausting a request bound omits the
-affected instructions and supplies a bounded warning.
+reloadable bounds. The discovery bounds include aggregate definition
+characters read across every root; selected definitions are still reread
+fresh under their independent per-file bound. Exhausting a discovery bound
+stops the remaining applicable scan and records a typed diagnostic. Exhausting
+a request bound omits the affected instructions and supplies a bounded warning.
+Selected-skill warnings have an aggregate output bound, with excess warnings
+collapsed into one bounded mandatory warning.

@@ -30,6 +30,10 @@
   "Whether a context contribution competes for the advice budget."
   '(member :advice :mandatory))
 
+(deftype tool-conversation-persistence ()
+  "The lifetime of one tool call and its correlated provider result."
+  '(member :durable :next-response))
+
 (-> non-empty-string-p (t) boolean)
 (defun non-empty-string-p (value)
   "Return true when VALUE is a string containing a non-whitespace character."

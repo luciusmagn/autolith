@@ -1170,6 +1170,51 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
   (application-present application (application-agenda-entry application))
   ':continue)
 
+(define-application-command application--builtin-skills-command
+    (:name "/skills"
+     :argument nil
+     :description "show available skills"
+     :tip "shows request-local skills and any discovery problems."
+     :busy-behavior :inspect
+     :terminal-behavior :shared)
+    (application invocation)
+  (declare (ignore invocation))
+  (application-present
+   application
+   (skill-status (application-configuration application)))
+  ':continue)
+
+(define-application-command application--builtin-mcp-command
+    (:name "/mcp"
+     :argument "refresh|reload"
+     :description "show or refresh configured MCP servers"
+     :tip "shows MCP connections; refresh rediscovers, reload rereads configuration."
+     :busy-behavior :hold
+     :terminal-behavior :shared)
+    (application invocation)
+  (let* ((argument (application-command-invocation-argument invocation))
+         (mode (and argument (string-downcase argument))))
+    (cond
+      ((null mode)
+       nil)
+      ((string= mode "refresh")
+       (mcp-tool-registry-refresh
+        (application-tool-registry application)))
+      ((string= mode "reload")
+       (application-reload-mcp application))
+      (t
+       (error 'configuration-error
+              :message "Usage: /mcp, /mcp refresh, or /mcp reload.")))
+    (let ((manager
+            (mcp-tool-registry-manager
+             (application-tool-registry application))))
+      (application-present
+       application
+       (if manager
+           (mcp-manager-render-status manager)
+           "No MCP servers are configured."))))
+  ':continue)
+
 (define-application-command application--builtin-checkpoint-command
     (:name "/checkpoint"
      :argument nil

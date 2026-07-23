@@ -112,6 +112,23 @@
           "label"
           (tool-string-property "Optional short result label."))
          '("status")))))
+    (let ((manager (mcp-tool-registry-manager parent-registry)))
+      (when
+          (and manager
+               (or
+                (eq (task-agent-definition-tools definition) :all)
+                (some
+                 (lambda (tool)
+                   (and
+                    (typep tool 'mcp-provider-tool)
+                    (task--definition-allows-tool-p definition tool)))
+                 (tool-registry-tools parent-registry))))
+        (mcp-tool-registry-bind-manager
+         registry
+         manager
+         (lambda (tool)
+           (task--definition-allows-tool-p definition tool)))
+        (mcp-tool-registry-refresh registry :only-dirty-p t)))
     registry))
 
 (defun task--model-alias (alias parent-model)
@@ -509,6 +526,9 @@
                                                                        details))
                                           :command-authorization-callback
                                           (task-job-command-authorization-function
+                                           job)
+                                          :tool-authorization-callback
+                                          (task-job-tool-authorization-function
                                            job))))
     (unwind-protect
          (let ((result

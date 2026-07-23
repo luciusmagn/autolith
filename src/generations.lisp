@@ -678,12 +678,16 @@
       (progn
         (setf *checkpoint-in-progress-p* nil
               *credentials-in-request-scope* nil
+              *active-secret-use-count* 0
+              *secret-use-depth* 0
+              *secret-use-quiescence-owner* nil
               *checkpoint-core-probe-record*
               (generation-core-probe-record generation))
         (checkpoint--detach-worker worker)
         (when (boundp '*active-application*)
           (checkpoint-detach-state
            (symbol-value '*active-application*)))
+        (sb-ext:gc :full t)
         (sb-ext:save-lisp-and-die
          (namestring (generation-temporary-core-pathname generation))
          :toplevel #'checkpoint-resume-main
@@ -765,56 +769,115 @@
            :message "A checkpoint cannot run inside a credential request scope."
            :stage ':validation
            :pathname nil))
-  (let ((registry (checkpoint-backend-tool-registry backend)))
-    (when registry
-      (tool-registry-close-runtime-state registry)))
   (let* ((configuration (checkpoint-backend-configuration backend))
          (worker (checkpoint-backend-worker backend))
+         (registry (checkpoint-backend-tool-registry backend))
          (source-commit (checkpoint--source-snapshot configuration))
          (generation nil)
          (coordinator-p nil)
-         (coordinator-pid nil))
-    (with-live-mutation
-      (when *checkpoint-in-progress-p*
-        (error 'checkpoint-error
-               :message "A checkpoint is already being published."
-               :stage ':validation
-               :pathname nil))
-      (checkpoint--revalidate-source configuration source-commit)
-      (unless (checkpoint--single-threaded-p)
-        (error 'checkpoint-error
-               :message "A checkpoint requires the current Lisp thread to be the only live thread."
-               :stage ':fork
-               :pathname nil))
-      (finish-output *standard-output*)
-      (finish-output *error-output*)
-      (setf generation (generation-create-record
-                        configuration
-                        :git-commit source-commit))
-      (ensure-directories-exist (generation-directory generation))
-      (setf *checkpoint-in-progress-p* t)
+         (coordinator-pid nil)
+         (quiesced-runtime-tools nil)
+         (failure nil))
+    (handler-case
+        (call-with-secret-use-quiescence
+         (lambda ()
+           (with-live-mutation
+             (when *checkpoint-in-progress-p*
+               (error 'checkpoint-error
+                      :message "A checkpoint is already being published."
+                      :stage ':validation
+                      :pathname nil))
+             (checkpoint--revalidate-source configuration source-commit)
+             (when registry
+               (multiple-value-bind (quiesced-tools close-failure)
+                   (tool-registry-quiesce-runtime-state registry)
+                 (setf quiesced-runtime-tools quiesced-tools)
+                 (when close-failure
+                   (error close-failure))))
+             (when (secret-use-active-p)
+               (error 'checkpoint-error
+                      :message
+                      "A provider or tool runtime retained a secret while checkpointing."
+                      :stage ':fork
+                      :pathname nil))
+             (unless (checkpoint--single-threaded-p)
+               (error 'checkpoint-error
+                      :message
+                      "A checkpoint requires the current Lisp thread to be the only live thread."
+                      :stage ':fork
+                      :pathname nil))
+             (finish-output *standard-output*)
+             (finish-output *error-output*)
+             (setf generation
+                   (generation-create-record
+                    configuration
+                    :git-commit source-commit))
+             (ensure-directories-exist (generation-directory generation))
+             (setf *checkpoint-in-progress-p* t)
+             (handler-case
+                 (let ((pid (sb-posix:fork)))
+                   (if (zerop pid)
+                       (setf coordinator-p t)
+                       (setf coordinator-pid pid
+                             (generation-coordinator-pid generation) pid)))
+               (error (condition)
+                 (setf *checkpoint-in-progress-p* nil)
+                 (error 'checkpoint-error
+                        :message
+                        (format nil "Could not fork checkpoint coordinator: ~A"
+                                condition)
+                        :stage ':fork
+                        :pathname
+                        (generation-directory generation)))))))
+      (serious-condition (condition)
+        (setf
+         failure
+         (if (typep condition 'checkpoint-error)
+             condition
+             (make-condition
+              'checkpoint-error
+              :message "Checkpoint runtime preparation failed."
+              :stage ':fork
+              :pathname nil
+              :cause condition)))))
+    (when (and quiesced-runtime-tools (not coordinator-p))
       (handler-case
-          (let ((pid (sb-posix:fork)))
-            (if (zerop pid)
-                (setf coordinator-p t)
-                (setf coordinator-pid pid
-                      (generation-coordinator-pid generation) pid)))
-        (error (condition)
-          (setf *checkpoint-in-progress-p* nil)
-          (error 'checkpoint-error
-                 :message (format nil "Could not fork checkpoint coordinator: ~A"
-                                  condition)
-                 :stage ':fork
-                 :pathname (generation-directory generation)))))
-    (if coordinator-p
-        (checkpoint--coordinate configuration generation worker)
-        (progn
-          (make-thread
-           (lambda ()
-             (checkpoint--watch-coordinator generation coordinator-pid))
-           :name (format nil "Autolith checkpoint ~A"
-                         (generation-identifier generation)))
-          generation))))
+          (tool-registry-resume-runtime-state
+           registry :tools quiesced-runtime-tools)
+        (serious-condition (condition)
+          (unless failure
+            (setf failure
+                  (make-condition
+                   'checkpoint-error
+                   :message
+                   "Could not resume tool runtimes after checkpointing."
+                   :stage ':fork
+                   :pathname nil
+                   :cause condition))))))
+    (cond
+      (coordinator-p
+       (checkpoint--coordinate configuration generation worker))
+      (coordinator-pid
+       (make-thread
+        (lambda ()
+          (checkpoint--watch-coordinator generation coordinator-pid))
+        :name (format nil "Autolith checkpoint ~A"
+                      (generation-identifier generation)))
+       (when failure
+         (warn
+          'checkpoint-runtime-resume-warning
+          :generation-id (generation-identifier generation)
+          :cause failure))
+       generation)
+      (t
+       (error
+        (or
+         failure
+         (make-condition
+          'checkpoint-error
+          :message "Checkpoint preparation ended without a coordinator."
+          :stage ':fork
+          :pathname nil)))))))
 
 
 ;;;; -- Generation Tools --

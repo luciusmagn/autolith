@@ -375,31 +375,33 @@ without changing the registry."
   (unless (keywordp source)
     (error 'configuration-error
            :message "An application command registration source must be a keyword."))
-  (with-lock-held (*application-command-lock*)
-    (let* ((definition-name (application-command-definition-name command))
-           (replacement
-             (make-instance 'application-command-registration
-                            :command command
-                            :source source))
-           (existing
-             (position-if
-              (lambda (registration)
-                (and
-                 (eq source
-                     (application-command-registration-source registration))
-                 (eq definition-name
-                     (application-command-definition-name
-                      (application-command-registration-command registration)))))
-              *application-command-registrations*))
-           (candidate
-             (if existing
-                 (append
-                  (subseq *application-command-registrations* 0 existing)
-                  (list replacement)
-                  (nthcdr (1+ existing) *application-command-registrations*))
-                 (append *application-command-registrations*
-                         (list replacement)))))
-      (application-command--publish-registrations candidate)))
+  (with-extension-registry-transaction
+    (with-lock-held (*application-command-lock*)
+      (let* ((definition-name (application-command-definition-name command))
+             (replacement
+               (make-instance 'application-command-registration
+                              :command command
+                              :source source))
+             (existing
+               (position-if
+                (lambda (registration)
+                  (and
+                   (eq source
+                       (application-command-registration-source registration))
+                   (eq definition-name
+                       (application-command-definition-name
+                        (application-command-registration-command
+                         registration)))))
+                *application-command-registrations*))
+             (candidate
+               (if existing
+                   (append
+                    (subseq *application-command-registrations* 0 existing)
+                    (list replacement)
+                    (nthcdr (1+ existing) *application-command-registrations*))
+                   (append *application-command-registrations*
+                           (list replacement)))))
+        (application-command--publish-registrations candidate))))
   command)
 
 (-> unregister-application-command
@@ -419,55 +421,62 @@ without changing the registry."
   (unless (keywordp source)
     (error 'configuration-error
            :message "An application command registration source must be a keyword."))
-  (with-lock-held (*application-command-lock*)
-    (let ((candidate
-            (remove-if
-             (lambda (registration)
-               (and
-                (eq source
-                    (application-command-registration-source registration))
-                (eq definition-name
-                    (application-command-definition-name
-                     (application-command-registration-command registration)))))
-             *application-command-registrations*)))
-      (if (= (length candidate)
-             (length *application-command-registrations*))
-          nil
-          (progn
-            (application-command--publish-registrations candidate)
-            t)))))
+  (with-extension-registry-transaction
+    (with-lock-held (*application-command-lock*)
+      (let ((candidate
+              (remove-if
+               (lambda (registration)
+                 (and
+                  (eq source
+                      (application-command-registration-source registration))
+                  (eq definition-name
+                      (application-command-definition-name
+                       (application-command-registration-command
+                        registration)))))
+               *application-command-registrations*)))
+        (if (= (length candidate)
+               (length *application-command-registrations*))
+            nil
+            (progn
+              (application-command--publish-registrations candidate)
+              t))))))
 
 (-> application-command-list () list)
 (defun application-command-list ()
   "Return an ordered snapshot of effective canonical commands."
-  (with-lock-held (*application-command-lock*)
-    (copy-list *application-command-effective*)))
+  (with-extension-registry-transaction
+    (with-lock-held (*application-command-lock*)
+      (copy-list *application-command-effective*))))
 
 (-> application-command-find (string) (option application-command))
 (defun application-command-find (identifier)
   "Return the effective command named by case-insensitive IDENTIFIER."
-  (with-lock-held (*application-command-lock*)
-    (gethash (string-downcase identifier) *application-command-index*)))
+  (with-extension-registry-transaction
+    (with-lock-held (*application-command-lock*)
+      (gethash (string-downcase identifier) *application-command-index*))))
 
 (-> application-command--registrations () list)
 (defun application-command--registrations ()
   "Return detached descriptions of every ordered command registration layer."
-  (with-lock-held (*application-command-lock*)
-    (loop for registration in *application-command-registrations*
-          for position from 0
-          for command = (application-command-registration-command registration)
-          collect (list :position position
-                        :source
-                        (application-command-registration-source registration)
-                        :definition-name
-                        (application-command-definition-name command)
-                        :command command))))
+  (with-extension-registry-transaction
+    (with-lock-held (*application-command-lock*)
+      (loop for registration in *application-command-registrations*
+            for position from 0
+            for command =
+              (application-command-registration-command registration)
+            collect (list :position position
+                          :source
+                          (application-command-registration-source registration)
+                          :definition-name
+                          (application-command-definition-name command)
+                          :command command)))))
 
 (-> application-command--registry-snapshot () list)
 (defun application-command--registry-snapshot ()
   "Return an exact ordered snapshot of command registration layers."
-  (with-lock-held (*application-command-lock*)
-    (copy-list *application-command-registrations*)))
+  (with-extension-registry-transaction
+    (with-lock-held (*application-command-lock*)
+      (copy-list *application-command-registrations*))))
 
 (-> application-command--registry-restore (list) null)
 (defun application-command--registry-restore (snapshot)
@@ -475,19 +484,21 @@ without changing the registry."
   (unless (application-command--proper-list-p snapshot)
     (error 'configuration-error
            :message "An application command registry snapshot must be a proper list."))
-  (with-lock-held (*application-command-lock*)
-    (application-command--publish-registrations (copy-list snapshot)))
+  (with-extension-registry-transaction
+    (with-lock-held (*application-command-lock*)
+      (application-command--publish-registrations (copy-list snapshot))))
   nil)
 
 (-> application-command--remove-registration-source (keyword) null)
 (defun application-command--remove-registration-source (source)
   "Remove every command registration contributed by SOURCE."
-  (with-lock-held (*application-command-lock*)
-    (application-command--publish-registrations
-     (remove source
-             *application-command-registrations*
-             :test #'eq
-             :key #'application-command-registration-source)))
+  (with-extension-registry-transaction
+    (with-lock-held (*application-command-lock*)
+      (application-command--publish-registrations
+       (remove source
+               *application-command-registrations*
+               :test #'eq
+               :key #'application-command-registration-source))))
   nil)
 
 (-> application-command--registration-snapshot
@@ -495,17 +506,18 @@ without changing the registry."
     (option list))
 (defun application-command--registration-snapshot (definition-name source)
   "Return DEFINITION-NAME's SOURCE registration and exact position."
-  (with-lock-held (*application-command-lock*)
-    (loop for registration in *application-command-registrations*
-          for position from 0
-          when
-            (and
-             (eq source
-                 (application-command-registration-source registration))
-             (eq definition-name
-                 (application-command-definition-name
-                  (application-command-registration-command registration))))
-            return (list :position position :registration registration))))
+  (with-extension-registry-transaction
+    (with-lock-held (*application-command-lock*)
+      (loop for registration in *application-command-registrations*
+            for position from 0
+            when
+              (and
+               (eq source
+                   (application-command-registration-source registration))
+               (eq definition-name
+                   (application-command-definition-name
+                    (application-command-registration-command registration))))
+              return (list :position position :registration registration)))))
 
 (-> application-command--registration-restore
     (symbol keyword (option list))
@@ -513,33 +525,36 @@ without changing the registry."
 (defun application-command--registration-restore
     (definition-name source snapshot)
   "Restore one registration to exact SNAPSHOT position, or remove it."
-  (with-lock-held (*application-command-lock*)
-    (let* ((remaining
-             (remove-if
-              (lambda (registration)
-                (and
-                 (eq source
-                     (application-command-registration-source registration))
-                 (eq definition-name
-                     (application-command-definition-name
-                      (application-command-registration-command registration)))))
-              *application-command-registrations*))
-           (candidate
-             (if snapshot
-                 (let ((position (getf snapshot :position))
-                       (registration (getf snapshot :registration)))
-                   (unless (and (typep position '(integer 0))
-                                (typep registration
-                                       'application-command-registration))
-                     (error 'configuration-error
-                            :message
-                            "An application command registration snapshot is invalid."))
-                   (let ((bounded-position (min position (length remaining))))
-                     (append (subseq remaining 0 bounded-position)
-                             (list registration)
-                             (nthcdr bounded-position remaining))))
-                 remaining)))
-      (application-command--publish-registrations candidate)))
+  (with-extension-registry-transaction
+    (with-lock-held (*application-command-lock*)
+      (let* ((remaining
+               (remove-if
+                (lambda (registration)
+                  (and
+                   (eq source
+                       (application-command-registration-source registration))
+                   (eq definition-name
+                       (application-command-definition-name
+                        (application-command-registration-command
+                         registration)))))
+                *application-command-registrations*))
+             (candidate
+               (if snapshot
+                   (let ((position (getf snapshot :position))
+                         (registration (getf snapshot :registration)))
+                     (unless (and (typep position '(integer 0))
+                                  (typep registration
+                                         'application-command-registration))
+                       (error 'configuration-error
+                              :message
+                              "An application command registration snapshot is invalid."))
+                     (let ((bounded-position
+                             (min position (length remaining))))
+                       (append (subseq remaining 0 bounded-position)
+                               (list registration)
+                               (nthcdr bounded-position remaining))))
+                   remaining)))
+        (application-command--publish-registrations candidate))))
   nil)
 
 

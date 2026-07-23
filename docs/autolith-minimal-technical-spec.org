@@ -77,6 +77,8 @@ The active SBCL image contains:
 
 - The model client and agent loop.
 - Conversation and working state.
+- Native Skill discovery and request-local selection.
+- MCP client connections and external capability discovery.
 - Persistent memory selection and storage.
 - Workspace agenda selection and storage.
 - Tool definitions and dispatch.
@@ -229,8 +231,8 @@ become a mutation quota.
 
 * 5. Tool Model
 
-Tools are registered internally. MCP-compatible exposure may be added,
-but in-process tools do not require loopback MCP transport.
+Tools are registered internally. Configured external MCP tools join the same
+registry, but in-process tools do not require loopback MCP transport.
 
 ** 5.1 =lisp.*=
 
@@ -464,6 +466,130 @@ attributed to that conversation, and remain ephemeral under section 4.1.
 Tool restriction, process separation, depth, and scheduling are
 accidental-damage and reliability boundaries, not a hostile-code sandbox.
 
+** 5.7 Native Skills
+
+A Skill is a reusable instruction set stored in one case-sensitive =SKILL.sexp=
+file. The file contains exactly one bounded native form:
+
+#+BEGIN_SRC lisp
+(:autolith-skill
+ :version 1
+ :name "release-check"
+ :description "Verify a release from source through its packaged artifact."
+ :instructions "Follow the repository release procedure completely.")
+#+END_SRC
+
+The marker, version, name, description, and instructions are required. Reading
+uses a fresh readtable and temporary package with =*read-eval*= bound to =nil=,
+requires clean end-of-file after the form, and rejects unknown or duplicate
+fields, malformed structure, unsupported versions, invalid names, and
+unbounded values. Names use lowercase kebab case and must match the immediate
+parent directory exactly.
+
+Discovery searches the project root's =.autolith/skills/=, then
+=${XDG_CONFIG_HOME:-~/.config}/autolith/skills/=, then Autolith's bundled Skill
+roots. Earlier valid definitions shadow later definitions with the same
+exact name. A malformed higher-precedence file in a validly named directory
+reserves that name and produces a diagnostic rather than exposing a lower
+definition. Discovery recursively includes hidden directories and reads only
+bounded files under aggregate traversal and character budgets. It does not
+place instruction strings in provider input.
+
+When the user names a Skill or its catalog description clearly applies, the
+model calls =skill.load= with its exact name. The tool records only the selected
+name and returns a bounded confirmation. Its provider call and correlated
+result remain in the in-memory projection only through the next successful
+response and are excluded from conversation records, replay, and compaction
+input. At subsequent provider boundaries in the logical turn, Autolith rereads
+the complete current form and injects its =:instructions= string as mandatory
+request-local context.
+
+Selections accumulate for one logical user turn, including steering input, and
+multiple compatible Skills stack in deterministic catalog order under a
+reloadable distinct-selection count bound. They do not carry into a later
+logical turn. =skill.load= is a provider round-trip barrier: calls
+after it in the same provider result are not executed and receive an ephemeral
+result requiring retry after refreshed instructions. Skill instructions, read
+failures, selection state, and selection correlation never enter conversation
+files, compaction summaries or input, memories, or saved request history.
+Selected-skill warnings have an aggregate output bound and collapse excess
+warnings into one bounded mandatory warning. =/skills= and =/context= make
+discovery and active contributions observable without exposing instructions
+through durable tool history.
+
+** 5.8 MCP Client
+
+Autolith negotiates and supports MCP 2025-11-25 and 2025-06-18 over standard
+input and output and Streamable HTTP. MCP is an external capability boundary, not an
+alternative representation of native tools or Skills. There is no compatibility
+contract with Codex configuration.
+
+The optional
+=${XDG_CONFIG_HOME:-~/.config}/autolith/mcp.sexp= contains exactly one
+versioned native S-expression. Reading binds =*read-eval*= to =nil=, validates
+the complete bounded tree, and rejects unknown keys, duplicate server names,
+trailing forms, and malformed values. The user initialization file may register
+the same native server definitions programmatically. Registration precedence is
+tracked definitions, native configuration, user initialization, then live
+runtime registration.
+
+Each server selects a standard I/O or Streamable HTTP transport, required or
+optional startup behavior, bounded startup and tool deadlines, an approval
+policy, and an explicit list of raw tool names eligible for child agents.
+Standard I/O environment values and HTTP headers refer to process environment
+variables instead of containing literal secrets. A standard-input server
+inherits only a small non-secret process baseline plus explicitly configured
+environment references, never Autolith's complete environment. HTTP requires
+HTTPS except for loopback endpoints and rejects credentials in URLs.
+Each credential-bearing operation resolves one exact guarded environment
+snapshot. The same snapshot supplies sanitization, standard-input launch
+values, and HTTP request headers. A persistent standard-input process retains
+only a process-keyed, collision-resistant launch digest. A changed or missing
+mapped value closes the old process before reconnecting or reporting a
+structured failure, so a server cannot continue under stale credentials.
+
+Required-server failure prevents startup or reload. Optional-server failure is
+visible but does not prevent unrelated work. Advertised tools receive stable
+provider-safe =mcp__*= names and validated bounded schemas. External tool calls
+default to explicit one-call approval; a server may instead be configured to
+allow only tools whose exact raw names are user-trusted and explicitly
+annotated read-only, allow all tools, or deny all tools. Server annotations
+alone never establish trust. Approval identifies the configured server and
+exact unmangled raw tool name and presents the complete arguments without
+silent truncation. A child receives an MCP tool only through both an exact
+server grant and its ordinary role policy.
+
+One manager retains at most 1,024 advertised MCP tools and 8 MiB of their exact
+normalized, credential-sanitized, encoded input schemas. Task-required tools
+count toward both budgets even though they remain status-visible and not
+provider-callable. Initial discovery and tool-list refresh allocate both
+budgets to required servers before optional servers, preserving configuration
+order within each group. A required-server overflow aborts startup or refresh
+with a structured failure. An optional server that does not fit becomes visibly
+failed and retains no tools. Enforcement is incremental so rejected discovery
+results cannot accumulate across servers.
+
+The =mcp.*= helpers expose non-credential status, explicit discovery refresh,
+resources, resource templates, resource reads, prompt discovery, and prompt
+resolution. =/mcp reload= atomically rereads native and user configuration and
+replaces live runtimes. Tool-list change notifications trigger an atomic refresh
+before the next provider request.
+
+MCP descriptions, results, resources, prompts, and server instructions are
+untrusted external data. Initialization retains only empty presence objects for
+the recognized =tools=, =resources=, and =prompts= capabilities, discards
+=serverInfo= after negotiation, and retains at most 2,000 credential-sanitized
+server instruction characters. Those bounded instructions enter only
+request-local context and never durable conversation or memory state. Ordinary
+tool, resource, and prompt results follow normal conversation persistence
+rules.
+
+Shutdown and checkpoint preparation close MCP transports. A checkpoint refuses
+to proceed while any provider or MCP operation may retain a secret, and the
+forked saver detaches inherited transports before saving a core. Resolved
+environment values and headers must not appear in status, failure records,
+conversation data, Git, or saved cores.
+
 * 6. Live Self-Modification
 
 Autolith may redefine functions, methods, classes, macros, and mutable
@@ -601,7 +727,8 @@ Autolith persists ten kinds of state:
 - A private Git history retaining complete image-commit artifacts.
 - Working generations as saved Lisp cores and reconstruction scripts.
 - Worker images as immutable SBCL cores with manifests and durable notes.
-- User-authored executable configuration under the XDG config root.
+- User-authored executable and declarative configuration, including native MCP
+  definitions and Skills, under their configured discovery roots.
 - Per-project =AUTOLITH.org= offer decisions under the state root.
 
 ** 8.1 Conversation Files
@@ -751,6 +878,12 @@ A load failure is a structured startup error identifying the file and original
 condition. The file is separate from legacy mutation overlays and private image
 commits, so mutation rollback never discards user policy.
 
+The user initialization file may register request-local context contributors,
+interactive commands, and MCP servers through the same live registration
+interfaces used by tracked code and self-modifications. Reload replaces the
+file's prior registrations atomically, and a failure restores the previous
+registries.
+
 ** 8.3 Mutation Journal
 
 The mutation journal is append-only and records enough information to
@@ -874,6 +1007,10 @@ Checkpoint files are written under temporary names until complete.
 
 Checkpoint logic must account for SBCL thread and external-resource
 requirements before invoking =save-lisp-and-die=.
+
+Provider requests and MCP operations that may hold credentials participate in a
+process-wide transient-secret guard. Checkpoint preparation closes MCP clients
+and refuses to fork while any guarded secret use remains active.
 
 ** 9.2 Other Platforms
 
@@ -1069,6 +1206,10 @@ It executes model-generated Lisp with the privileges of the user running it.
 Ordinary =shell.run= commands require approval and use the workspace command
 sandbox described above. The user can explicitly allow full command access for
 the current session.
+
+Configured MCP servers are external systems. Their descriptions, tools,
+resources, prompts, results, and instructions are untrusted, and user approval
+of one tool call does not make a server trustworthy.
 
 Command containment, process separation, omitted tools, checkpoints, and
 recovery mechanisms are intended to reduce accidental permanent damage. The

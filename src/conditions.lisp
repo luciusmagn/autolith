@@ -58,6 +58,31 @@
     :documentation "A secondary failure while restoring the previous workspace."))
   (:documentation "Changing the active process and tool workspace failed."))
 
+(define-condition application-runtime-replacement-error (autolith-error)
+  ((operation
+    :initarg :operation
+    :reader application-runtime-replacement-error-operation
+    :type keyword
+    :documentation "The application operation that attempted to replace the runtime.")
+   (stage
+    :initarg :stage
+    :reader application-runtime-replacement-error-stage
+    :type keyword
+    :documentation "The retirement or installation stage that failed.")
+   (cause
+    :initarg :cause
+    :reader application-runtime-replacement-error-cause
+    :type serious-condition
+    :documentation "The failure that prevented the runtime replacement.")
+   (rollback-causes
+    :initarg :rollback-causes
+    :initform nil
+    :reader application-runtime-replacement-error-rollback-causes
+    :type list
+    :documentation "Secondary failures while restoring the previous runtime."))
+  (:documentation
+   "A live application runtime replacement failed during retirement or installation."))
+
 (define-condition rollback-requested (autolith-error)
   ((generation-id
     :initarg :generation-id
@@ -522,5 +547,31 @@
     :initarg :pathname
     :reader checkpoint-error-pathname
     :type (option pathname)
-    :documentation "The checkpoint artifact involved in the failure, if any."))
+    :documentation "The checkpoint artifact involved in the failure, if any.")
+   (cause
+    :initarg :cause
+    :initform nil
+    :reader checkpoint-error-cause
+    :type t
+    :documentation "The underlying checkpoint preparation failure, if available."))
   (:documentation "A generation could not be validated, saved, or published."))
+
+(define-condition checkpoint-runtime-resume-warning (warning)
+  ((generation-id
+    :initarg :generation-id
+    :reader checkpoint-runtime-resume-warning-generation-id
+    :type non-empty-string
+    :documentation "The generation that continues publishing despite the warning.")
+   (cause
+    :initarg :cause
+    :reader checkpoint-runtime-resume-warning-cause
+    :type serious-condition
+    :documentation "The failure while resuming a parent-side tool runtime."))
+  (:documentation
+   "A checkpoint was created but a parent runtime could not resume.")
+  (:report
+   (lambda (condition stream)
+     (format
+     stream
+      "Checkpoint ~A is publishing, but a tool runtime could not resume."
+      (checkpoint-runtime-resume-warning-generation-id condition)))))

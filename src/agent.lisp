@@ -36,7 +36,13 @@
     :initform nil
     :reader callback-agent-observer-command-authorization-callback
     :type (option function)
-    :documentation "The optional function authorizing one external command."))
+    :documentation "The optional function authorizing one external command.")
+   (tool-authorization-callback
+    :initarg :tool-authorization-callback
+    :initform nil
+    :reader callback-agent-observer-tool-authorization-callback
+    :type (option function)
+    :documentation "The optional function authorizing one external tool call."))
   (:documentation "An agent observer implemented by ordinary terminal-facing callbacks."))
 
 (defclass agent ()
@@ -113,6 +119,12 @@
 (defgeneric agent-observer-authorize-command (observer command directory)
   (:documentation "Return the execution permission for COMMAND in DIRECTORY."))
 
+(-> agent-observer-authorize-tool
+    (agent-observer tool json-object)
+    keyword)
+(defgeneric agent-observer-authorize-tool (observer tool arguments)
+  (:documentation "Return :ALLOW or :DENY for external TOOL and ARGUMENTS."))
+
 (defmethod agent-observer-text ((observer agent-observer) (text string))
   "Ignore assistant TEXT for the default silent OBSERVER."
   (declare (ignore observer text))
@@ -140,6 +152,12 @@
     ((observer agent-observer) (command string) (directory pathname))
   "Deny COMMAND when OBSERVER has no authorization interface."
   (declare (ignore observer command directory))
+  ':deny)
+
+(defmethod agent-observer-authorize-tool
+    ((observer agent-observer) (tool tool) (arguments hash-table))
+  "Deny TOOL when OBSERVER has no authorization interface."
+  (declare (ignore observer tool arguments))
   ':deny)
 
 (defmethod agent-observer-text ((observer callback-agent-observer) (text string))
@@ -183,6 +201,17 @@
         (funcall callback command directory)
         ':deny)))
 
+(defmethod agent-observer-authorize-tool
+    ((observer callback-agent-observer)
+     (tool tool)
+     (arguments hash-table))
+  "Authorize TOOL through OBSERVER's callback, denying when absent."
+  (let ((callback
+          (callback-agent-observer-tool-authorization-callback observer)))
+    (if callback
+        (funcall callback tool arguments)
+        ':deny)))
+
 
 ;;;; -- Construction and Turn Entry --
 
@@ -192,11 +221,12 @@
      (:reasoning-callback (option function))
      (:status-callback (option function))
      (:steering-callback (option function))
-     (:command-authorization-callback (option function)))
+     (:command-authorization-callback (option function))
+     (:tool-authorization-callback (option function)))
     callback-agent-observer)
 (defun callback-agent-observer-create
     (&key text-callback reasoning-callback status-callback steering-callback
-      command-authorization-callback)
+      command-authorization-callback tool-authorization-callback)
   "Create an observer backed by optional presentation callbacks."
   (make-instance 'callback-agent-observer
                  :text-callback text-callback
@@ -204,7 +234,8 @@
                  :status-callback status-callback
                  :steering-callback steering-callback
                  :command-authorization-callback
-                 command-authorization-callback))
+                 command-authorization-callback
+                 :tool-authorization-callback tool-authorization-callback))
 
 (-> agent-create
     (&key
@@ -281,22 +312,26 @@
            :message "A user turn requires text or an image."
            :conversation-id (conversation-identifier (agent-conversation agent))
            :request-number nil))
-  (with-lock-held ((agent-turn-lock agent))
-    (let ((conversation (agent-conversation agent)))
-      ;; Compact before appending CONTENT so the fresh question survives
-      ;; verbatim instead of being folded into the summary.
-      (when (agent--should-compact-p agent)
-        (agent-compact-conversation agent observer))
-      (multiple-value-bind (item record)
-          (conversation-append-user-message conversation content)
-        (declare (ignore item))
-        (agent-observer-status
-         observer
-         :user-message-persisted
-         (list :sequence (getf (rest record) :seq))))
-      (unwind-protect
-           (agent--run-provider-loop agent observer goal-context)
-        (setf (conversation-turn-state conversation) nil)))))
+  (call-with-skill-logical-turn
+   content
+   (lambda ()
+     (with-lock-held ((agent-turn-lock agent))
+       (let ((conversation (agent-conversation agent)))
+         ;; Compact before appending CONTENT so the fresh question survives
+         ;; verbatim instead of being folded into the summary.
+         (when (agent--should-compact-p agent)
+           (agent-compact-conversation agent observer))
+         (multiple-value-bind (item record)
+             (conversation-append-user-message conversation content)
+           (declare (ignore item))
+           (agent-observer-status
+            observer
+            :user-message-persisted
+            (list :sequence (getf (rest record) :seq))))
+         (unwind-protect
+              (agent--run-provider-loop agent observer goal-context)
+           (conversation-clear-ephemeral-input-items conversation)
+           (setf (conversation-turn-state conversation) nil)))))))
 
 
 ;;;; -- Provider and Persistence Flow --
@@ -345,10 +380,13 @@
        nil))))
 
 (-> agent--persist-provider-result
-    (agent provider-result integer)
+    (agent provider-result
+     &key (:request-number integer)
+          (:call-plans list))
     null)
-(defun agent--persist-provider-result (agent result request-number)
-  "Persist RESULT's authoritative items and portable completion metadata in wire order."
+(defun agent--persist-provider-result
+    (agent result &key request-number call-plans)
+  "Append RESULT items in wire order under their per-tool persistence policies."
   (let ((conversation (agent-conversation agent)))
     (dolist (item (provider-result-output-items result))
       (unless (json-object-p item)
@@ -356,13 +394,57 @@
                :message "The provider returned a completed item that is not a JSON object."
                :conversation-id (conversation-identifier conversation)
                :request-number request-number))
-      (conversation-append-provider-item conversation item))
+      (let ((plan
+              (and
+               (function-call-item-p item)
+               (find (json-get item "call_id")
+                    call-plans
+                    :key (lambda (entry)
+                           (json-get (getf entry :call) "call_id"))
+                    :test #'equal))))
+        (conversation-append-provider-item
+         conversation
+         item
+         :persistence
+         (if plan
+             (getf plan :persistence)
+             ':durable))))
     (conversation-append-provider-metadata
      conversation
      (list :request-number request-number
            :response-id (provider-result-response-id result)
            :usage (agent--portable-value (provider-result-usage result)))))
   nil)
+
+(-> agent--tool-call-plans (agent list) list)
+(defun agent--tool-call-plans (agent calls)
+  "Return CALLS annotated with tools, persistence, and round-trip barriers."
+  (let ((barrier-seen-p nil)
+        (plans nil)
+        (registry (agent-tool-registry agent)))
+    (dolist (call calls)
+      (let* ((namespace (json-get call "namespace"))
+             (name      (json-get call "name"))
+             (tool
+               (and (non-empty-string-p namespace)
+                    (non-empty-string-p name)
+                    (tool-registry-find registry namespace name)))
+             (blocked-p barrier-seen-p)
+             (persistence
+               (if blocked-p
+                   ':next-response
+                   (if tool
+                       (tool-conversation-persistence tool)
+                       ':durable))))
+        (push (list :call call
+                    :tool tool
+                    :persistence persistence
+                    :blocked-p blocked-p)
+              plans)
+        (when (and tool
+                   (tool-provider-round-trip-barrier-p tool))
+          (setf barrier-seen-p t))))
+    (nreverse plans)))
 
 (-> agent--provider-error-metadata (provider-error) list)
 (defun agent--provider-error-metadata (condition)
@@ -409,22 +491,24 @@
              round-identifiers))
   nil)
 
-(-> agent--reject-tool-calls
+(-> agent--reject-tool-call-plans
     (agent list agent-observer
      &key (:tool-round integer) (:message string))
     null)
-(defun agent--reject-tool-calls
-    (agent calls observer &key tool-round message)
-  "Append one explicit MESSAGE failure output for every rejected call in CALLS."
-  (dolist (call calls)
-    (let* ((call-id   (json-get call "call_id"))
+(defun agent--reject-tool-call-plans
+    (agent plans observer &key tool-round message)
+  "Append one explicit MESSAGE failure output for every rejected call in PLANS."
+  (dolist (plan plans)
+    (let* ((call      (getf plan :call))
+           (call-id   (json-get call "call_id"))
            (tool-name (function-call-canonical-name call)))
       (conversation-append-tool-result
        (agent-conversation agent)
        call-id
        :tool-name tool-name
        :output message
-       :success-p nil)
+       :success-p nil
+       :persistence (getf plan :persistence))
       (agent-observer-status
        observer
        ':tool-call-completed
@@ -440,11 +524,21 @@
      &key (:observer agent-observer) (:tool-round integer))
     null)
 (defun agent--execute-tool-calls
-    (agent calls provider-result &key observer tool-round)
-  "Execute CALLS sequentially and stop after AGENT reaches terminal state."
-  (loop for remaining on calls
-        for call = (first remaining)
+    (agent call-plans provider-result &key observer tool-round)
+  "Execute planned calls sequentially, respecting terminal and barrier states."
+  (loop for remaining on call-plans
+        for plan = (first remaining)
+        for call = (getf plan :call)
         do
+          (when (getf plan :blocked-p)
+            (agent--reject-tool-call-plans
+             agent
+             remaining
+             observer
+             :tool-round tool-round
+             :message
+             "This call was not executed because a preceding tool requires a provider round trip. Retry it after inspecting that tool's result and the refreshed instructions.")
+            (return))
           (let* ((call-id   (json-get call "call_id"))
                  (tool-name (function-call-canonical-name call))
                  (context
@@ -460,7 +554,11 @@
                     :command-authorization-function
                     (lambda (command directory)
                       (agent-observer-authorize-command
-                       observer command directory)))))
+                       observer command directory))
+                    :tool-authorization-function
+                    (lambda (tool arguments)
+                      (agent-observer-authorize-tool
+                       observer tool arguments)))))
             (agent-observer-status
              observer
              :tool-call-started
@@ -485,10 +583,11 @@
                call-id
                :tool-name tool-name
                :output (tool-result-content result)
-               :image-attachments (tool-result-image-attachments result)
+               :content-blocks (tool-result-content-blocks result)
                :success-p (tool-result-success-p result)
                :cpu-microseconds cpu-microseconds
-               :real-microseconds real-microseconds)
+               :real-microseconds real-microseconds
+               :persistence (getf plan :persistence))
               (agent-observer-status
                observer
                :tool-call-completed
@@ -502,7 +601,7 @@
                      :details (tool-result-details result)))))
         (when (agent-turn-complete-p agent provider-result)
           (when (rest remaining)
-            (agent--reject-tool-calls
+            (agent--reject-tool-call-plans
              agent
              (rest remaining)
              observer
@@ -532,7 +631,8 @@
                :message "The agent observer returned an empty steering message."
                :conversation-id (conversation-identifier conversation)
                :request-number request-number))
-      (conversation-append-user-message conversation message))
+      (conversation-append-user-message conversation message)
+      (skill-record-steering-input message))
     (when messages
       (agent-observer-status
        observer
@@ -591,6 +691,9 @@ persisted as history, only the durable summary record is."
     (loop
       (when (agent--should-compact-p agent)
         (agent-compact-conversation agent observer))
+      (mcp-tool-registry-refresh
+       (agent-tool-registry agent)
+       :only-dirty-p t)
       (incf request-number)
       (agent-observer-status
        observer
@@ -600,14 +703,17 @@ persisted as history, only the durable summary record is."
       (let* ((conversation (agent-conversation agent))
              (result
                (handler-case
-                   (provider-stream-turn
-                    (agent-provider agent)
-                    conversation
-                    :tool-namespaces
-                    (tool-registry-provider-schemas
-                     (agent-tool-registry agent))
-                    :event-callback (agent--provider-event-callback observer)
-                    :goal-context goal-context)
+                   (let ((*context-request-contributions*
+                           (mcp-tool-registry-context-contributions
+                            (agent-tool-registry agent))))
+                     (provider-stream-turn
+                      (agent-provider agent)
+                      conversation
+                      :tool-namespaces
+                      (tool-registry-provider-schemas
+                       (agent-tool-registry agent))
+                      :event-callback (agent--provider-event-callback observer)
+                      :goal-context goal-context))
                  (provider-error (condition)
                    (conversation-append-provider-metadata
                     conversation
@@ -616,57 +722,64 @@ persisted as history, only the durable summary record is."
                           (agent--provider-error-metadata condition)))
                    (error condition))))
              (calls (provider-result-tool-calls result)))
+        (conversation-clear-ephemeral-input-items conversation)
         (agent--validate-tool-call-identifiers
          agent
          calls
          :seen-call-identifiers seen-call-identifiers
          :request-number request-number)
-        (agent--persist-provider-result agent result request-number)
-        (setf (conversation-turn-state conversation)
-              (provider-result-turn-state result))
-        (agent-observer-status
-         observer
-         :provider-request-completed
-         (list :request-number request-number
-               :response-id (provider-result-response-id result)
-               :usage (agent--portable-value (provider-result-usage result))
-               :output-item-count (length (provider-result-output-items result))
-               :tool-call-count (length calls)
-               :turn-completion (provider-result-turn-completion result)))
-        (when (agent-turn-complete-p agent result)
+        (let ((call-plans (agent--tool-call-plans agent calls)))
+          (agent--persist-provider-result
+           agent
+           result
+           :request-number request-number
+           :call-plans call-plans)
+          (setf (conversation-turn-state conversation)
+                (provider-result-turn-state result))
           (agent-observer-status
            observer
-           :turn-completed
-           (append
-            (list :provider-requests request-number
-                  :tool-rounds tool-rounds
-                  :tool-calls tool-calls
-                  :response-id (provider-result-response-id result))
-            (agent-turn-completion-details agent)))
-          (return result))
-        (cond
-          ((null calls)
-           (agent-observer-status
-            observer
-            :provider-follow-up
-            (list :request-number request-number)))
-          (t
-           (incf tool-rounds)
-           (incf tool-calls (length calls))
-           (agent--execute-tool-calls agent calls result
-                                      :observer observer
-                                      :tool-round tool-rounds)
-           (if (agent-turn-complete-p agent result)
-               (progn
-                 (agent-observer-status
-                  observer
-                  :turn-completed
-                  (append
-                   (list :provider-requests request-number
-                         :tool-rounds tool-rounds
-                         :tool-calls tool-calls
-                         :response-id (provider-result-response-id result))
-                   (agent-turn-completion-details agent)))
-                 (return result))
-               (agent--apply-steering-input
-                agent observer request-number))))))))
+           :provider-request-completed
+           (list :request-number request-number
+                 :response-id (provider-result-response-id result)
+                 :usage (agent--portable-value (provider-result-usage result))
+                 :output-item-count
+                 (length (provider-result-output-items result))
+                 :tool-call-count (length calls)
+                 :turn-completion (provider-result-turn-completion result)))
+          (when (agent-turn-complete-p agent result)
+            (agent-observer-status
+             observer
+             :turn-completed
+             (append
+              (list :provider-requests request-number
+                    :tool-rounds tool-rounds
+                    :tool-calls tool-calls
+                    :response-id (provider-result-response-id result))
+              (agent-turn-completion-details agent)))
+            (return result))
+          (cond
+            ((null calls)
+             (agent-observer-status
+              observer
+              :provider-follow-up
+              (list :request-number request-number)))
+            (t
+             (incf tool-rounds)
+             (incf tool-calls (length calls))
+             (agent--execute-tool-calls agent call-plans result
+                                        :observer observer
+                                        :tool-round tool-rounds)
+             (if (agent-turn-complete-p agent result)
+                 (progn
+                   (agent-observer-status
+                    observer
+                    :turn-completed
+                    (append
+                     (list :provider-requests request-number
+                           :tool-rounds tool-rounds
+                           :tool-calls tool-calls
+                           :response-id (provider-result-response-id result))
+                     (agent-turn-completion-details agent)))
+                   (return result))
+                 (agent--apply-steering-input
+                  agent observer request-number)))))))))

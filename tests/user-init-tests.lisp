@@ -12,7 +12,8 @@
          (root (test-configuration-root configuration))
          (pathname (configuration-user-init-path configuration))
          (context-registrations (context--registry-snapshot))
-         (command-registrations (application-command--registry-snapshot)))
+         (command-registrations (application-command--registry-snapshot))
+         (mcp-registrations (mcp--registry-snapshot)))
     (unwind-protect
          (progn
            (configuration-ensure-directories configuration)
@@ -30,6 +31,12 @@
                  (register-context-contributor
                   \"user-init-test\"
                   'context-tests--next-request)
+                 (define-context-contributor user-init-tests--contributor
+                     (request)
+                   (declare (ignore request))
+                   (make-context-contribution
+                    :identifier \"user-init-transaction\"
+                    :instruction \"old contributor\"))
                  (define-application-command user-init-tests--command
                      (:name \"/user-init-test\"
                       :argument nil
@@ -75,7 +82,16 @@
                                    :direction :output
                                    :if-exists :supersede
                                    :external-format :utf-8)
-             (write-string "(error \"broken user init\")" stream))
+             (write-string
+              "(progn
+                 (define-context-contributor user-init-tests--contributor
+                     (request)
+                   (declare (ignore request))
+                   (make-context-contribution
+                    :identifier \"user-init-transaction\"
+                    :instruction \"new contributor\"))
+                 (error \"broken user init\"))"
+              stream))
            (test-assert
             (handler-case
                 (progn
@@ -92,6 +108,22 @@
                   :key (lambda (registration)
                          (getf registration :identifier)))
             "a failed reload restores the previous contributor registry")
+           (let* ((registration
+                    (find
+                     "user-init-tests--contributor"
+                     (context-contributor-registrations)
+                     :test #'string=
+                     :key (lambda (candidate)
+                            (getf candidate :identifier))))
+                  (contribution
+                    (and registration
+                         (funcall (getf registration :function) nil))))
+             (test-assert
+              (and contribution
+                   (string=
+                    (context-contribution-instruction contribution)
+                    "old contributor"))
+              "a failed reload restores the exact previous contributor function"))
            (test-assert
             (application-command-find "/user-init-test")
             "a failed reload restores the previous command registry")
@@ -112,7 +144,10 @@
       (setf *user-init-test-value* nil)
       (context--registry-restore context-registrations)
       (application-command--registry-restore command-registrations)
+      (mcp--registry-restore mcp-registrations)
       (when (fboundp 'user-init-tests--command)
         (fmakunbound 'user-init-tests--command))
+      (when (fboundp 'user-init-tests--contributor)
+        (fmakunbound 'user-init-tests--contributor))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

@@ -72,6 +72,12 @@
     :accessor conversation-input-items-tail
     :type list
     :documentation "The final cons of the provider projection for constant-time append.")
+   (ephemeral-input-entries
+    :initform nil
+    :accessor conversation-ephemeral-input-entries
+    :type list
+    :documentation
+    "Request-local provider items and owned attachments awaiting one response.")
    (turn-state
     :initform nil
     :accessor conversation-turn-state
@@ -246,6 +252,59 @@
     (setf (conversation-input-items-tail conversation) cell))
   item)
 
+(-> conversation--append-ephemeral-input-item
+    (conversation json-object &key (:attachments list))
+    json-object)
+(defun conversation--append-ephemeral-input-item
+    (conversation item &key attachments)
+  "Append request-local ITEM and record any owned ATTACHMENTS for cleanup."
+  (let ((entries
+          (append
+           (conversation-ephemeral-input-entries conversation)
+           (list (list :item item :attachments attachments)))))
+    ;; Publish ownership before mutating the provider projection. An interrupt
+    ;; after the projection append can then never leave an untagged item.
+    (setf (conversation-ephemeral-input-entries conversation) entries)
+    (conversation--append-input-item conversation item))
+  item)
+
+(-> conversation-input-items-for-request
+    (conversation &key (:include-ephemeral-p boolean))
+    list)
+(defun conversation-input-items-for-request
+    (conversation &key (include-ephemeral-p t))
+  "Return a fresh provider projection, optionally excluding request-local items."
+  (if include-ephemeral-p
+      (copy-list (conversation-input-items conversation))
+      (let ((ephemeral-items (make-hash-table :test #'eq)))
+        (dolist (entry (conversation-ephemeral-input-entries conversation))
+          (setf (gethash (getf entry :item) ephemeral-items) t))
+        (remove-if
+         (lambda (item)
+           (gethash item ephemeral-items))
+         (conversation-input-items conversation)))))
+
+(-> conversation-clear-ephemeral-input-items (conversation) null)
+(defun conversation-clear-ephemeral-input-items (conversation)
+  "Remove all request-local provider items and their owned image artifacts."
+  (let ((entries (conversation-ephemeral-input-entries conversation)))
+    (when entries
+      (let ((ephemeral-items (make-hash-table :test #'eq)))
+        (dolist (entry entries)
+          (setf (gethash (getf entry :item) ephemeral-items) t))
+        (setf (conversation-input-items conversation)
+              (remove-if
+               (lambda (item)
+                 (gethash item ephemeral-items))
+               (conversation-input-items conversation))
+              (conversation-ephemeral-input-entries conversation) nil))
+      (dolist (entry entries)
+        (dolist (attachment (getf entry :attachments))
+          (ignore-errors
+            (when (probe-file (image-attachment-pathname attachment))
+              (delete-file (image-attachment-pathname attachment))))))))
+  nil)
+
 (-> conversation-image-artifact-root (conversation) pathname)
 (defun conversation-image-artifact-root (conversation)
   "Return CONVERSATION's private binary image artifact directory."
@@ -340,14 +399,22 @@
       (unless durable-p
         (conversation--delete-image-attachments attachments)))))
 
-(-> conversation-append-provider-item (conversation json-object) json-object)
-(defun conversation-append-provider-item (conversation item)
-  "Persist one authoritative completed provider ITEM in CONVERSATION."
-  (conversation-append-record
-   conversation
-   (list :provider-item
-         :wire-json (json-encode item)))
-  (conversation--append-input-item conversation item))
+(-> conversation-append-provider-item
+    (conversation json-object
+     &key (:persistence tool-conversation-persistence))
+    json-object)
+(defun conversation-append-provider-item
+    (conversation item &key (persistence ':durable))
+  "Append one authoritative provider ITEM with the requested PERSISTENCE."
+  (ecase persistence
+    (:durable
+     (conversation-append-record
+      conversation
+      (list :provider-item
+            :wire-json (json-encode item)))
+     (conversation--append-input-item conversation item))
+    (:next-response
+     (conversation--append-ephemeral-input-item conversation item))))
 
 (-> function-call-output-item (string (or string vector)) json-object)
 (defun function-call-output-item (call-id output)
@@ -357,10 +424,36 @@
    "call_id" call-id
    "output" output))
 
-(-> conversation--image-tool-output (list) vector)
-(defun conversation--image-tool-output (attachments)
-  "Return ATTACHMENTS as native image content for a tool output."
-  (coerce (mapcar #'image-input-content-item attachments) 'vector))
+(-> conversation--tool-content-output (list) vector)
+(defun conversation--tool-content-output (blocks)
+  "Return ordered string and image BLOCKS as native tool-output content."
+  (coerce
+   (mapcar
+    (lambda (block)
+      (etypecase block
+        (string
+         (json-object "type" "input_text" "text" block))
+        (image-attachment
+         (image-input-content-item block))))
+    blocks)
+   'vector))
+
+(-> conversation--tool-content-block-record (t) list)
+(defun conversation--tool-content-block-record (block)
+  "Return one portable durable descriptor for provider content BLOCK."
+  (etypecase block
+    (string
+     (list :text block))
+    (image-attachment
+     (list :image (image-attachment-record block)))))
+
+(-> conversation--tool-content-images (list) list)
+(defun conversation--tool-content-images (blocks)
+  "Return every image attachment in ordered provider BLOCKS."
+  (remove-if-not
+   (lambda (block)
+     (typep block 'image-attachment))
+   blocks))
 
 (defparameter *conversation-interrupted-tool-output*
   "Autolith restarted before recording this tool call's result. The call may have changed external state. Inspect the relevant state before deciding whether to retry it."
@@ -371,16 +464,32 @@
      &key (:tool-name string)
           (:output string)
           (:image-attachments list)
+          (:content-blocks list)
           (:success-p boolean)
           (:cpu-microseconds (option (integer 0)))
-          (:real-microseconds (option (integer 0))))
+          (:real-microseconds (option (integer 0)))
+          (:persistence tool-conversation-persistence))
     json-object)
 (defun conversation-append-tool-result
     (conversation call-id
-     &key tool-name output image-attachments success-p
-       cpu-microseconds real-microseconds)
-  "Persist and append one tool OUTPUT, optional images, and optional timing."
-  (let ((durable-p nil))
+     &key tool-name output image-attachments content-blocks success-p
+       cpu-microseconds real-microseconds (persistence ':durable))
+  "Append one tool OUTPUT, optional ordered content, timing, and PERSISTENCE."
+  (when (and image-attachments content-blocks)
+    (error 'conversation-invariant-error
+           :message
+           "Tool output cannot provide both image attachments and content blocks."
+           :pathname (conversation-pathname conversation)
+           :sequence (conversation-next-sequence conversation)))
+  (let* ((blocks
+           (or content-blocks
+               (when image-attachments
+                 (append
+                  (when (non-empty-string-p output)
+                    (list output))
+                  image-attachments))))
+         (attachments (conversation--tool-content-images blocks))
+         (retained-p nil))
     (unwind-protect
          (progn
            (unless (or (and (null cpu-microseconds)
@@ -392,43 +501,55 @@
                     "Tool timing must contain both nonnegative microsecond values."
                     :pathname (conversation-pathname conversation)
                     :sequence (conversation-next-sequence conversation)))
-           (unless (every (lambda (attachment)
-                            (typep attachment 'image-attachment))
-                          image-attachments)
+           (unless (every
+                    (lambda (block)
+                      (or (stringp block)
+                          (typep block 'image-attachment)))
+                    blocks)
              (error 'conversation-invariant-error
-                    :message "Tool image output contains an invalid attachment."
+                    :message "Tool output contains an invalid content block."
                     :pathname (conversation-pathname conversation)
                     :sequence (conversation-next-sequence conversation)))
-           (when (and image-attachments (not success-p))
+           (when (and attachments (not success-p))
              (error 'conversation-invariant-error
                     :message "A failed tool result cannot contain image output."
                     :pathname (conversation-pathname conversation)
                     :sequence (conversation-next-sequence conversation)))
            (let* ((wire-output
-                    (if image-attachments
-                        (conversation--image-tool-output image-attachments)
+                    (if attachments
+                        (conversation--tool-content-output blocks)
                         output))
                   (item (function-call-output-item call-id wire-output)))
-             (conversation-append-record
-              conversation
-              (append
-               (list :tool-result
-                     :call-id call-id
-                     :tool tool-name
-                     :status (if success-p :ok :error)
-                     :output output)
-               (when image-attachments
-                 (list :images
-                       (mapcar #'image-attachment-record image-attachments)))
-               (when cpu-microseconds
-                 (list :cpu-microseconds cpu-microseconds
-                       :real-microseconds real-microseconds))
-               (unless image-attachments
-                 (list :wire-json (json-encode item)))))
-             (setf durable-p t)
-             (conversation--append-input-item conversation item)))
-      (unless durable-p
-        (conversation--delete-image-attachments image-attachments)))))
+             (ecase persistence
+               (:durable
+                (conversation-append-record
+                 conversation
+                 (append
+                  (list :tool-result
+                        :call-id call-id
+                        :tool tool-name
+                        :status (if success-p :ok :error)
+                        :output output)
+                  (when attachments
+                    (list
+                     :content-blocks
+                     (mapcar #'conversation--tool-content-block-record blocks)))
+                  (when cpu-microseconds
+                    (list :cpu-microseconds cpu-microseconds
+                          :real-microseconds real-microseconds))
+                  (unless attachments
+                    (list :wire-json (json-encode item)))))
+                (setf retained-p t)
+                (conversation--append-input-item conversation item))
+               (:next-response
+                (conversation--append-ephemeral-input-item
+                 conversation
+                 item
+                 :attachments attachments)
+                (setf retained-p t)))
+             item))
+      (unless retained-p
+        (conversation--delete-image-attachments attachments)))))
 
 (-> conversation--wire-item-type-p (json-object string) boolean)
 (defun conversation--wire-item-type-p (item type)
@@ -627,14 +748,19 @@ before the repaired projection can be sent to the provider."
 The durable record covers every record before it, so replay reproduces the
 same compacted projection. The provider turn-state token is dropped because
 it described the uncompacted context."
-  (let ((record (conversation-append-record
-                 conversation
-                 (list :summary
-                       :through-seq (1- (conversation-next-sequence
-                                         conversation))
-                       :content content))))
+  (let* ((ephemeral-items
+           (mapcar
+            (lambda (entry)
+              (getf entry :item))
+            (conversation-ephemeral-input-entries conversation)))
+         (record (conversation-append-record
+                  conversation
+                  (list :summary
+                        :through-seq (1- (conversation-next-sequence
+                                          conversation))
+                        :content content))))
     (setf (conversation-input-items conversation)
-          (list (conversation-summary-item content))
+          (cons (conversation-summary-item content) ephemeral-items)
           (conversation-turn-state conversation) nil
           (conversation-last-total-tokens conversation) 0)
     record))
@@ -683,6 +809,35 @@ invariant errors while callback conditions propagate unchanged."
              :pathname pathname
              :sequence nil))))
 
+(-> conversation--tool-content-block-from-record
+    (conversation list (option integer))
+    t)
+(defun conversation--tool-content-block-from-record
+    (conversation descriptor sequence)
+  "Restore one durable tool content DESCRIPTOR for CONVERSATION."
+  (cond
+    ((and (listp descriptor)
+          (stringp (getf descriptor :text))
+          (null (getf descriptor :image)))
+     (getf descriptor :text))
+    ((and (listp descriptor)
+          (getf descriptor :image)
+          (null (getf descriptor :text)))
+     (image-attachment-from-record
+      (getf descriptor :image)
+      (conversation-image-artifact-root conversation)))
+    (t
+     (error 'conversation-invariant-error
+            :message "A persisted tool content block is invalid."
+            :pathname (conversation-pathname conversation)
+            :sequence sequence))))
+
+(-> conversation--property-present-p (list keyword) boolean)
+(defun conversation--property-present-p (properties indicator)
+  "Return true when property list PROPERTIES contains INDICATOR."
+  (loop for tail on properties by #'cddr
+        thereis (eq (first tail) indicator)))
+
 (-> conversation--apply-record (conversation list) null)
 (defun conversation--apply-record (conversation record)
   "Project one persisted RECORD into CONVERSATION's in-memory state."
@@ -691,8 +846,29 @@ invariant errors while callback conditions propagate unchanged."
            :message "A persisted conversation record is not a keyword list."
            :pathname (conversation-pathname conversation)
            :sequence nil))
-  (let ((sequence (getf (rest record) :seq))
-        (wire-json (getf (rest record) :wire-json)))
+  (let* ((properties (rest record))
+         (sequence (getf properties :seq))
+         (wire-json (getf properties :wire-json))
+         (content-blocks-p
+           (conversation--property-present-p properties :content-blocks))
+         (images-p
+           (conversation--property-present-p properties :images))
+         (wire-json-p
+           (conversation--property-present-p properties :wire-json)))
+    (when (eq (first record) :tool-result)
+      (when (> (count t (list content-blocks-p images-p wire-json-p)) 1)
+        (error 'conversation-invariant-error
+               :message
+               "A persisted tool result contains multiple wire projections."
+               :pathname (conversation-pathname conversation)
+               :sequence sequence))
+      (when (and (or content-blocks-p images-p)
+                 (not (eq (getf properties :status) :ok)))
+        (error 'conversation-invariant-error
+               :message
+               "A failed persisted tool result cannot contain image output."
+               :pathname (conversation-pathname conversation)
+               :sequence sequence)))
     (conversation--note-activity conversation record)
     (when (eq (first record) :goal)
       (setf (conversation-latest-goal-record conversation) record))
@@ -718,29 +894,68 @@ invariant errors while callback conditions propagate unchanged."
          conversation
          (user-message-item content attachments))))
     (when (and (eq (first record) :tool-result)
-               (getf (rest record) :images))
-      (let* ((call-id (getf (rest record) :call-id))
-             (attachments
-               (mapcar
-                (lambda (descriptor)
-                  (image-attachment-from-record
-                   descriptor
-                   (conversation-image-artifact-root conversation)))
-                (getf (rest record) :images))))
+               content-blocks-p)
+      (let ((call-id (getf (rest record) :call-id))
+            (descriptors (getf (rest record) :content-blocks)))
+        (unless (consp descriptors)
+          (error 'conversation-invariant-error
+                 :message
+                 "A persisted multimodal tool result has no content blocks."
+                 :pathname (conversation-pathname conversation)
+                 :sequence sequence))
+        (unless (non-empty-string-p call-id)
+          (error 'conversation-invariant-error
+                 :message
+                 "A persisted multimodal tool result has no call identifier."
+                 :pathname (conversation-pathname conversation)
+                 :sequence sequence))
+        (let ((blocks
+                (mapcar
+                 (lambda (descriptor)
+                   (conversation--tool-content-block-from-record
+                    conversation descriptor sequence))
+                 descriptors)))
+          (conversation--append-input-item
+           conversation
+           (function-call-output-item
+            call-id
+            (conversation--tool-content-output blocks))))))
+    (when (and (eq (first record) :tool-result)
+               images-p)
+      (let ((call-id (getf (rest record) :call-id))
+            (descriptors (getf (rest record) :images)))
+        (unless (consp descriptors)
+          (error 'conversation-invariant-error
+                 :message "A persisted image tool result has no images."
+                 :pathname (conversation-pathname conversation)
+                 :sequence sequence))
         (unless (non-empty-string-p call-id)
           (error 'conversation-invariant-error
                  :message "A persisted image tool result has no call identifier."
                  :pathname (conversation-pathname conversation)
                  :sequence sequence))
-        (conversation--append-input-item
-         conversation
-         (function-call-output-item
-          call-id
-          (conversation--image-tool-output attachments)))))
+        (let ((attachments
+                (mapcar
+                 (lambda (descriptor)
+                   (image-attachment-from-record
+                    descriptor
+                    (conversation-image-artifact-root conversation)))
+                 descriptors)))
+          (conversation--append-input-item
+           conversation
+           (function-call-output-item
+            call-id
+            (conversation--tool-content-output
+             (append
+              (when (non-empty-string-p
+                     (or (getf (rest record) :output) ""))
+                (list (getf (rest record) :output)))
+              attachments)))))))
     (when (and (member (first record)
                        '(:message :provider-item :tool-result))
                (stringp wire-json)
-               (not (getf (rest record) :images)))
+               (not images-p)
+               (not content-blocks-p))
       (let ((item (json-decode wire-json)))
         (unless (json-object-p item)
           (error 'conversation-invariant-error

@@ -740,6 +740,75 @@ Return true when a model or command turn still needs cancellation."
            (application--ask-command-permission
             application command directory))))))
 
+(-> application--tool-authorization-title (tool) string)
+(defun application--tool-authorization-title (tool)
+  "Return the complete identity of TOOL as one approval-picker title."
+  (format nil
+          "allow ~{~A~^, ~}"
+          (mapcar
+           (lambda (field)
+             (destructuring-bind (label value) field
+               (format nil "~A ~S" label value)))
+           (tool-authorization-identity-fields tool))))
+
+(-> application--tool-authorization-request-entry
+    (tool json-object)
+    string)
+(defun application--tool-authorization-request-entry (tool arguments)
+  "Render TOOL identity and complete ARGUMENTS for one approval request."
+  (with-output-to-string (stream)
+    (format stream "External tool approval requested.~%")
+    (dolist (field (tool-authorization-identity-fields tool))
+      (destructuring-bind (label value) field
+        (format stream "  ~A  ~S~%" label value)))
+    (format stream "  arguments  ~A" (json-encode arguments))))
+
+(-> application--tool-authorization-items () list)
+(defun application--tool-authorization-items ()
+  "Return the modal choices for one fully displayed external tool request."
+  (list
+   (list :name "allow"
+         :argument nil
+         :description "allow this one call with the arguments shown above")
+   (list :name "deny"
+         :argument nil
+         :description "do not call the external tool")))
+
+(-> application--ask-tool-permission
+    (application tool json-object)
+    keyword)
+(defun application--ask-tool-permission (application tool arguments)
+  "Ask interactively whether external TOOL may run, failing closed otherwise."
+  (block nil
+    (let* ((controller (application-input-controller application))
+           (ui         (application-ui application)))
+      (unless (and controller
+                   ui
+                   (terminal-interactive-p (terminal-ui-terminal ui)))
+        (return ':deny))
+      (let ((choice
+              (application-input-controller-call-with-reader-paused
+               controller
+               (lambda ()
+                 (application-present
+                  application
+                  (application--tool-authorization-request-entry
+                   tool arguments))
+                 (terminal-ui-select
+                  ui
+                  :title (application--tool-authorization-title tool)
+                  :items (application--tool-authorization-items)
+                  :resize-callback #'application-pending-terminal-size)))))
+        (if (string= (or choice "") "allow")
+            ':allow
+            ':deny)))))
+
+(-> application-authorize-tool (application tool json-object) keyword)
+(defun application-authorize-tool (application tool arguments)
+  "Return the interactively selected permission for one external TOOL call."
+  (with-lock-held ((application-command-authorization-lock application))
+    (application--ask-tool-permission application tool arguments)))
+
 (-> application-input-controller-schedule-later
     (application-input-controller string &key (:due-at timestamp) (:window string))
     later-entry)

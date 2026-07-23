@@ -15,6 +15,20 @@
       (write-string content stream))
     pathname))
 
+(-> skill-tests--write-octets (pathname string list) pathname)
+(defun skill-tests--write-octets (root relative octets)
+  "Write OCTETS beneath ROOT at RELATIVE and return the resulting pathname."
+  (let ((pathname (merge-pathnames relative root)))
+    (ensure-directories-exist pathname)
+    (with-open-file (stream pathname
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create
+                            :element-type '(unsigned-byte 8))
+      (dolist (octet octets)
+        (write-byte octet stream)))
+    pathname))
+
 (-> skill-tests--definition
     (string string string &key (:version t))
     string)
@@ -122,10 +136,10 @@ related operations."
              "Never selected."))
            (skill-tests--write
             primary
-            ".hidden/SKILL.sexp"
+            ".hidden/hidden/SKILL.sexp"
             (skill-tests--definition
              "hidden"
-             "This hidden directory must not be scanned."
+             "This Skill is nested beneath a hidden directory."
              "Hidden."))
            (skill-tests--write
             primary
@@ -156,7 +170,7 @@ related operations."
                     (skill-catalog-discover (list primary secondary)))
                   (kinds (skill-tests--diagnostic-kinds catalog)))
              (test-assert
-              (equal (skill-tests--names catalog) '("alpha" "beta"))
+              (equal (skill-tests--names catalog) '("hidden" "alpha" "beta"))
               "native skills are path-sorted and ordered by root precedence")
              (test-assert
               (string=
@@ -177,8 +191,8 @@ related operations."
               (null (skill-catalog-find catalog "blocked"))
               "a malformed higher-precedence skill blocks a lower definition")
              (test-assert
-              (null (skill-catalog-find catalog "hidden"))
-              "hidden directories beneath a skill root are skipped")
+              (skill-catalog-find catalog "hidden")
+              "recursive discovery includes Skills beneath hidden directories")
              (test-assert
               (null (skill-catalog-find catalog "legacy"))
               "SKILL.md compatibility files are ignored")))
@@ -399,6 +413,19 @@ related operations."
               (member ':file-too-large
                       (skill-tests--diagnostic-kinds catalog))
               "the parser reads at most its exact file character bound"))
+           (skill-tests--delete-root skills)
+           (skill-tests--write
+            skills
+            "reader-state/SKILL.sexp"
+            (skill-tests--definition
+             "reader-state"
+             "Reader state isolation."
+             "Read normally."))
+           (let* ((*read-suppress* t)
+                  (catalog (skill-catalog-discover (list skills))))
+             (test-assert
+              (skill-catalog-find catalog "reader-state")
+              "native Skill reading ignores ambient read suppression"))
            (test-assert
             (eq
              (skill-tests--definition-error-kind
@@ -615,6 +642,46 @@ related operations."
               (member ':scan-directory-limit
                       (skill-tests--diagnostic-kinds catalog))
               "directory limits apply across ordered roots"))
+           (let* ((first-path (merge-pathnames "one/SKILL.sexp" first))
+                  (first-size
+                    (length (uiop:read-file-string first-path)))
+                  (catalog
+                    (skill-catalog-discover
+                     (list first second)
+                     :max-characters first-size)))
+             (test-assert
+              (and (skill-catalog-find catalog "one")
+                   (null (skill-catalog-find catalog "two"))
+                   (member ':scan-character-limit
+                           (skill-tests--diagnostic-kinds catalog)))
+              "aggregate definition characters stop later discovery with a typed diagnostic")
+             (test-assert
+              (string= (skill-metadata-read
+                        (skill-catalog-find catalog "one"))
+                       "One.")
+              "the discovery character budget does not weaken selected-body rereads"))
+           (let ((invalid (merge-pathnames "invalid/" root)))
+             (skill-tests--write-octets
+              invalid
+              "bad/SKILL.sexp"
+              '(#x28 #xc3 #x28 #x29))
+             (skill-tests--write
+              invalid
+              "good/SKILL.sexp"
+              (skill-tests--definition
+               "good" "Valid skill after malformed UTF-8." "Good."))
+             (let ((catalog
+                     (skill-catalog-discover
+                      (list invalid)
+                      :max-characters 16)))
+               (test-assert
+                (and
+                 (null (skill-catalog-find catalog "good"))
+                 (member ':read-error
+                         (skill-tests--diagnostic-kinds catalog))
+                 (member ':scan-character-limit
+                         (skill-tests--diagnostic-kinds catalog)))
+                "a decoding failure consumes its conservative scan allowance")))
            (let ((deep (merge-pathnames "deep/" root)))
              (skill-tests--write
               deep
@@ -862,6 +929,115 @@ related operations."
       (skill-tests--delete-root root)))
   nil)
 
+(-> skill-tests--concurrent-parent-child-selection () null)
+(defun skill-tests--concurrent-parent-child-selection ()
+  "Test concurrent parent and child logical turns keep selections isolated."
+  (let* ((base-configuration (test-configuration))
+         (root (test-configuration-root base-configuration))
+         (project (merge-pathnames "project/" root))
+         (skills (merge-pathnames ".autolith/skills/" project))
+         (configuration
+           (progn
+             (ensure-directories-exist
+              (merge-pathnames ".git/marker" project))
+             (configuration-with-working-directory
+              base-configuration
+              project)))
+         (conversation
+           (conversation-create configuration
+                                :identifier "skill-thread-isolation"))
+         (barrier-lock (make-lock "Autolith Skill selection isolation"))
+         (barrier (make-condition-variable))
+         (child-ready-p nil)
+         (release-child-p nil)
+         (child-identifiers nil)
+         (child-selection nil)
+         (child-error nil)
+         (child-thread nil))
+    (unwind-protect
+         (progn
+           (skill-tests--write
+            skills
+            "alpha/SKILL.sexp"
+            (skill-tests--definition
+             "alpha" "Parent-only instructions." "Parent body."))
+           (skill-tests--write
+            skills
+            "beta/SKILL.sexp"
+            (skill-tests--definition
+             "beta" "Child-only instructions." "Child body."))
+           (call-with-skill-logical-turn
+            (user-message-input-create :text "Parent turn.")
+            (lambda ()
+              (skill-select-for-logical-turn configuration "alpha")
+              (setf child-thread
+                    (make-thread
+                     (lambda ()
+                       (handler-case
+                           (call-with-skill-logical-turn
+                            (user-message-input-create :text "Child turn.")
+                            (lambda ()
+                              (skill-select-for-logical-turn
+                               configuration
+                               "beta")
+                              (setf child-selection
+                                    (copy-list
+                                     *skill-logical-turn-selection-names*)
+                                    child-identifiers
+                                    (skill-tests--contribution-identifiers
+                                     (skill-request-contributions
+                                      configuration
+                                      conversation)))
+                              (with-lock-held (barrier-lock)
+                                (setf child-ready-p t)
+                                (condition-notify barrier)
+                                (loop until release-child-p
+                                      do
+                                         (condition-wait
+                                          barrier
+                                          barrier-lock)))))
+                         (error (condition)
+                           (setf child-error condition)
+                           (with-lock-held (barrier-lock)
+                             (setf child-ready-p t)
+                             (condition-notify barrier)))))
+                     :name "Autolith child Skill selection isolation"))
+              (with-lock-held (barrier-lock)
+                (loop until child-ready-p
+                      do
+                         (condition-wait barrier barrier-lock)))
+              (test-assert
+               (equal *skill-logical-turn-selection-names* '("alpha"))
+               "the active parent turn retains only its own Skill selection")
+              (test-assert
+               (equal
+                (skill-tests--contribution-identifiers
+                 (skill-request-contributions configuration conversation))
+                '("skill-catalog" "skill-selected-alpha"))
+               "parent request context excludes the concurrent child selection")
+              (with-lock-held (barrier-lock)
+                (setf release-child-p t)
+                (condition-notify barrier))))
+           (join-thread child-thread)
+           (when child-error
+             (error child-error))
+           (test-assert
+            (and (equal child-selection '("beta"))
+                 (equal child-identifiers
+                        '("skill-catalog" "skill-selected-beta")))
+            "the concurrent child turn receives only its own Skill selection")
+           (test-assert
+            (and (not *skill-logical-turn-active-p*)
+                 (null *skill-logical-turn-selection-names*))
+            "concurrent selection bindings do not escape either logical turn"))
+      (when (and child-thread (thread-alive-p child-thread))
+        (with-lock-held (barrier-lock)
+          (setf release-child-p t)
+          (condition-notify barrier))
+        (join-thread child-thread))
+      (skill-tests--delete-root root)))
+  nil)
+
 (-> skill-tests--selection-failures-and-limits () null)
 (defun skill-tests--selection-failures-and-limits ()
   "Test selected-file failures and aggregate instruction limits."
@@ -1072,6 +1248,74 @@ related operations."
                    contributions
                    "skill-selected-second"))
                  "aggregate limits prevent excess instruction injection"))))
+           (call-with-skill-logical-turn
+            (user-message-input-create :text "Exercise the selection cap.")
+            (lambda ()
+              (let ((*skill-selection-count-limit* 1))
+                (multiple-value-bind (metadata new-p)
+                    (skill-select-for-logical-turn configuration "first")
+                  (declare (ignore metadata))
+                  (test-assert new-p
+                               "the first distinct Skill fits the selection cap"))
+                (multiple-value-bind (metadata new-p)
+                    (skill-select-for-logical-turn configuration "first")
+                  (declare (ignore metadata))
+                  (test-assert (not new-p)
+                               "duplicate selection remains harmless at the cap"))
+                (test-assert
+                 (handler-case
+                     (progn
+                       (skill-select-for-logical-turn configuration "second")
+                       nil)
+                   (skill-selection-error (condition)
+                     (eq (skill-selection-error-reason condition)
+                         ':selection-limit)))
+                 "a distinct Skill beyond the logical-turn cap is rejected")
+                (test-assert
+                 (equal *skill-logical-turn-selection-names* '("first"))
+                 "a rejected over-cap Skill never enters selection state"))))
+           (let ((warning-paths nil))
+             (dolist (name '("warn-a" "warn-b" "warn-c"))
+               (push
+                (skill-tests--write
+                 skills
+                 (format nil "~A/SKILL.sexp" name)
+                 (skill-tests--definition
+                  name
+                  "This selected Skill will disappear."
+                  "Transient warning body."))
+                warning-paths))
+             (call-with-skill-logical-turn
+              (user-message-input-create :text "Exercise warning bounds.")
+              (lambda ()
+                (dolist (name '("warn-a" "warn-b" "warn-c"))
+                  (skill-select-for-logical-turn configuration name))
+                (dolist (pathname warning-paths)
+                  (delete-file pathname))
+                (let* ((*skill-warning-character-limit* 96)
+                       (*skill-warning-aggregate-character-limit* 120)
+                       (contributions
+                         (skill-request-contributions
+                          configuration
+                          conversation))
+                       (warnings
+                         (remove-if-not
+                          #'skill--warning-contribution-p
+                          contributions)))
+                  (test-assert
+                   (and (= (length warnings) 1)
+                        (string=
+                         (context-contribution-identifier (first warnings))
+                         "skill-warning-overflow")
+                        (<=
+                         (length
+                          (context-contribution-instruction (first warnings)))
+                         *skill-warning-aggregate-character-limit*))
+                   "excess selected-Skill warnings collapse into one bounded mandatory warning")
+                  (test-assert
+                   (eq (context-contribution-class (first warnings))
+                       ':mandatory)
+                   "the collapsed warning cannot be dropped by advice budgeting")))))
            (skill-tests--write
             skills
             "oversized/SKILL.sexp"
@@ -1113,5 +1357,6 @@ related operations."
   (skill-tests--roots-and-rendering)
   (skill-tests--scan-limits)
   (skill-tests--ephemeral-selection)
+  (skill-tests--concurrent-parent-child-selection)
   (skill-tests--selection-failures-and-limits)
   nil)

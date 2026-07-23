@@ -2,10 +2,6 @@
 
 ;;;; -- Subsystem Tests --
 
-(defparameter *test-conversation-tiny-png*
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
-  "A one-pixel PNG used to exercise durable image input.")
-
 (-> test-conversation--write-tiny-png (pathname) pathname)
 (defun test-conversation--write-tiny-png (pathname)
   "Write the valid one-pixel test PNG to PATHNAME."
@@ -93,7 +89,10 @@
                       "view-1"
                       :tool-name "fs.view-image"
                       :output "Viewed the image."
-                      :image-attachments (list tool-attachment)
+                      :content-blocks
+                      (list "Before image."
+                            tool-attachment
+                            "After image.")
                       :success-p t))
                (let* ((tool-output (json-get tool-item "output"))
                       (durable-records
@@ -103,15 +102,23 @@
                         (find :tool-result durable-records :key #'first)))
                  (test-assert
                   (and (vectorp tool-output)
-                       (= (length tool-output) 1)
+                       (= (length tool-output) 3)
                        (string= (json-get (aref tool-output 0) "type")
+                                "input_text")
+                       (string= (json-get (aref tool-output 0) "text")
+                                "Before image.")
+                       (string= (json-get (aref tool-output 1) "type")
                                 "input_image")
                        (uiop:string-prefix-p
                         "data:image/png;base64,"
-                        (json-get (aref tool-output 0) "image_url")))
-                  "image tools return native image content in their output")
+                        (json-get (aref tool-output 1) "image_url"))
+                       (string= (json-get (aref tool-output 2) "type")
+                                "input_text")
+                       (string= (json-get (aref tool-output 2) "text")
+                                "After image."))
+                  "image tools preserve exact multimodal content order")
                  (test-assert
-                  (and (getf (rest tool-record) :images)
+                  (and (getf (rest tool-record) :content-blocks)
                        (null (getf (rest tool-record) :wire-json))
                        (not (search
                              "data:image"
@@ -133,11 +140,17 @@
                (test-assert
                 (and (vectorp loaded-tool-output)
                      (string=
-                      (json-get (aref loaded-tool-output 0) "image_url")
+                      (json-get (aref loaded-tool-output 0) "text")
+                      "Before image.")
+                     (string=
+                      (json-get (aref loaded-tool-output 1) "image_url")
                       (json-get
-                       (aref (json-get tool-item "output") 0)
-                       "image_url")))
-                "conversation replay reconstructs the exact image tool output")))
+                       (aref (json-get tool-item "output") 1)
+                       "image_url"))
+                     (string=
+                      (json-get (aref loaded-tool-output 2) "text")
+                      "After image."))
+                "conversation replay reconstructs ordered image tool output")))
              (delete-file artifact)
              (test-assert
               (handler-case
@@ -189,6 +202,179 @@
              (test-assert (zerop (conversation-last-total-tokens reloaded))
                           "replay resets usage tracked before the summary")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-conversation-ephemeral-tool-projection () null)
+(defun test-conversation-ephemeral-tool-projection ()
+  "Test request-local tool correlation stays out of durable history and replay."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration
+                                :identifier "ephemeral-tool-projection"))
+         (durable-call
+           (json-object
+            "type" "function_call"
+            "call_id" "durable-call"
+            "namespace" "test"
+            "name" "echo"
+            "arguments" "{\"value\":\"durable\"}"))
+         (ephemeral-call
+           (json-object
+            "type" "function_call"
+            "call_id" "ephemeral-call"
+            "namespace" "skill"
+            "name" "load"
+            "arguments" "{\"name\":\"alpha-secret\"}")))
+    (unwind-protect
+         (progn
+           (conversation-append-user-message conversation "Run mixed calls.")
+           (conversation-append-provider-item conversation durable-call)
+           (conversation-append-provider-item
+            conversation
+            ephemeral-call
+            :persistence ':next-response)
+           (conversation-append-tool-result
+            conversation
+            "durable-call"
+            :tool-name "test.echo"
+            :output "echo: durable"
+            :success-p t)
+           (conversation-append-tool-result
+            conversation
+            "ephemeral-call"
+            :tool-name "skill.load"
+            :output "Selected alpha-secret."
+            :success-p t
+            :persistence ':next-response)
+           (let* ((live
+                    (conversation-input-items-for-request conversation))
+                  (durable
+                    (conversation-input-items-for-request
+                     conversation
+                     :include-ephemeral-p nil))
+                  (records
+                    (conversation--read-records
+                     (conversation-pathname conversation)))
+                  (record-source
+                    (with-output-to-string (stream)
+                      (prin1 records stream))))
+             (test-assert
+              (and (= (length live) 5)
+                   (string= (json-get (second live) "call_id")
+                            "durable-call")
+                   (string= (json-get (third live) "call_id")
+                            "ephemeral-call")
+                   (string= (json-get (fourth live) "call_id")
+                            "durable-call")
+                   (string= (json-get (fifth live) "call_id")
+                            "ephemeral-call"))
+              "mixed durable and request-local call items retain exact wire order")
+             (test-assert
+              (and (= (length durable) 3)
+                   (string= (json-get (second durable) "call_id")
+                            "durable-call")
+                   (string= (json-get (third durable) "call_id")
+                            "durable-call"))
+              "compaction input excludes request-local call correlation")
+             (test-assert
+              (and (null (search "ephemeral-call" record-source))
+                   (null (search "alpha-secret" record-source)))
+              "request-local skill names, calls, and results never enter the append-only file")
+             (let ((reloaded
+                     (conversation-load-by-id
+                      configuration
+                      "ephemeral-tool-projection")))
+               (test-assert
+                (and (= (length (conversation-input-items reloaded)) 3)
+                     (null
+                      (find "ephemeral-call"
+                            (conversation-input-items reloaded)
+                            :key (lambda (item)
+                                   (json-get item "call_id"))
+                            :test #'string=)))
+                "crash replay omits request-local call correlation without synthesizing repair")))
+           (conversation-append-summary conversation "Durable mixed-call work.")
+           (test-assert
+            (and (= (length
+                     (conversation-input-items-for-request conversation))
+                    3)
+                 (= (length
+                     (conversation-input-items-for-request
+                      conversation
+                      :include-ephemeral-p nil))
+                    1))
+            "compaction preserves pending correlation only for the next normal request")
+           (conversation-clear-ephemeral-input-items conversation)
+           (test-assert
+            (and (= (length (conversation-input-items conversation)) 1)
+                 (null (conversation-ephemeral-input-entries conversation)))
+            "a successful provider response consumes all request-local correlation")
+           (let ((reloaded
+                   (conversation-load-by-id
+                    configuration
+                    "ephemeral-tool-projection")))
+             (test-assert
+              (= (length (conversation-input-items reloaded)) 1)
+              "replay after compaction contains only the durable summary bridge")))
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-conversation-ephemeral-append-interruption () null)
+(defun test-conversation-ephemeral-append-interruption ()
+  "Test interrupted request-local insertion remains owned and removable."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create
+            configuration :identifier "ephemeral-append-interruption"))
+         (item
+           (json-object
+            "type" "function_call"
+            "call_id" "interrupted-ephemeral-call"
+            "namespace" "skill"
+            "name" "load"
+            "arguments" "{\"name\":\"interrupted-skill\"}"))
+         (original-append
+           (symbol-function 'conversation--append-input-item)))
+    (unwind-protect
+         (test-call-with-function-replacements
+          (list
+           (list
+            'conversation--append-input-item
+            (lambda (target candidate)
+              (funcall original-append target candidate)
+              (error "Injected interruption after provider projection append."))))
+          (lambda ()
+            (test-assert
+             (handler-case
+                 (progn
+                   (conversation--append-ephemeral-input-item conversation item)
+                   nil)
+               (simple-error ()
+                 t))
+             "an interruption after projection append reaches the caller")
+            (test-assert
+             (and
+              (eq item (first (conversation-input-items conversation)))
+              (eq
+               item
+               (getf
+                (first
+                 (conversation-ephemeral-input-entries conversation))
+                :item)))
+             "an interrupted provider item already has request-local ownership")
+            (conversation-clear-ephemeral-input-items conversation)
+            (test-assert
+             (and
+              (null (conversation-input-items conversation))
+              (null (conversation-input-items-tail conversation))
+              (null (conversation-ephemeral-input-entries conversation)))
+             "request-local cleanup removes the interrupted provider item")))
+      (uiop:delete-directory-tree
+       root :validate t :if-does-not-exist :ignore)))
   nil)
 
 (-> test-conversation-origin-directory () null)
@@ -348,6 +534,47 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-conversation-malformed-tool-projections () null)
+(defun test-conversation-malformed-tool-projections ()
+  "Test replay rejects impossible durable tool-output projections."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration :identifier "malformed-tools")))
+    (unwind-protect
+         (progn
+           (test-assert
+            (handler-case
+                (progn
+                  (conversation--apply-record
+                   conversation
+                   '(:tool-result
+                     :seq 1
+                     :call-id "failed-image"
+                     :status :error
+                     :content-blocks ((:text "impossible"))))
+                  nil)
+              (conversation-invariant-error ()
+                t))
+            "replay rejects image-form output on a failed tool result")
+           (test-assert
+            (handler-case
+                (progn
+                  (conversation--apply-record
+                   conversation
+                   '(:tool-result
+                     :seq 2
+                     :call-id "ambiguous"
+                     :status :ok
+                     :content-blocks ((:text "one"))
+                     :wire-json "{}"))
+                  nil)
+              (conversation-invariant-error ()
+                t))
+            "replay rejects a tool result with competing wire projections"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-conversation-private-storage () null)
 (defun test-conversation-private-storage ()
   "Test private transcript persistence outside public conversation discovery."
@@ -436,6 +663,9 @@
 (defun test-conversation-persistence ()
   "Test append-only conversation projection and incomplete-tail recovery."
   (test-conversation-image-input)
+  (test-conversation-ephemeral-tool-projection)
+  (test-conversation-ephemeral-append-interruption)
+  (test-conversation-malformed-tool-projections)
   (test-conversation-concurrent-appends)
   (test-conversation-interrupted-tool-call)
   (let* ((configuration (test-configuration))

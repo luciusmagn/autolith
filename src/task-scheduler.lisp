@@ -255,6 +255,7 @@
                       (task-job-item job) (task-job--compact-item job)
                       (task-job-parent-agent job) nil
                       (task-job-command-authorization-function job) nil
+                      (task-job-tool-authorization-function job) nil
                       (task-job-thread job) nil
                       (task-job-run-token job) nil
                       (task-job-deadline job) nil
@@ -310,6 +311,7 @@
               (task-job-item job) (task-job--compact-item job)
               (task-job-parent-agent job) nil
               (task-job-command-authorization-function job) nil
+              (task-job-tool-authorization-function job) nil
               (task-job-thread job) nil
               (task-job-run-token job) nil
               (task-job-deadline job) nil
@@ -407,8 +409,10 @@
   (task-orchestrator-live-count orchestrator))
 
 (defun task-orchestrator-start-jobs
-    (orchestrator parent-agent entries parent-call-id
-     command-authorization-function)
+    (orchestrator parent-agent entries
+     &key parent-call-id
+       command-authorization-function
+       tool-authorization-function)
   "Atomically admit ENTRIES and return jobs plus nested synchronous inline jobs."
   (when (and (typep parent-agent 'task-child-agent)
              (not *task-admission-parent-locked-p*))
@@ -425,8 +429,10 @@
         (let ((*task-admission-parent-locked-p* t))
           (return-from task-orchestrator-start-jobs
             (task-orchestrator-start-jobs
-             orchestrator parent-agent entries parent-call-id
-             command-authorization-function))))))
+             orchestrator parent-agent entries
+             :parent-call-id parent-call-id
+             :command-authorization-function command-authorization-function
+             :tool-authorization-function tool-authorization-function))))))
   (let ((jobs nil)
         (inline nil)
         (queued nil)
@@ -481,7 +487,9 @@
                        :parent-call-id parent-call-id
                        :detached-p detached-p
                        :command-authorization-function
-                       command-authorization-function)))
+                       command-authorization-function
+                       :tool-authorization-function
+                       tool-authorization-function)))
                 (push job jobs)
                 (if (and (typep parent-agent 'task-child-agent)
                          (not detached-p))
@@ -508,7 +516,7 @@
 (defun task-orchestrator-start-job
     (orchestrator
      &key parent-agent definition item detached-p parent-call-id
-       command-authorization-function)
+       command-authorization-function tool-authorization-function)
   "Admit one JOB through the atomic scheduler admission path."
   (multiple-value-bind (jobs inline)
       (task-orchestrator-start-jobs
@@ -517,8 +525,9 @@
        (list (list :definition definition
                    :item item
                    :detached detached-p))
-       parent-call-id
-       command-authorization-function)
+       :parent-call-id parent-call-id
+       :command-authorization-function command-authorization-function
+       :tool-authorization-function tool-authorization-function)
     (dolist (job inline)
       (task-job--execute job))
     (first jobs)))

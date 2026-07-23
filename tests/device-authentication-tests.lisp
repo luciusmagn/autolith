@@ -237,6 +237,7 @@
            (device-authentication-test--jwt
             (json-object "chatgpt_account_id" account-id)))
          (poll-calls 0)
+         (secret-guard-observed-p nil)
          (*device-authentication-test-saved-credentials* nil))
     (flet ((request (&key method url headers content)
              (declare (ignore method headers content))
@@ -268,6 +269,7 @@
            (poll (client authorization)
              (declare (ignore client))
              (incf poll-calls)
+             (setf secret-guard-observed-p (secret-use-active-p))
              (test-assert
               (string= (device-authorization-user-code authorization)
                        "INJECTED-CODE")
@@ -294,6 +296,9 @@
         (test-assert (= poll-calls 1)
                      "the injected polling function is called exactly once")
         (test-assert
+         secret-guard-observed-p
+         "device authorization holds the process-wide transient-secret guard")
+        (test-assert
          (string= (oauth-credentials-account-id
                    *device-authentication-test-saved-credentials*)
                   account-id)
@@ -305,20 +310,24 @@
   "Verify pending responses stop at the configured polling deadline."
   (let ((clock 0)
         (poll-count 0)
+        (request-guard-observed-p nil)
         (*device-authentication-test-saved-credentials* nil))
     (flet ((request (&key method url headers content)
              (declare (ignore method headers content))
              (if (device-authentication-test--url-suffix-p
                   url
                   "/api/accounts/deviceauth/usercode")
-                 (values
-                  (json-encode
-                   (json-object
-                    "device_auth_id" "device-timeout"
-                    "user_code" "TIMEOUT-CODE"
-                    "interval" "5"))
-                  200
-                  nil)
+                 (progn
+                   (setf request-guard-observed-p
+                         (secret-use-active-p))
+                   (values
+                    (json-encode
+                     (json-object
+                      "device_auth_id" "device-timeout"
+                      "user_code" "TIMEOUT-CODE"
+                      "interval" "5"))
+                    200
+                    nil))
                  (progn
                    (incf poll-count)
                    (values "{}" 403 nil))))
@@ -336,6 +345,9 @@
                 :clock-function #'now
                 :poll-timeout 10))
              (authorization (device-authentication-request-code client)))
+        (test-assert
+         request-guard-observed-p
+         "direct device-code requests hold the transient-secret guard")
         (device-authentication-test--signals
          (lambda ()
            (device-authentication-complete
@@ -348,6 +360,124 @@
         (test-assert (null *device-authentication-test-saved-credentials*)
                      "timed-out authentication publishes no credentials")))
     nil))
+
+(-> device-authentication-test--error-echo-containment () null)
+(defun device-authentication-test--error-echo-containment ()
+  "Verify device-flow failures cannot echo transient request credentials."
+  (let ((device-id "device-secret-echo")
+        (user-code "USER-SECRET-ECHO")
+        (*device-authentication-test-saved-credentials* nil))
+    (flet ((request (&key method url headers content)
+             (declare (ignore method headers content))
+             (if
+              (device-authentication-test--url-suffix-p
+               url
+               "/api/accounts/deviceauth/usercode")
+              (values
+               (json-encode
+                (json-object
+                 "device_auth_id" device-id
+                 "user_code" user-code
+                 "interval" "1"))
+               200
+               nil)
+              (values
+               (json-encode
+                (json-object
+                 "error"
+                 (format nil "~A/~A" device-id user-code)))
+               400
+               nil))))
+      (let* ((client
+               (device-authentication-client-create
+                :issuer "https://issuer.test"
+                :request-function #'request))
+             (authorization (device-authentication-request-code client))
+             (condition
+               (handler-case
+                   (progn
+                     (device-authentication-complete
+                      client
+                      authorization
+                      (device-authentication-test--manager))
+                     nil)
+                 (device-authentication-error (failure)
+                   failure))))
+        (test-assert
+         (and
+          condition
+          (not (test-object-contains-string-p condition device-id))
+          (not (test-object-contains-string-p condition user-code))
+          (test-object-contains-string-p
+           condition
+           *device-authentication-redaction-marker*))
+         "poll failures redact echoed device identifiers and user codes"))))
+  (let ((authorization-code "authorization-secret-echo")
+        (code-verifier "verifier-secret-echo")
+        (*device-authentication-test-saved-credentials* nil))
+    (flet ((request (&key method url headers content)
+             (declare (ignore method headers content))
+             (cond
+               ((device-authentication-test--url-suffix-p
+                 url
+                 "/api/accounts/deviceauth/usercode")
+                (values
+                 (json-encode
+                  (json-object
+                   "device_auth_id" "device-exchange-echo"
+                   "user_code" "EXCHANGE-ECHO"
+                   "interval" "1"))
+                 200
+                 nil))
+               ((device-authentication-test--url-suffix-p
+                 url
+                 "/api/accounts/deviceauth/token")
+                (values
+                 (json-encode
+                  (json-object
+                   "authorization_code" authorization-code
+                   "code_verifier" code-verifier))
+                 200
+                 nil))
+               (t
+                (values
+                 (json-encode
+                  (json-object
+                   "error"
+                   (format
+                    nil
+                    "~A/~A"
+                    authorization-code
+                    code-verifier)))
+                 400
+                 nil)))))
+      (let* ((client
+               (device-authentication-client-create
+                :issuer "https://issuer.test"
+                :request-function #'request))
+             (authorization (device-authentication-request-code client))
+             (condition
+               (handler-case
+                   (progn
+                     (device-authentication-complete
+                      client
+                      authorization
+                      (device-authentication-test--manager))
+                     nil)
+                 (device-authentication-error (failure)
+                   failure))))
+        (test-assert
+         (and
+          condition
+          (not
+           (test-object-contains-string-p
+            condition authorization-code))
+          (not (test-object-contains-string-p condition code-verifier))
+          (test-object-contains-string-p
+           condition
+           *device-authentication-redaction-marker*))
+         "exchange failures redact echoed authorization and PKCE values"))))
+  nil)
 
 (-> device-authentication-test--declined () null)
 (defun device-authentication-test--declined ()
@@ -460,6 +590,7 @@
   (device-authentication-test--complete-flow)
   (device-authentication-test--injected-poll)
   (device-authentication-test--timeout)
+  (device-authentication-test--error-echo-containment)
   (device-authentication-test--declined)
   (device-authentication-test--missing-account)
   t)

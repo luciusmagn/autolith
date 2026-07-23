@@ -647,8 +647,11 @@
                   orchestrator
                   parent
                   resolved
-                  (tool-context-call-id context)
-                  (tool-context-command-authorization-function context))
+                  :parent-call-id (tool-context-call-id context)
+                  :command-authorization-function
+                  (tool-context-command-authorization-function context)
+                  :tool-authorization-function
+                  (tool-context-tool-authorization-function context))
                (setf jobs admitted
                      synchronous
                      (remove-if #'task-job-detached-p admitted)

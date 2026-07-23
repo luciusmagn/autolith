@@ -1,0 +1,221 @@
+#+TITLE: Autolith MCP
+#+STARTUP: content
+#+OPTIONS: toc:2 num:nil
+
+* Purpose and Boundary
+
+Autolith is an MCP client. It uses the separate Mcparen Common Lisp library to
+implement MCP 2025-11-25 and 2025-06-18 over standard input and output or
+Streamable HTTP. It requests the newer revision and accepts either supported
+revision selected by the server. Servers may contribute tools, resources,
+resource templates, prompts, and bounded server instructions.
+
+MCP is independent of Autolith Skills. Skills are native request-local
+instructions selected through =skill.load=; they are not MCP servers or MCP
+prompts.
+
+Autolith has no compatibility contract with Codex configuration. It does not
+read or migrate Codex MCP settings. Its durable MCP configuration is a native
+S-expression, and JSON exists only at the MCP and provider protocol boundaries.
+
+* Configuration
+
+The optional configuration file is:
+
+#+begin_example
+${XDG_CONFIG_HOME:-~/.config}/autolith/mcp.sexp
+#+end_example
+
+It contains exactly one bounded form. Reading uses a fresh readtable with
+=*read-eval*= bound to =nil=, and unknown, duplicate, malformed, or oversized
+data is rejected. The path may be a regular file or a symbolic link that
+resolves to a regular file, which permits declarative configuration managers.
+
+#+begin_src lisp
+(:version 1
+ :servers
+ ((:name "local-tools"
+   :transport
+   (:type :stdio
+    :command "/absolute/path/to/server"
+    :arguments ("--stdio")
+    :directory :workspace
+    :environment
+    (("SERVICE_TOKEN" :environment "AUTOLITH_SERVICE_TOKEN")))
+   :required-p nil
+   :startup-timeout-seconds 15
+   :tool-timeout-seconds 60
+   :approval :prompt
+   :child-tools ("lookup"))
+
+  (:name "remote-tools"
+   :transport
+   (:type :http
+    :url "https://mcp.example.net/"
+    :headers
+    (("Authorization" :environment "AUTOLITH_MCP_AUTHORIZATION"))
+    :connect-timeout-seconds 10)
+   :approval :read-only
+   :trusted-read-only-tools ("lookup"))))
+#+end_src
+
+Server names are case-sensitive. A standard I/O =:directory= is either
+=:workspace= or an existing pathname. =:workspace= is resolved when the server
+process starts, so a reconnect follows the current working directory.
+
+Streamable HTTP endpoints must use HTTPS. Plain HTTP is accepted only for a
+loopback host. URLs containing user information, query parameters, or fragments
+are rejected.
+
+Environment and header entries have the form:
+
+#+begin_src lisp
+("TARGET-NAME" :environment "SOURCE_VARIABLE")
+#+end_src
+
+Autolith resolves every named source variable once at the beginning of a
+credential-bearing MCP operation. That exact guarded snapshot supplies
+redaction, standard-input launch values, and HTTP request headers for the whole
+operation. For an authorization header, the environment value must contain the
+complete value expected by the server, including any scheme such as =Bearer=.
+
+A live standard-input process records only a process-keyed SipHash digest of the
+mapped launch values. Before provider dispatch, explicit refresh, or a call to
+that server, Autolith compares the current guarded snapshot with the launch
+digest. A changed value closes the old process before reconnecting. An
+unset required value closes the old process and produces a structured server
+failure instead of continuing with stale credentials.
+
+Standard-input servers receive a small inherited baseline containing ordinary
+process identity, path, locale, temporary-directory, XDG-directory, and TLS
+certificate location variables, plus =AUTOLITH_MCP=1= as a fixed process marker.
+They do not inherit the complete Autolith environment. Every additional value
+must appear as an explicit =:environment= reference.
+
+* Required and Optional Servers
+
+Autolith connects to effective servers and discovers their tools when it builds
+the application tool registry.
+
+- A server with =:required-p t= makes startup or reload fail if initialization
+  or discovery fails.
+- An optional server remains visible in a failed state without preventing
+  unrelated work. It can be retried with =mcp.refresh= or =/mcp refresh=.
+
+Servers that do not advertise tools can still expose resources or prompts.
+Autolith validates advertised tool names and schemas within bounded limits
+before presenting them to the model.
+
+One MCP manager retains at most 1,024 advertised tools and 8 MiB of their exact
+normalized, credential-sanitized, encoded input schemas. Tools that require
+unsupported MCP task execution count toward both retention budgets even though
+they remain status-visible rather than provider-callable. Discovery and
+=notifications/tools/list_changed= refreshes allocate these budgets to required
+servers first, preserving configuration order within the required and optional
+groups. A required-server overflow fails startup or refresh with structured
+budget details. An optional server that cannot fit is marked failed, its tools
+are cleared, and =mcp.status= exposes the bounded failure.
+
+Initialization metadata is projected before retention. Autolith retains only
+the presence of the =tools=, =resources=, and =prompts= capabilities, discards
+=serverInfo= after negotiation, and retains at most 2,000 characters of
+credential-sanitized server instructions per server. The same 2,000-character
+bound is used for request-local model context.
+
+* Approval and Child Access
+
+The default approval policy is =:prompt=. The available policies are:
+
+- =:prompt= asks for explicit one-call approval for every server tool call.
+- =:read-only= allows a tool without prompting only when its exact raw name
+  appears in =:trusted-read-only-tools= and its MCP annotations mark it
+  read-only and not destructive. Every other tool still prompts.
+- =:allow= permits every tool from that server without prompting.
+- =:deny= denies every tool from that server.
+
+Server annotations are untrusted hints. =:trusted-read-only-tools= is the
+user's explicit decision to trust the annotations for those exact names, not a
+declaration that the whole server is trusted. An approval prompt identifies
+the exact configured server and unmangled raw tool name, and shows the complete
+JSON arguments above the decision picker.
+
+MCP helpers for status, discovery, resources, and prompts are read-only.
+Server tools are unavailable to child agents unless their exact raw names
+appear in the server's =:child-tools= list and the selected child role also
+permits the resulting tool.
+
+MCP is an external trust boundary, not a sandbox. A server can return misleading
+descriptions, content, resources, prompts, or operating instructions. Autolith
+treats those values as untrusted data, and approval does not make a server
+trustworthy.
+
+* Tools and Commands
+
+Each server's tools appear in a deterministic =mcp__*= namespace. Autolith
+normalizes and hashes server and tool names so provider identifiers remain
+stable and distinct. The model should use the supplied schemas instead of
+guessing names or arguments.
+
+Autolith also exposes these built-in helpers when MCP is configured:
+
+- =mcp.status= reports server source, transport, state, requirement, failure,
+  and discovered tool count without exposing credentials.
+- =mcp.refresh= reconnects servers as needed and atomically refreshes their
+  advertised tools.
+- =mcp.resources= lists resources.
+- =mcp.resource-templates= lists resource templates.
+- =mcp.read-resource= reads one exact resource URI.
+- =mcp.prompts= lists prompts.
+- =mcp.get-prompt= resolves one prompt with optional string arguments.
+
+=/mcp= shows connection state. =/mcp refresh= refreshes discovery without
+rereading configuration. =/mcp reload= rereads =mcp.sexp= and =init.lisp=,
+closes the prior MCP runtimes, and installs a fresh complete tool registry.
+
+A =notifications/tools/list_changed= notification marks discovery stale.
+Autolith refreshes that server before the next provider request.
+
+Text, structured content, embedded resources, and supported image content from
+MCP results are projected into ordinary Autolith tool results in their original
+order. Tool, resource, and prompt results therefore follow normal conversation
+persistence rules.
+
+* User Lisp Registration
+
+=${XDG_CONFIG_HOME:-~/.config}/autolith/init.lisp= may register a server with
+the same native property list accepted inside =mcp.sexp=:
+
+#+begin_src lisp
+(register-mcp-server
+ '(:name "project-service"
+   :transport
+   (:type :stdio
+    :command "/absolute/path/to/server"
+    :directory :workspace)
+   :approval :prompt))
+#+end_src
+
+Registrations use explicit precedence from lowest to highest: tracked
+definitions, =mcp.sexp=, =init.lisp=, then live runtime registrations. A
+higher-precedence registration with the same case-sensitive name shadows the
+lower layer. Reloading user initialization replaces its prior registrations
+atomically; a load failure restores the previous registry.
+
+* Secrets, Context, and Checkpoints
+
+Credential-bearing standard I/O environment values and HTTP headers refer to
+process environment variables rather than storing their values in =mcp.sexp=.
+Do not place secrets in command arguments, URLs, or other ordinary configuration
+strings. Resolved environment values are not retained in status or failure
+records.
+
+Server initialization instructions are bounded untrusted evidence assembled
+only for the current provider request. They do not enter durable conversation
+history, summaries, or memories.
+
+Application shutdown, MCP reload, conversation replacement, and checkpoint
+preparation close live MCP clients. Checkpoint creation refuses to continue
+while a provider or MCP secret-bearing operation remains active, and the forked
+saver detaches inherited transports before saving a core. Credentials must
+never be placed in MCP arguments, source, conversation files, logs, journals,
+manifests, or saved cores.

@@ -8,6 +8,14 @@
 (defvar *context-test-invocation-state* nil
   "A shared mutable counter used by the contributor serialization test.")
 
+(defparameter *context-test-sensitive-instruction*
+  "CONTEXT-DELIVERY-INSTRUCTION-MUST-NOT-BE-RETAINED"
+  "A request-local payload sentinel that retained diagnostics must discard.")
+
+(defparameter *context-test-sensitive-evidence*
+  "CONTEXT-DELIVERY-EVIDENCE-MUST-NOT-BE-RETAINED"
+  "An evidence sentinel that retained diagnostics must discard.")
+
 (-> context-tests--stacked (request-context) list)
 (defun context-tests--stacked (context)
   "Return overlapping contributions used to exercise request resolution."
@@ -99,6 +107,17 @@
     :identifier "low"
     :instruction (make-string 200 :initial-element #\x)
     :priority 1)))
+
+(-> context-tests--sensitive (request-context) context-contribution)
+(defun context-tests--sensitive (context)
+  "Return a contribution whose payload must not enter retained diagnostics."
+  (declare (ignore context))
+  (make-context-contribution
+   :identifier "sensitive"
+   :instruction *context-test-sensitive-instruction*
+   :evidence *context-test-sensitive-evidence*
+   :priority 42
+   :class ':mandatory))
 
 (-> context-tests--defining-form () null)
 (defun context-tests--defining-form ()
@@ -294,6 +313,61 @@
                           "/context diagnostics expose contributor failures"))
            (setf *context-contributors* nil)
            (register-context-contributor
+            "sensitive"
+            'context-tests--sensitive
+            :source ':built-in)
+           (let* ((delivery
+                    (context-resolve-request configuration conversation #()))
+                  (retained
+                    (gethash
+                     (conversation-identifier conversation)
+                     *context-last-deliveries*))
+                  (diagnostic
+                    (first
+                     (context-delivery-diagnostic-contributions retained)))
+                  (status (context-status conversation)))
+             (test-assert
+              (and
+               (search *context-test-sensitive-instruction*
+                       (context-delivery-rendered delivery))
+               (search *context-test-sensitive-evidence*
+                       (context-delivery-rendered delivery)))
+              "the provider delivery retains complete request-local payloads")
+             (test-assert
+              (and
+               (typep retained 'context-delivery-diagnostic)
+               (typep diagnostic 'context-contribution-diagnostic)
+               (string=
+                (context-contribution-diagnostic-identifier diagnostic)
+                "sensitive")
+               (= (context-contribution-diagnostic-instruction-character-count
+                   diagnostic)
+                  (length *context-test-sensitive-instruction*))
+               (= (context-contribution-diagnostic-evidence-character-count
+                   diagnostic)
+                  (length *context-test-sensitive-evidence*)))
+              "retained context diagnostics preserve bounded observability metadata")
+             (test-assert
+              (and
+               (not
+                (test-object-contains-string-p
+                 *context-last-deliveries*
+                 *context-test-sensitive-instruction*))
+               (not
+                (test-object-contains-string-p
+                 *context-last-deliveries*
+                 *context-test-sensitive-evidence*))
+               (not (search *context-test-sensitive-instruction* status))
+               (not (search *context-test-sensitive-evidence* status)))
+              "retained diagnostics and /context discard request-local payload text")
+             (test-assert
+              (and (search "sensitive" status)
+                   (search "mandatory" status)
+                   (search "instruction character" status)
+                   (search "evidence character" status))
+              "/context renders useful payload-free contribution metadata"))
+           (setf *context-contributors* nil)
+           (register-context-contributor
             "conversation-advice"
             'context-tests--conversation-advice)
            (let ((other-conversation
@@ -305,15 +379,16 @@
                    (other-status (context-status other-conversation))
                    (latest-status (context-status)))
                (test-assert
-                (and (search "Advice for conversation context-test."
-                             current-status)
-                     (not (search
-                           "Advice for conversation context-diagnostic-other."
-                           current-status)))
+                (and (search "conversation context-test" current-status)
+                     (search "conversation-advice" current-status)
+                     (not
+                      (search "conversation context-diagnostic-other"
+                              current-status)))
                 "/context selects diagnostics for the current conversation")
                (test-assert
-                (search "Advice for conversation context-diagnostic-other."
-                        other-status)
+                (and
+                 (search "conversation context-diagnostic-other" other-status)
+                 (search "conversation-advice" other-status))
                 "diagnostics retain another conversation's newest delivery")
                (test-assert
                 (search "conversation context-diagnostic-other" latest-status)

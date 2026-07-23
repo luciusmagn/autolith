@@ -610,6 +610,7 @@
     (default-tools--register-agenda registry)
     (default-tools--register-lisp registry)
     (default-tools--register-self registry)
+    (skill-augment-tool-registry registry)
     (when immutable-p
       (default-tools--remove-mutable-self-tools registry))
     registry))

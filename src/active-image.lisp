@@ -233,6 +233,9 @@
         (setf *active-image-build-record* build-record
               *active-application* nil
               *credentials-in-request-scope* nil
+              *active-secret-use-count* 0
+              *secret-use-depth* 0
+              *secret-use-quiescence-owner* nil
               *checkpoint-in-progress-p* nil
               *checkpoint-core-probe-record* nil)
         (sb-ext:save-lisp-and-die

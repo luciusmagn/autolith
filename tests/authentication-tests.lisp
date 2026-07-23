@@ -2,9 +2,131 @@
 
 ;;;; -- Subsystem Tests --
 
+(-> authentication-tests--test-secret-use-quiescence () null)
+(defun authentication-tests--test-secret-use-quiescence ()
+  "Test checkpoint quiescence rejects new work without blocking its owner."
+  (let ((child-result nil))
+    (call-with-secret-use-quiescence
+     (lambda ()
+       (call-with-secret-use
+        (lambda ()
+          (test-assert
+           (secret-use-active-p)
+           "the quiescence owner may perform nested secret-bearing cleanup")))
+       (let ((thread
+               (make-thread
+                (lambda ()
+                  (setf
+                   child-result
+                   (handler-case
+                       (progn
+                         (call-with-secret-use (lambda () nil))
+                         ':unexpected-success)
+                     (authentication-error ()
+                       ':rejected))))
+                :name "Autolith secret-use quiescence test")))
+         (join-thread thread))))
+    (test-assert
+     (eq child-result ':rejected)
+     "checkpoint quiescence rejects a new secret user on another thread")
+    (test-assert
+     (not (secret-use-active-p))
+     "checkpoint quiescence leaves no active secret-use count")
+    (test-assert
+     (null *secret-use-quiescence-owner*)
+     "checkpoint quiescence releases its owner after success"))
+  (let* ((lock (make-lock "Autolith existing secret-use test"))
+         (condition
+           (make-condition-variable
+            :name "Autolith existing secret-use test"))
+         (ready-p nil)
+         (continue-p nil)
+         (nested-use-observed-p nil)
+         (thread
+           (make-thread
+            (lambda ()
+              (call-with-secret-use
+               (lambda ()
+                 (with-lock-held (lock)
+                   (setf ready-p t)
+                   (condition-notify condition)
+                   (loop until continue-p
+                         do (condition-wait condition lock)))
+                 (call-with-secret-use
+                  (lambda ()
+                    (setf nested-use-observed-p
+                          (secret-use-active-p)))))))
+            :name "Autolith existing secret-use test")))
+    (with-lock-held (lock)
+      (loop until ready-p
+            do (condition-wait condition lock)))
+    (call-with-secret-use-quiescence
+     (lambda ()
+       (with-lock-held (lock)
+         (setf continue-p t)
+         (condition-notify condition))
+       (join-thread thread)))
+    (test-assert
+     nested-use-observed-p
+     "a pre-existing secret operation may enter nested cleanup during quiescence"))
+  (handler-case
+      (call-with-secret-use-quiescence
+       (lambda ()
+         (error "synthetic quiescence failure")))
+    (simple-error ()
+      nil))
+  (test-assert
+   (null *secret-use-quiescence-owner*)
+   "checkpoint quiescence releases its owner during unwinding")
+  (test-assert
+   (string=
+    (redact-exact-string-values
+     "unchanged"
+    (list "" nil)
+    "[REDACTED]")
+   "unchanged")
+   "exact redaction ignores empty and absent secret values")
+  (let* ((secrets '("]x" "Z"))
+         (marker (safe-redaction-marker "[REDACTED]" secrets))
+         (redacted
+           (redact-exact-string-values "Zx" secrets marker)))
+    (test-assert
+     (notany (lambda (secret)
+               (search secret redacted))
+             secrets)
+     "redaction markers cannot form an earlier secret across a boundary"))
+  nil)
+
+(-> authentication-tests--test-oauth-error-code () null)
+(defun authentication-tests--test-oauth-error-code ()
+  "Test OAuth error extraction rejects malformed values and bounds strings."
+  (dolist (body
+            (list
+             (json-encode (json-object "error" 42))
+             (json-encode
+              (json-object "error" (json-object "code" 42)))
+             (json-encode
+              (json-object "error"
+                           (json-object "type" (json-object "nested" t))))
+             (json-encode (json-object "error" "   "))
+             "not-json"))
+    (test-assert
+     (null (oauth-error-code body))
+     "OAuth error extraction rejects a malformed or empty code"))
+  (let* ((unbounded (make-string 300 :initial-element #\x))
+         (code
+           (oauth-error-code
+            (json-encode (json-object "error" unbounded)))))
+    (test-assert
+     (and code (= (length code) 256))
+     "OAuth error extraction bounds an untrusted string code"))
+  nil)
+
 (-> test-authentication-store () null)
 (defun test-authentication-store ()
   "Test private credential storage without exposing real authentication data."
+  (authentication-tests--test-secret-use-quiescence)
+  (authentication-tests--test-oauth-error-code)
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (source (make-instance 'autolith-credential-source
@@ -163,6 +285,40 @@
                     nil)
                 (token-refresh-failed ()
                   t))
-              "refresh rejects a token that switches ChatGPT accounts")))
+              "refresh rejects a token that switches ChatGPT accounts")
+             (credential-source-save primary-source renewable)
+             (let ((condition
+                     (handler-case
+                         (test-call-with-function-replacements
+                          (list
+                           (list
+                            'dexador:post
+                            (lambda (url &rest arguments)
+                              (declare (ignore url arguments))
+                              (error
+                               (make-condition
+                                'http-request-failed
+                                :body
+                                (json-encode
+                                 (json-object "error" "old-refresh"))
+                                :status 400
+                                :headers nil
+                                :uri nil
+                                :method :post)))))
+                          (lambda ()
+                            (credential-manager-refresh manager renewable)))
+                       (token-refresh-failed (failure)
+                         failure))))
+               (test-assert
+                (and
+                 condition
+                 (not
+                  (test-object-contains-string-p
+                   condition
+                   "old-refresh"))
+                 (test-object-contains-string-p
+                  condition
+                  "[OAUTH CREDENTIAL REDACTED]"))
+                "OAuth failure diagnostics redact an echoed refresh token"))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

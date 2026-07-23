@@ -1790,6 +1790,8 @@
                                             :configuration configuration
                                             :conversation conversation
                                             :reasoning-traces-p t
+                                            :tool-registry
+                                            (make-default-tool-registry)
                                             :ui (terminal-ui-create
                                                  :terminal terminal)))
                 (observer (application-agent-observer application))
@@ -2654,7 +2656,7 @@
 
 (-> test-application-tool-runtime-lifecycle () null)
 (defun test-application-tool-runtime-lifecycle ()
-  "Test conversation switching and checkpoint saving retire tool runtimes."
+  "Test conversation switching replaces runtimes before checkpoint detachment."
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (registry (make-instance 'tool-registry))
@@ -2681,6 +2683,7 @@
                    :detach-function (lambda () (incf detach-count))))
                 (application nil))
            (tool-registry-register registry tool)
+           (setf registry (task-augment-tool-registry registry))
            (setf application
                  (make-instance
                   'application
@@ -2695,16 +2698,930 @@
                                        :tool-registry registry
                                        :worker nil)
                   :ui nil))
-           (application-install-conversation application second-conversation)
-           (test-assert (= close-count 1)
-                        "switching conversations closes background tool runtimes")
-           (test-assert (eq (application-conversation application)
-                            second-conversation)
-                        "runtime cleanup preserves conversation switching")
-           (checkpoint-detach-state application)
-           (test-assert (= detach-count 1)
-                        "checkpoint saving detaches background tool runtimes"))
+           (let ((old-registry registry)
+                 (old-orchestrator
+                   (application--task-orchestrator application)))
+             (application-install-conversation application second-conversation)
+             (let ((new-registry
+                     (application-tool-registry application))
+                   (new-orchestrator
+                     (application--task-orchestrator application)))
+               (test-assert
+                (= close-count 1)
+                "switching conversations closes retired background runtimes")
+               (test-assert
+                (and
+                 (eq (application-conversation application)
+                     second-conversation)
+                 (not (eq new-registry old-registry))
+                 (eq (agent-tool-registry
+                      (application-agent application))
+                     new-registry))
+                "conversation switching installs a fresh registry and agent")
+               (test-assert
+                (and old-orchestrator
+                     new-orchestrator
+                     (not (eq old-orchestrator new-orchestrator))
+                     (eq
+                      (task-orchestrator-lifecycle-state old-orchestrator)
+                      ':closed)
+                     (eq
+                      (task-orchestrator-lifecycle-state new-orchestrator)
+                      ':open))
+                "conversation switching retires and replaces task runtimes")
+               (tool-registry-close-runtime-state new-registry)
+               (setf (conversation-turn-state second-conversation)
+                     "transient-provider-turn-state")
+               (checkpoint-detach-state application)
+               (test-assert
+                (zerop detach-count)
+                "checkpoint detachment never revisits a retired registry")
+               (test-assert
+                (null (conversation-turn-state second-conversation))
+                "checkpoint detachment removes transient provider turn state"))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(define-condition application-test-runtime-retirement-interruption
+    (serious-condition)
+  ()
+  (:documentation
+   "A non-error serious condition injected at the runtime retirement boundary."))
+
+(-> application-tests--replacement-registry
+    (string function &key (:resume-function function))
+    tool-registry)
+(defun application-tests--replacement-registry
+    (name close-function &key (resume-function (lambda () nil)))
+  "Return one task-capable registry exposing marker tool NAME."
+  (let ((registry (make-instance 'tool-registry)))
+    (tool-registry-register
+     registry
+     (make-instance
+      'tool-test-runtime-tool
+      :namespace "transition"
+      :name name
+      :description (format nil "Runtime marker ~A." name)
+      :parameters (tool-object-schema (json-object) nil)
+      :runtime-identity (list ':runtime-transition name)
+      :close-function close-function
+      :resume-function resume-function
+      :detach-function (lambda () nil)))
+    (task-augment-tool-registry registry)))
+
+(-> test-application-runtime-replacement-transactions () null)
+(defun test-application-runtime-replacement-transactions ()
+  "Test workspace and conversation switches prepare fresh runtimes atomically."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (workspace-one (merge-pathnames "workspace-one/" root))
+         (workspace-two (merge-pathnames "workspace-two/" root))
+         (previous-process-directory (uiop:getcwd))
+         (previous-defaults *default-pathname-defaults*)
+         (old-close-count 0)
+         (workspace-close-count 0)
+         (conversation-close-count 0)
+         (old-registry
+           (application-tests--replacement-registry
+            "old"
+            (lambda () (incf old-close-count))))
+         (first-conversation
+           (conversation-create configuration
+                                :identifier "runtime-transaction-first"))
+         (second-conversation
+           (conversation-create configuration
+                                :identifier "runtime-transaction-second"))
+         (third-conversation
+           (conversation-create configuration
+                                :identifier "runtime-transaction-third"))
+         (provider (provider-create configuration))
+         (application
+           (make-instance
+            'application
+            :configuration configuration
+            :conversation first-conversation
+            :provider provider
+            :tool-registry old-registry
+            :worker nil
+            :agent
+            (agent-create :configuration configuration
+                          :provider provider
+                          :conversation first-conversation
+                          :tool-registry old-registry
+                          :worker nil)
+            :ui nil))
+         (owned-registries (list old-registry)))
+    (ensure-directories-exist workspace-one)
+    (ensure-directories-exist workspace-two)
+    (application-connect-task-presentation application)
+    (unwind-protect
+         (progn
+           (let* ((old-orchestrator
+                    (application--task-orchestrator application))
+                  (workspace-registry
+                    (application-tests--replacement-registry
+                     "workspace-new"
+                     (lambda () (incf workspace-close-count)))))
+             (push workspace-registry owned-registries)
+             (test-call-with-function-replacements
+              (list
+               (list
+                'application--create-tool-registry
+                (lambda (configuration)
+                  (declare (ignore configuration))
+                  workspace-registry))
+               (list
+                'lisp-worker-manager-change-working-directory
+                (lambda (manager configuration)
+                  (declare (ignore manager configuration))
+                  nil)))
+              (lambda ()
+                (application-set-working-directory
+                 application workspace-one)))
+             (let ((workspace-orchestrator
+                     (application--task-orchestrator application)))
+               (test-assert
+                (and
+                 (= old-close-count 1)
+                 (eq (application-tool-registry application)
+                     workspace-registry)
+                 (eq
+                  (agent-tool-registry (application-agent application))
+                  workspace-registry)
+                 (tool-registry-find
+                  workspace-registry "transition" "workspace-new")
+                 (null
+                  (tool-registry-find
+                   workspace-registry "transition" "old"))
+                 (search
+                  "workspace-new"
+                  (json-encode
+                   (tool-registry-provider-schemas workspace-registry))))
+                "a workspace switch advertises only the fresh tool schema")
+               (test-assert
+                (and old-orchestrator
+                     workspace-orchestrator
+                     (not (eq old-orchestrator workspace-orchestrator))
+                     (eq
+                      (task-orchestrator-lifecycle-state old-orchestrator)
+                      ':closed)
+                     (eq
+                      (task-orchestrator-lifecycle-state
+                       workspace-orchestrator)
+                      ':open))
+                "a workspace switch replaces and restarts task runtimes")
+               (let ((active-configuration
+                       (application-configuration application))
+                     (active-conversation
+                       (application-conversation application))
+                     (active-provider
+                       (application-provider application))
+                     (active-agent
+                       (application-agent application))
+                     (active-process-directory (uiop:getcwd)))
+                 (test-call-with-function-replacements
+                  (list
+                   (list
+                    'application--create-tool-registry
+                    (lambda (configuration)
+                      (declare (ignore configuration))
+                      (error
+                       'mcp-server-startup-error
+                       :message "Required MCP server failed."
+                       :server-name "required"
+                       :required-p t
+                       :cause nil))))
+                  (lambda ()
+                    (test-assert
+                     (handler-case
+                         (progn
+                           (application-set-working-directory
+                            application workspace-two)
+                           nil)
+                       (working-directory-error (condition)
+                         (eq
+                          (working-directory-error-stage condition)
+                          ':tools)))
+                     "required MCP failure aborts workspace preparation")))
+                 (test-assert
+                  (and
+                   (eq (application-configuration application)
+                       active-configuration)
+                   (eq (application-conversation application)
+                       active-conversation)
+                   (eq (application-provider application)
+                       active-provider)
+                   (eq (application-tool-registry application)
+                       workspace-registry)
+                   (eq (application-agent application) active-agent)
+                   (equal (uiop:getcwd) active-process-directory)
+                   (zerop workspace-close-count)
+                   (eq
+                    (task-orchestrator-lifecycle-state
+                     workspace-orchestrator)
+                    ':open)
+                   (tool-registry-find
+                    workspace-registry "transition" "workspace-new"))
+                  "failed workspace preparation leaves the old application live"))
+             (let* ((conversation-registry
+                      (application-tests--replacement-registry
+                       "conversation-new"
+                       (lambda () (incf conversation-close-count))))
+                    (workspace-orchestrator
+                      (application--task-orchestrator application)))
+               (push conversation-registry owned-registries)
+               (test-call-with-function-replacements
+                (list
+                 (list
+                  'application--create-tool-registry
+                  (lambda (configuration)
+                    (declare (ignore configuration))
+                    conversation-registry)))
+                (lambda ()
+                  (application-install-conversation
+                   application second-conversation)))
+               (let ((conversation-orchestrator
+                       (application--task-orchestrator application)))
+                 (test-assert
+                  (and
+                   (= workspace-close-count 1)
+                   (eq (application-conversation application)
+                       second-conversation)
+                   (eq (application-tool-registry application)
+                       conversation-registry)
+                   (eq
+                    (agent-tool-registry
+                     (application-agent application))
+                    conversation-registry)
+                   (tool-registry-find
+                    conversation-registry
+                    "transition"
+                    "conversation-new")
+                   (null
+                    (tool-registry-find
+                     conversation-registry
+                     "transition"
+                     "workspace-new"))
+                   (search
+                    "conversation-new"
+                    (json-encode
+                     (tool-registry-provider-schemas
+                      conversation-registry))))
+                  "conversation installation advertises only fresh tool schemas")
+                 (test-assert
+                  (and
+                   (eq
+                    (task-orchestrator-lifecycle-state
+                     workspace-orchestrator)
+                    ':closed)
+                   (eq
+                    (task-orchestrator-lifecycle-state
+                     conversation-orchestrator)
+                    ':open)
+                   (not
+                    (eq workspace-orchestrator
+                        conversation-orchestrator)))
+                  "conversation installation replaces and restarts task runtimes")
+                 (let ((active-configuration
+                         (application-configuration application))
+                       (active-provider
+                         (application-provider application))
+                       (active-registry
+                         (application-tool-registry application))
+                       (active-agent
+                         (application-agent application))
+                       (active-rendered-sequence
+                         (application-rendered-sequence application)))
+                   (test-call-with-function-replacements
+                    (list
+                     (list
+                      'application--create-tool-registry
+                      (lambda (configuration)
+                        (declare (ignore configuration))
+                        (error
+                         'mcp-server-startup-error
+                         :message "Required MCP server failed."
+                         :server-name "required"
+                         :required-p t
+                         :cause nil))))
+                    (lambda ()
+                      (test-assert
+                       (handler-case
+                           (progn
+                             (application-install-conversation
+                              application third-conversation)
+                             nil)
+                         (mcp-server-startup-error (condition)
+                           (mcp-server-startup-error-required-p condition)))
+                       "required MCP failure aborts conversation preparation")))
+                   (test-assert
+                    (and
+                     (eq (application-configuration application)
+                         active-configuration)
+                     (eq (application-conversation application)
+                         second-conversation)
+                     (eq (application-provider application)
+                         active-provider)
+                     (eq (application-tool-registry application)
+                         active-registry)
+                     (eq (application-agent application) active-agent)
+                     (= (application-rendered-sequence application)
+                        active-rendered-sequence)
+                     (zerop conversation-close-count)
+                     (eq
+                      (task-orchestrator-lifecycle-state
+                       conversation-orchestrator)
+                      ':open)
+                     (tool-registry-find
+                      conversation-registry
+                      "transition"
+                      "conversation-new"))
+                    "failed conversation preparation leaves the old application live")))))))
+      (ignore-errors
+        (application-disconnect-task-presentation application))
+      (dolist (registry (remove-duplicates owned-registries :test #'eq))
+        (ignore-errors
+          (tool-registry-close-runtime-state registry)))
+      (uiop:chdir previous-process-directory)
+      (setf *default-pathname-defaults* previous-defaults)
+      (uiop:delete-directory-tree
+       root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-application-runtime-retirement-failures () null)
+(defun test-application-runtime-retirement-failures ()
+  "Test replacement operations roll back a non-error serious retirement failure."
+  (dolist (operation '(:mcp-reload :working-directory :conversation))
+    (let* ((configuration (test-configuration))
+           (root (test-configuration-root configuration))
+           (workspace (merge-pathnames "retirement-workspace/" root))
+           (previous-process-directory (uiop:getcwd))
+           (previous-defaults *default-pathname-defaults*)
+           (retirement-failure-enabled-p t)
+           (old-registry
+             (application-tests--replacement-registry
+              "retirement-old"
+              (lambda ()
+                (when retirement-failure-enabled-p
+                  (signal
+                   'application-test-runtime-retirement-interruption)))))
+           (new-close-count 0)
+           (new-registry
+             (application-tests--replacement-registry
+              "retirement-new"
+              (lambda ()
+                (incf new-close-count))))
+           (old-conversation
+             (conversation-create
+              configuration :identifier
+              (format nil "runtime-retirement-old-~(~A~)" operation)))
+           (new-conversation
+             (conversation-create
+              configuration :identifier
+              (format nil "runtime-retirement-new-~(~A~)" operation)))
+           (provider (provider-create configuration))
+           (old-agent
+             (agent-create :configuration configuration
+                           :provider provider
+                           :conversation old-conversation
+                           :tool-registry old-registry
+                           :worker nil))
+           (application
+             (make-instance
+              'application
+              :configuration configuration
+              :conversation old-conversation
+              :provider provider
+              :tool-registry old-registry
+              :worker nil
+              :agent old-agent
+              :ui nil))
+           (old-orchestrator
+             (application--task-orchestrator application))
+           (new-orchestrator
+             (task-run-tool-orchestrator
+              (tool-registry-find new-registry "task" "run")))
+           (mcp-registration-snapshot (mcp--registry-snapshot))
+           (context-registration-snapshot (context--registry-snapshot))
+           (command-registration-snapshot
+             (application-command--registry-snapshot))
+           (failure nil))
+      (ensure-directories-exist workspace)
+      (application-connect-task-presentation application)
+      (unwind-protect
+           (test-call-with-function-replacements
+            (list
+             (list
+              'application--create-tool-registry
+              (lambda (replacement-configuration)
+                (declare (ignore replacement-configuration))
+                new-registry))
+             (list
+              'mcp-configuration-load
+              (lambda (replacement-configuration)
+                (declare (ignore replacement-configuration))
+                nil))
+             (list
+              'user-init-load
+              (lambda (replacement-configuration)
+                (declare (ignore replacement-configuration))
+                nil)))
+            (lambda ()
+              (setf
+               failure
+               (handler-case
+                   (progn
+                     (ecase operation
+                       (:mcp-reload
+                        (application-reload-mcp application))
+                       (:working-directory
+                        (application-set-working-directory
+                         application workspace))
+                       (:conversation
+                        (application-install-conversation
+                         application new-conversation)))
+                     nil)
+                 (working-directory-error (condition)
+                   (and
+                    (eq operation ':working-directory)
+                    (eq (working-directory-error-stage condition) ':tools)
+                    (typep
+                     (working-directory-error-cause condition)
+                     'application-test-runtime-retirement-interruption)
+                    condition))
+                 (application-runtime-replacement-error (condition)
+                   (and
+                    (eq
+                     (application-runtime-replacement-error-operation
+                      condition)
+                     operation)
+                    (eq
+                     (application-runtime-replacement-error-stage condition)
+                     ':retire)
+                    (typep
+                     (application-runtime-replacement-error-cause condition)
+                     'application-test-runtime-retirement-interruption)
+                    condition))))
+              (test-assert
+               failure
+               "runtime retirement reports its non-error serious failure")
+              (test-assert
+               (and
+                (eq (application-configuration application) configuration)
+                (eq (application-conversation application) old-conversation)
+                (eq (application-provider application) provider)
+                (eq (application-tool-registry application) old-registry)
+                (eq (application-agent application) old-agent))
+               "runtime retirement failure preserves application ownership")
+              (test-assert
+               (and
+                (application-task-presentation-listener application)
+                (eq
+                 (task-orchestrator-lifecycle-state old-orchestrator)
+                 ':open)
+                (eq
+                 (task-orchestrator-lifecycle-state new-orchestrator)
+                 ':closed)
+                (= new-close-count 1))
+               "runtime retirement rollback resumes old tasks and closes new tasks")
+              (test-assert
+               (and
+                (equal (uiop:getcwd) previous-process-directory)
+                (equal *default-pathname-defaults* previous-defaults)
+                (equal mcp-registration-snapshot
+                       (mcp--registry-snapshot))
+                (equal context-registration-snapshot
+                       (context--registry-snapshot))
+                (equal command-registration-snapshot
+                       (application-command--registry-snapshot)))
+               "runtime retirement rollback preserves process and extension state")))
+        (setf retirement-failure-enabled-p nil)
+        (ignore-errors
+          (application-disconnect-task-presentation application))
+        (ignore-errors
+          (tool-registry-close-runtime-state old-registry))
+        (ignore-errors
+          (tool-registry-close-runtime-state new-registry))
+        (uiop:chdir previous-process-directory)
+        (setf *default-pathname-defaults* previous-defaults)
+        (mcp--registry-restore mcp-registration-snapshot)
+        (context--registry-restore context-registration-snapshot)
+        (application-command--registry-restore
+         command-registration-snapshot)
+        (uiop:delete-directory-tree
+         root :validate t :if-does-not-exist :ignore))))
+  nil)
+
+(-> test-application-create-unwind-safety () null)
+(defun test-application-create-unwind-safety ()
+  "Test late construction failure closes every newly owned runtime."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (original-registry-create
+           (symbol-function 'application--create-tool-registry))
+         (original-worker-create
+           (symbol-function 'lisp-worker-pool-create))
+         (original-registry-close
+           (symbol-function 'tool-registry-close-runtime-state))
+         (original-worker-stop
+           (symbol-function 'lisp-worker-manager-stop))
+         (original-goal-load
+           (symbol-function 'application--load-goal))
+         (mcp-registration-snapshot (mcp--registry-snapshot))
+         (context-registration-snapshot (context--registry-snapshot))
+         (command-registration-snapshot
+           (application-command--registry-snapshot))
+         (constructed-application nil)
+         (created-registry nil)
+         (created-worker nil)
+         (registry-closed-p nil)
+         (worker-stopped-p nil))
+    (unwind-protect
+         (test-call-with-function-replacements
+          (list
+           (list
+            'image-state-load
+            (lambda (configuration)
+              (declare (ignore configuration))
+              nil))
+           (list
+            'application--create-tool-registry
+            (lambda (configuration)
+              (setf created-registry
+                    (funcall original-registry-create configuration))))
+           (list
+            'lisp-worker-pool-create
+            (lambda (configuration)
+              (setf created-worker
+                    (funcall original-worker-create configuration))))
+           (list
+            'tool-registry-close-runtime-state
+            (lambda (registry)
+              (when (eq registry created-registry)
+                (setf registry-closed-p t))
+              (funcall original-registry-close registry)))
+           (list
+            'lisp-worker-manager-stop
+            (lambda (worker)
+              (when (eq worker created-worker)
+                (setf worker-stopped-p t))
+              (funcall original-worker-stop worker)))
+           (list
+            'application--load-goal
+            (lambda (application)
+              (setf constructed-application application)
+              (funcall original-goal-load application)
+              (error "Injected failure after application presentation."))))
+          (lambda ()
+            (test-assert
+             (handler-case
+                 (progn
+                   (application-create configuration)
+                   nil)
+               (simple-error (condition)
+                 (search "Injected failure" (format nil "~A" condition))))
+             "application construction propagates a late initialization failure")
+            (test-assert
+             (and constructed-application
+                  created-registry
+                  created-worker
+                  registry-closed-p
+                  worker-stopped-p)
+             "late construction failure closes its registry and worker")
+            (test-assert
+             (and
+              (null
+               (application-task-presentation-listener
+                constructed-application))
+              (eq
+               (task-orchestrator-lifecycle-state
+                (application--task-orchestrator constructed-application))
+               ':closed))
+             "late construction failure removes presentation and task runtimes")
+            (test-assert
+             (and
+              (equal mcp-registration-snapshot (mcp--registry-snapshot))
+              (equal context-registration-snapshot
+                     (context--registry-snapshot))
+              (equal command-registration-snapshot
+                     (application-command--registry-snapshot)))
+             "late construction failure restores declarative registrations")))
+      (uiop:delete-directory-tree
+       root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-application-reconnect-unwind-safety () null)
+(defun test-application-reconnect-unwind-safety ()
+  "Test reconnect preparation and runtime retirement rollback."
+  (labels ((run-case (stage)
+             "Exercise reconnect transaction STAGE with isolated resources."
+             (let* ((configuration (test-configuration))
+                    (root (test-configuration-root configuration))
+                    (conversation
+                      (conversation-create
+                       configuration
+                       :identifier
+                       (format nil "reconnect-transaction-~(~A~)" stage)))
+                    (provider (provider-create configuration))
+                    (old-registry
+                      (application--create-tool-registry configuration))
+                    (old-worker (lisp-worker-pool-create configuration))
+                    (old-agent
+                      (agent-create :configuration configuration
+                                    :provider provider
+                                    :conversation conversation
+                                    :tool-registry old-registry
+                                    :worker old-worker))
+                    (old-ui
+                      (terminal-ui-create
+                       :terminal
+                       (make-instance 'recording-terminal :columns 72)))
+                    (application
+                      (make-instance 'application
+                                     :configuration configuration
+                                     :conversation conversation
+                                     :provider provider
+                                     :tool-registry old-registry
+                                     :worker old-worker
+                                     :agent old-agent
+                                     :ui old-ui))
+                    (old-orchestrator
+                      (application--task-orchestrator application))
+                    (original-context-reset
+                      (symbol-function 'context-runtime-reset))
+                    (original-registry-create
+                      (symbol-function
+                       'application--create-tool-registry))
+                    (original-worker-create
+                      (symbol-function 'lisp-worker-pool-create))
+                    (original-registry-close
+                      (symbol-function
+                       'tool-registry-close-runtime-state))
+                    (original-registry-quiesce
+                      (symbol-function
+                       'tool-registry-quiesce-runtime-state))
+                    (original-registry-resume
+                      (symbol-function
+                       'tool-registry-resume-runtime-state))
+                    (original-worker-stop
+                      (symbol-function 'lisp-worker-manager-stop))
+                    (mcp-registration-snapshot
+                      (mcp--registry-snapshot))
+                    (context-registration-snapshot
+                      (context--registry-snapshot))
+                    (command-registration-snapshot
+                      (application-command--registry-snapshot))
+                    (new-registry nil)
+                    (new-worker nil)
+                    (new-registry-closed-p nil)
+                    (new-worker-stopped-p nil)
+                    (old-worker-stopped-p nil)
+                    (context-transition-p nil)
+                    (image-transition-p nil)
+                    (old-close-after-transitions-p nil)
+                    (old-registry-resumed-p nil)
+                    (returned-application nil)
+                    (failure-p nil))
+               (configuration-ensure-directories configuration)
+               (application-connect-task-presentation application)
+               (unwind-protect
+                    (test-call-with-function-replacements
+                     (list
+                      (list
+                       'configuration-create
+                       (lambda (&key source-root working-directory model
+                                    reasoning-effort immutable-p)
+                         (declare (ignore source-root))
+                         (configuration--clone
+                          configuration
+                          :working-directory working-directory
+                          :model model
+                          :reasoning-effort reasoning-effort
+                          :immutable-p immutable-p)))
+                      (list
+                       'application-terminal-ui-create
+                       (lambda ()
+                         (terminal-ui-create
+                          :terminal
+                          (make-instance
+                           'recording-terminal
+                           :columns 72))))
+                      (list
+                       'context-runtime-reset
+                       (lambda ()
+                         (setf context-transition-p t)
+                         (funcall original-context-reset)))
+                      (list
+                       'image-state-reconnect
+                       (lambda ()
+                         (setf image-transition-p t)
+                         (when (eq stage ':pre-commit)
+                           (error
+                            "Injected reconnect preparation failure."))
+                         nil))
+                      (list
+                       'application--create-tool-registry
+                       (lambda (new-configuration)
+                         (setf new-registry
+                               (funcall
+                                original-registry-create
+                                new-configuration))))
+                      (list
+                       'lisp-worker-pool-create
+                       (lambda (new-configuration)
+                         (setf new-worker
+                               (funcall
+                                original-worker-create
+                                new-configuration))))
+                      (list
+                       'tool-registry-quiesce-runtime-state
+                       (lambda (registry)
+                         (if (eq registry old-registry)
+                             (progn
+                               (setf old-close-after-transitions-p
+                                     (and (not context-transition-p)
+                                          image-transition-p))
+                               (multiple-value-bind
+                                   (completed retirement-failure)
+                                   (funcall original-registry-quiesce registry)
+                                 (values
+                                  completed
+                                  (if (eq stage ':retirement)
+                                      (make-condition
+                                       'task-error
+                                       :message
+                                       "Injected reconnect retirement failure."
+                                       :tool-name "task.run")
+                                      retirement-failure))))
+                             (funcall original-registry-quiesce registry))))
+                      (list
+                       'tool-registry-resume-runtime-state
+                       (lambda (registry &key tools)
+                         (when (eq registry old-registry)
+                           (setf old-registry-resumed-p t))
+                         (funcall original-registry-resume
+                                  registry :tools tools)))
+                      (list
+                       'tool-registry-close-runtime-state
+                       (lambda (registry)
+                         (when (eq registry new-registry)
+                           (setf new-registry-closed-p t))
+                         (funcall original-registry-close registry)))
+                      (list
+                       'lisp-worker-manager-stop
+                       (lambda (worker)
+                         (when (eq worker new-worker)
+                           (setf new-worker-stopped-p t))
+                         (when (eq worker old-worker)
+                           (setf old-worker-stopped-p t))
+                         (funcall original-worker-stop worker))))
+                     (lambda ()
+                       (setf failure-p
+                             (handler-case
+                                 (progn
+                                   (setf returned-application
+                                         (application-reconnect application))
+                                   nil)
+                               (error (condition)
+                                 (case stage
+                                   (:pre-commit
+                                    (search
+                                     "Injected reconnect preparation"
+                                     (format nil "~A" condition)))
+                                   (:retirement
+                                    (and
+                                     (typep
+                                      condition
+                                      'application-runtime-replacement-error)
+                                     (eq
+                                      (application-runtime-replacement-error-operation
+                                       condition)
+                                      ':reconnect)
+                                     (eq
+                                      (application-runtime-replacement-error-stage
+                                       condition)
+                                      ':retire)
+                                     (search
+                                      "Injected reconnect retirement"
+                                      (format
+                                       nil
+                                       "~A"
+                                       (application-runtime-replacement-error-cause
+                                        condition)))))))))))
+                 (ecase stage
+                   (:pre-commit
+                    (test-assert
+                     failure-p
+                     "reconnect propagates a pre-commit preparation failure")
+                    (test-assert
+                     (and
+                      (eq
+                       (application-tool-registry application)
+                       old-registry)
+                      (eq (application-worker application) old-worker)
+                      (eq (application-agent application) old-agent)
+                      (eq
+                       (task-orchestrator-lifecycle-state old-orchestrator)
+                       ':open)
+                      (application-task-presentation-listener application)
+                      (not old-worker-stopped-p))
+                     "pre-commit failure leaves the retained application live")
+                    (test-assert
+                     (and
+                      new-registry
+                      new-worker
+                      new-registry-closed-p
+                      new-worker-stopped-p)
+                     "pre-commit failure closes replacement resources")
+                    (test-assert
+                     (and
+                      (not context-transition-p)
+                      image-transition-p
+                      (not old-close-after-transitions-p)
+                      (equal
+                       mcp-registration-snapshot
+                       (mcp--registry-snapshot))
+                      (equal
+                       context-registration-snapshot
+                       (context--registry-snapshot))
+                      (equal
+                       command-registration-snapshot
+                       (application-command--registry-snapshot)))
+                     "pre-commit failure preserves transient context receipts"))
+                   (:retirement
+                    (let ((new-orchestrator
+                            (task-run-tool-orchestrator
+                             (tool-registry-find
+                              new-registry "task" "run"))))
+                      (test-assert
+                       (and failure-p (null returned-application))
+                       "runtime retirement failure aborts reconnect")
+                      (test-assert
+                       (and
+                        (eq
+                         (application-tool-registry application)
+                         old-registry)
+                        (eq
+                         (application-worker application)
+                         old-worker)
+                        (eq
+                         (application-agent application)
+                         old-agent)
+                        new-registry-closed-p
+                        new-worker-stopped-p)
+                      "retirement failure keeps old ownership and closes replacements")
+                      (test-assert
+                       (and
+                        old-close-after-transitions-p
+                        old-registry-resumed-p
+                        (not old-worker-stopped-p)
+                        (not context-transition-p)
+                        image-transition-p
+                        (application-task-presentation-listener application)
+                        (eq
+                         (task-orchestrator-lifecycle-state
+                          old-orchestrator)
+                         ':open)
+                        (eq
+                         (task-orchestrator-lifecycle-state
+                          new-orchestrator)
+                         ':closed)
+                        (equal
+                         mcp-registration-snapshot
+                         (mcp--registry-snapshot))
+                        (equal
+                         context-registration-snapshot
+                         (context--registry-snapshot))
+                        (equal
+                         command-registration-snapshot
+                         (application-command--registry-snapshot)))
+                       "retirement rollback resumes the old runtime and registrations"))))
+              (ignore-errors
+                (application-disconnect-task-presentation application))
+              (when returned-application
+                (ignore-errors
+                  (application-disconnect-task-presentation
+                   returned-application)))
+              (dolist (registry
+                       (remove-duplicates
+                        (remove nil (list old-registry new-registry))
+                        :test #'eq))
+                (ignore-errors
+                  (funcall original-registry-close registry)))
+              (dolist (worker
+                       (remove-duplicates
+                        (remove nil (list old-worker new-worker))
+                        :test #'eq))
+                (ignore-errors
+                  (funcall original-worker-stop worker)))
+              (mcp--registry-restore mcp-registration-snapshot)
+              (context--registry-restore context-registration-snapshot)
+              (application-command--registry-restore
+               command-registration-snapshot)
+              (uiop:delete-directory-tree
+               root :validate t :if-does-not-exist :ignore)))))
+    (run-case ':pre-commit)
+    (run-case ':retirement))
   nil)
 
 (-> test-application-task-presentation () null)
@@ -3347,6 +4264,10 @@
   (test-conversation-picker)
   (test-working-directory-switch)
   (test-application-tool-runtime-lifecycle)
+  (test-application-runtime-replacement-transactions)
+  (test-application-runtime-retirement-failures)
+  (test-application-create-unwind-safety)
+  (test-application-reconnect-unwind-safety)
   (test-application-task-presentation)
   (test-working-directory-command)
   (test-effort-switch)

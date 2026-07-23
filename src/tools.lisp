@@ -146,6 +146,15 @@
   "Return TOOL's dotted human-readable name."
   (format nil "~A.~A" (tool-namespace tool) (tool-name tool)))
 
+(-> tool-authorization-identity-fields (tool) list)
+(defgeneric tool-authorization-identity-fields (tool)
+  (:documentation
+   "Return ordered label and exact value pairs identifying TOOL for approval."))
+
+(defmethod tool-authorization-identity-fields ((tool tool))
+  "Identify an ordinary TOOL by its canonical Autolith name."
+  (list (list "tool" (tool-canonical-name tool))))
+
 (-> tool-object-schema (json-object list) json-object)
 (defun tool-object-schema (properties required)
   "Return a closed JSON object schema with PROPERTIES and REQUIRED names."
@@ -214,6 +223,12 @@
      "Inspection, waiting, and cancellation for task jobs.")
     ((string= namespace "yield")
      "Required terminal result submission for child agents.")
+    ((string= namespace "skill")
+     "Request-local loading of discovered Autolith Skills.")
+    ((string= namespace "mcp")
+     "MCP server status, discovery refresh, resources, and prompts.")
+    ((uiop:string-prefix-p "mcp__" namespace)
+     "Tools supplied by one configured external MCP server.")
     (t
      "Autolith operations.")))
 
@@ -264,6 +279,13 @@
     :reader tool-context-command-authorization-function
     :type (option function)
     :documentation "The callback deciding whether and how shell commands may run.")
+   (tool-authorization-function
+    :initarg :tool-authorization-function
+    :initform nil
+    :reader tool-context-tool-authorization-function
+    :type (option function)
+    :documentation
+    "The callback deciding whether one externally implemented tool may run.")
    (agent
     :initarg :agent
     :initform nil
@@ -300,6 +322,23 @@
              :tool-name "shell.run"))
     decision))
 
+(-> tool-context-authorize-tool
+    (tool-context tool json-object)
+    keyword)
+(defun tool-context-authorize-tool (context tool arguments)
+  "Return :ALLOW or :DENY for externally implemented TOOL and ARGUMENTS."
+  (let* ((function (tool-context-tool-authorization-function context))
+         (decision (if function
+                       (funcall function tool arguments)
+                       ':deny)))
+    (unless (member decision '(:allow :deny))
+      (error 'tool-error
+             :message
+             (format nil "Tool authorization returned invalid decision ~S."
+                     decision)
+             :tool-name (tool-canonical-name tool)))
+    decision))
+
 (defclass tool-result ()
   ((content
     :initarg :content
@@ -313,6 +352,13 @@
     :type list
     :documentation
     "Provider-visible local images returned by a successful tool operation.")
+   (content-blocks
+    :initarg :content-blocks
+    :initform nil
+    :reader tool-result-content-blocks
+    :type list
+    :documentation
+    "Ordered provider-visible strings and image attachments, when multimodal.")
    (success-p
     :initarg :success-p
     :reader tool-result-success-p
@@ -325,19 +371,57 @@
   (:method ((result tool-result))
     nil))
 
-(-> tool-success (t &key (:image-attachments list)) tool-result)
-(defun tool-success (content &key image-attachments)
-  "Return a successful bounded tool result with CONTENT and optional images."
+(-> tool-result--normalize-content-blocks (list) list)
+(defun tool-result--normalize-content-blocks (blocks)
+  "Validate BLOCKS and bound their aggregate model-visible text."
+  (let ((remaining 8000)
+        (normalized nil))
+    (dolist (block blocks)
+      (etypecase block
+        (string
+         (when (plusp remaining)
+           (let ((bounded
+                   (subseq block 0 (min remaining (length block)))))
+             (push bounded normalized)
+             (decf remaining (length bounded)))))
+        (image-attachment
+         (push block normalized))))
+    (nreverse normalized)))
+
+(-> tool-success
+    (t &key (:image-attachments list) (:content-blocks list))
+    tool-result)
+(defun tool-success (content &key image-attachments content-blocks)
+  "Return a successful bounded tool result with optional multimodal output."
+  (when (and image-attachments content-blocks)
+    (error 'tool-error
+           :message
+           "Tool results cannot mix legacy image and ordered content arguments."
+           :tool-name "unknown"))
   (unless (every (lambda (attachment)
                    (typep attachment 'image-attachment))
                  image-attachments)
     (error 'tool-error
            :message "Tool image results must contain image attachments."
            :tool-name "unknown"))
-  (make-instance 'tool-result
-                 :content (bounded-string content)
-                 :image-attachments (copy-list image-attachments)
-                 :success-p t))
+  (let* ((raw-blocks
+           (or content-blocks
+               (when image-attachments
+                 (append
+                  (when (non-empty-string-p (format nil "~A" content))
+                    (list (format nil "~A" content)))
+                  image-attachments))))
+         (blocks (tool-result--normalize-content-blocks raw-blocks))
+         (attachments
+           (remove-if-not
+            (lambda (block)
+              (typep block 'image-attachment))
+            blocks)))
+    (make-instance 'tool-result
+                   :content (bounded-string content)
+                   :image-attachments attachments
+                   :content-blocks blocks
+                   :success-p t)))
 
 (-> tool-failure (t) tool-result)
 (defun tool-failure (content)
@@ -373,6 +457,33 @@
   "Permit disposable Lisp-worker tools inside child agents."
   t)
 
+(-> tool-conversation-persistence (tool) tool-conversation-persistence)
+(defgeneric tool-conversation-persistence (tool)
+  (:documentation
+   "Return how TOOL's call and result participate in conversation persistence."))
+
+(defmethod tool-conversation-persistence ((tool tool))
+  "Persist ordinary tool calls and their results in durable conversation history."
+  ':durable)
+
+(-> tool-provider-round-trip-barrier-p (tool) boolean)
+(defgeneric tool-provider-round-trip-barrier-p (tool)
+  (:documentation
+   "Return true when TOOL must finish before the provider may issue later calls."))
+
+(defmethod tool-provider-round-trip-barrier-p ((tool tool))
+  "Allow ordinary tool calls to execute in provider wire order."
+  nil)
+
+(-> tool-compact-result-visible-p (tool) boolean)
+(defgeneric tool-compact-result-visible-p (tool)
+  (:documentation
+   "Return true when TOOL's successful result remains visible in compact mode."))
+
+(defmethod tool-compact-result-visible-p ((tool tool))
+  "Hide ordinary successful results in compact presentation."
+  nil)
+
 (-> tool-runtime-identity (tool) t)
 (defgeneric tool-runtime-identity (tool)
   (:documentation
@@ -381,6 +492,15 @@
 (defmethod tool-runtime-identity ((tool tool))
   "Return NIL because ordinary tools own no ephemeral runtime."
   nil)
+
+(-> tool-runtime-close-priority (tool) integer)
+(defgeneric tool-runtime-close-priority (tool)
+  (:documentation
+   "Return TOOL runtime shutdown priority; larger values close first."))
+
+(defmethod tool-runtime-close-priority ((tool tool))
+  "Give ordinary independent runtimes the baseline shutdown priority."
+  0)
 
 (-> tool-runtime-close (tool) null)
 (defgeneric tool-runtime-close (tool)
@@ -423,42 +543,164 @@
     :initform (make-hash-table :test #'equal)
     :reader tool-registry-index
     :type hash-table
-    :documentation "Canonical dotted tool names mapped to tool objects."))
+    :documentation "Canonical dotted tool names mapped to tool objects.")
+   (runtime-bindings
+    :initform (make-hash-table :test #'eq)
+    :reader tool-registry-runtime-bindings
+    :type hash-table
+    :documentation
+    "Subsystem-specific bindings used to reconcile shared dynamic runtimes."))
   (:documentation "The model-visible tools and their active dispatch objects."))
 
-(-> tool-registry--apply-runtime-operation
-    (tool-registry function &key (:reverse-p boolean))
-    null)
-(defun tool-registry--apply-runtime-operation
-    (registry function &key reverse-p)
-  "Call FUNCTION once per runtime, optionally in reverse registration order."
+(-> tool-runtime-resume (tool tool-registry) null)
+(defgeneric tool-runtime-resume (tool registry)
+  (:documentation
+   "Restart TOOL's shared ephemeral runtime and reconcile REGISTRY."))
+
+(defmethod tool-runtime-resume ((tool tool) (registry tool-registry))
+  "Leave an ordinary stateless TOOL unchanged."
+  (declare (ignore tool registry))
+  nil)
+
+(-> tool-registry-runtime-binding (tool-registry symbol) t)
+(defun tool-registry-runtime-binding (registry key)
+  "Return REGISTRY's runtime binding under KEY, or NIL."
+  (gethash key (tool-registry-runtime-bindings registry)))
+
+(-> tool-registry-bind-runtime (tool-registry symbol t) t)
+(defun tool-registry-bind-runtime (registry key binding)
+  "Associate BINDING with KEY in REGISTRY and return BINDING."
+  (setf (gethash key (tool-registry-runtime-bindings registry)) binding))
+
+(-> tool-registry-unbind-runtime (tool-registry symbol) boolean)
+(defun tool-registry-unbind-runtime (registry key)
+  "Remove KEY's runtime binding from REGISTRY and report whether it existed."
+  (and (remhash key (tool-registry-runtime-bindings registry)) t))
+
+(-> tool-registry--runtime-representatives
+    (tool-registry &key (:reverse-p boolean))
+    list)
+(defun tool-registry--runtime-representatives (registry &key reverse-p)
+  "Return one representative tool for every distinct runtime in REGISTRY."
   (let ((seen (make-hash-table :test #'eq))
-        (first-failure nil))
+        (representatives nil))
     (dolist (tool (if reverse-p
                       (reverse (copy-list (tool-registry-tools registry)))
                       (tool-registry-tools registry)))
       (let ((identity (tool-runtime-identity tool)))
         (when (and identity (not (gethash identity seen)))
           (setf (gethash identity seen) t)
-          (handler-case
-              (funcall function tool)
-            (error (condition)
-              (unless first-failure
-                (setf first-failure condition)))))))
+          (push tool representatives))))
+    (nreverse representatives)))
+
+(-> tool-registry--ordered-runtime-representatives
+    (tool-registry &key (:reverse-p boolean) (:priority-p boolean))
+    list)
+(defun tool-registry--ordered-runtime-representatives
+    (registry &key reverse-p priority-p)
+  "Return REGISTRY runtime representatives in the requested operation order."
+  (let ((representatives
+          (tool-registry--runtime-representatives
+           registry :reverse-p reverse-p)))
+    (if priority-p
+        (stable-sort representatives #'>
+                     :key #'tool-runtime-close-priority)
+        representatives)))
+
+(-> tool-registry--attempt-runtime-operation (list function)
+    (values list (option serious-condition)))
+(defun tool-registry--attempt-runtime-operation (tools function)
+  "Apply FUNCTION to TOOLS, returning successful tools and the first failure."
+  (let ((completed nil)
+        (first-failure nil))
+    (dolist (tool tools)
+      (handler-case
+          (progn
+            (funcall function tool)
+            (push tool completed))
+        (serious-condition (condition)
+          (unless first-failure
+            (setf first-failure condition)))))
+    (values (nreverse completed) first-failure)))
+
+(-> tool-registry--apply-runtime-operation
+    (tool-registry function &key (:reverse-p boolean) (:priority-p boolean))
+    null)
+(defun tool-registry--apply-runtime-operation
+    (registry function &key reverse-p priority-p)
+  "Call FUNCTION once per runtime in registration or shutdown order."
+  (multiple-value-bind (completed first-failure)
+      (tool-registry--attempt-runtime-operation
+       (tool-registry--ordered-runtime-representatives
+        registry
+        :reverse-p reverse-p
+        :priority-p priority-p)
+       function)
+    (declare (ignore completed))
     (when first-failure
       (error first-failure)))
   nil)
 
+(-> tool-registry-quiesce-runtime-state
+    (tool-registry)
+    (values list (option serious-condition)))
+(defun tool-registry-quiesce-runtime-state (registry)
+  "Close every runtime and return the successfully quiesced tools and failure."
+  (tool-registry--attempt-runtime-operation
+   (tool-registry--ordered-runtime-representatives
+    registry :reverse-p t :priority-p t)
+   #'tool-runtime-close))
+
 (-> tool-registry-close-runtime-state (tool-registry) null)
 (defun tool-registry-close-runtime-state (registry)
-  "Stop runtimes in reverse registration order so dependents close first."
+  "Stop runtimes by explicit dependency priority, then reverse registration."
   (tool-registry--apply-runtime-operation
-   registry #'tool-runtime-close :reverse-p t))
+   registry #'tool-runtime-close :reverse-p t :priority-p t))
+
+(-> tool-registry-resume-runtime-state
+    (tool-registry &key (:tools list))
+    null)
+(defun tool-registry-resume-runtime-state
+    (registry &key (tools nil tools-supplied-p))
+  "Restart selected quiesced runtimes in dependency order and reconcile REGISTRY."
+  (let ((ordered
+          (stable-sort
+           (copy-list
+            (if tools-supplied-p
+                tools
+                (tool-registry--runtime-representatives registry)))
+           #'<
+           :key #'tool-runtime-close-priority)))
+    (multiple-value-bind (completed first-failure)
+        (tool-registry--attempt-runtime-operation
+         ordered
+         (lambda (tool)
+           (tool-runtime-resume tool registry)))
+      (declare (ignore completed))
+      (when first-failure
+        (error first-failure))))
+  nil)
+
+(-> tool-runtime-prune-checkpoint-state (tool tool-registry) null)
+(defgeneric tool-runtime-prune-checkpoint-state (tool registry)
+  (:documentation
+   "Remove TOOL state that must not survive in a checkpointed REGISTRY."))
+
+(defmethod tool-runtime-prune-checkpoint-state
+    ((tool tool) (registry tool-registry))
+  "Leave an ordinary stateless TOOL in the checkpoint registry."
+  (declare (ignore tool registry))
+  nil)
 
 (-> tool-registry-detach-runtime-state (tool-registry) null)
 (defun tool-registry-detach-runtime-state (registry)
   "Detach every distinct inherited tool runtime owned by REGISTRY."
-  (tool-registry--apply-runtime-operation registry #'tool-runtime-detach))
+  (tool-registry--apply-runtime-operation
+   registry #'tool-runtime-detach)
+  (tool-registry--apply-runtime-operation
+   registry
+   (lambda (tool)
+     (tool-runtime-prune-checkpoint-state tool registry))))
 
 (-> tool-registry-register (tool-registry tool) tool)
 (defun tool-registry-register (registry tool)

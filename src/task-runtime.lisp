@@ -445,6 +445,17 @@
            :tool-name (tool-canonical-name tool)))
   nil)
 
+(defmethod tool-runtime-close-priority ((tool task-orchestrator-tool))
+  "Stop child task workers before runtimes their shared registries may use."
+  100)
+
+(defmethod tool-runtime-resume
+    ((tool task-orchestrator-tool) (registry tool-registry))
+  "Restart TOOL's scheduler after a non-stopping checkpoint fork."
+  (declare (ignore registry))
+  (task-orchestrator-refresh (task-orchestrator-tool-orchestrator tool))
+  nil)
+
 (defmethod tool-runtime-detach ((tool task-orchestrator-tool))
   "Remove TOOL's closed shared scheduler graph before image saving."
   (task-orchestrator-detach (task-orchestrator-tool-orchestrator tool)))

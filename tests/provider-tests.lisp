@@ -501,6 +501,284 @@
                  "terminal failures retain their structured error code"))
   nil)
 
+(-> provider-tests--credentials (configuration) oauth-credentials)
+(defun provider-tests--credentials (configuration)
+  "Return four distinct synthetic credentials for provider containment tests."
+  (make-instance
+   'oauth-credentials
+   :access-token "provider-test-access-7f386d"
+   :refresh-token "provider-test-refresh-a280c4"
+   :id-token "provider-test-identity-f969b1"
+   :account-id "provider-test-account-a0542e"
+   :expires-at nil
+   :source-path (configuration-auth-path configuration)))
+
+(-> provider-tests--assert-credential-free (t list string) null)
+(defun provider-tests--assert-credential-free (root secrets description)
+  "Assert ROOT contains none of SECRETS, reporting DESCRIPTION."
+  (dolist (secret secrets)
+    (test-assert
+     (not (test-object-contains-string-p root secret))
+     description))
+  nil)
+
+(-> test-provider-credential-echo-containment () null)
+(defun test-provider-credential-echo-containment ()
+  "Test provider wire data cannot echo request credentials into retained state."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration
+                                :identifier "provider-secret-echo"))
+         (provider (provider-create configuration))
+         (credentials (provider-tests--credentials configuration))
+         (secrets (oauth-credentials-secret-values credentials)))
+    (labels
+        ((attempt (response-function event-callback)
+           "Run one real provider attempt against RESPONSE-FUNCTION."
+           (test-call-with-function-replacements
+            (list
+             (list
+              'provider-open-response-stream
+              (lambda (active-provider request
+                       &key active-credentials active-conversation
+                         &allow-other-keys)
+                (declare
+                 (ignore active-provider request active-credentials
+                         active-conversation))
+                (funcall response-function))))
+            (lambda ()
+              (provider-attempt-turn
+               provider
+               conversation
+               :tool-namespaces #()
+               :event-callback event-callback
+               :force-refresh nil
+               :goal-context nil
+               :compaction-p nil)))))
+      (unwind-protect
+           (progn
+             (credential-source-save
+              (credential-manager-primary-source
+               (provider-credential-manager provider))
+              credentials)
+             (let* ((events nil)
+                    (source
+                      (concatenate
+                       'string
+                       (test-sse-event-string
+                        (json-object
+                         "type" "response.created"
+                         "response"
+                         (json-object
+                          "id"
+                          (oauth-credentials-access-token credentials))))
+                       (test-sse-event-string
+                        (json-object
+                         "type" "response.output_text.delta"
+                         "delta"
+                         (oauth-credentials-refresh-token credentials)))
+                       (test-sse-event-string
+                        (json-object
+                         "type" "response.reasoning_summary_text.delta"
+                         "output_index" 0
+                         "summary_index" 0
+                         "delta"
+                         (oauth-credentials-id-token credentials)))
+                       (test-sse-event-string
+                        (json-object
+                         "type" "response.output_item.done"
+                         "item"
+                         (json-object
+                          "type" "message"
+                          "role" "assistant"
+                          "content"
+                          (json-array
+                           (json-object
+                            "type" "output_text"
+                            "text"
+                            (oauth-credentials-account-id credentials))))))
+                       (test-sse-event-string
+                        (json-object
+                         "type" "response.completed"
+                         "response"
+                         (json-object
+                          "id"
+                          (oauth-credentials-access-token credentials)
+                          "usage"
+                          (json-object
+                           "echo"
+                           (coerce secrets 'vector)))))))
+                    (headers
+                      (list
+                       (cons "x-request-id"
+                             (oauth-credentials-account-id credentials))
+                       (cons "x-codex-turn-state"
+                             (format nil "~{~A~^/~}" secrets))))
+                    (result
+                      (attempt
+                       (lambda ()
+                         (values
+                          (make-instance
+                           'test-character-input-stream
+                           :source source)
+                          200
+                          headers))
+                       (lambda (event)
+                         (push event events)))))
+               (provider-tests--assert-credential-free
+                (list result events)
+                secrets
+                "successful provider results and callbacks contain no credential")
+               (test-assert
+                (test-object-contains-string-p
+                 (list result events)
+                 *provider-credential-redaction-marker*)
+                "successful credential echoes carry an explicit redaction marker")
+               (test-assert
+                (and (provider-result-response-id result)
+                     (provider-result-usage result)
+                     (provider-result-turn-state result)
+                     (find-if
+                      (lambda (event)
+                        (typep event 'assistant-delta-event))
+                      events)
+                     (find-if
+                      (lambda (event)
+                        (typep event 'reasoning-delta-event))
+                      events)
+                     (find-if
+                      (lambda (event)
+                        (typep event 'provider-item-event))
+                      events))
+                "successful containment retains each semantic provider channel"))
+             (let* ((source
+                      (test-sse-event-string
+                       (json-object
+                        "type" "response.failed"
+                        "response"
+                        (json-object
+                         "id" (oauth-credentials-access-token credentials)
+                         "error"
+                         (json-object
+                          "code" "invalid_prompt"
+                          "message"
+                          (oauth-credentials-refresh-token credentials)
+                          "request_id"
+                          (oauth-credentials-account-id credentials))))))
+                    (condition
+                      (handler-case
+                          (progn
+                            (attempt
+                             (lambda ()
+                               (values
+                                (make-instance
+                                 'test-character-input-stream
+                                 :source source)
+                                200
+                                nil))
+                             #'identity)
+                            nil)
+                        (provider-error (failure)
+                          failure))))
+               (provider-tests--assert-credential-free
+                condition
+                secrets
+                "structured provider failures contain no credential")
+               (test-assert
+                (test-object-contains-string-p
+                 condition
+                 *provider-credential-redaction-marker*)
+                "structured provider failures retain a redaction marker"))
+             (let* ((source
+                      (format
+                       nil
+                       "data: {\"type\":\"~A~%~%"
+                       (oauth-credentials-access-token credentials)))
+                    (condition
+                      (handler-case
+                          (progn
+                            (attempt
+                             (lambda ()
+                               (values
+                                (make-instance
+                                 'test-character-input-stream
+                                 :source source)
+                                200
+                                (list
+                                 (cons
+                                  "x-request-id"
+                                  (oauth-credentials-id-token credentials)))))
+                             #'identity)
+                            nil)
+                        (provider-error (failure)
+                          failure))))
+               (provider-tests--assert-credential-free
+                condition
+                secrets
+                "malformed provider events contain no credential"))
+             (dolist (signaled-p '(nil t))
+               (let ((condition
+                       (handler-case
+                           (progn
+                             (attempt
+                              (lambda ()
+                                (let ((headers
+                                        (list
+                                         (cons
+                                          "x-request-id"
+                                          (oauth-credentials-id-token
+                                           credentials))))
+                                      (body
+                                        (json-encode
+                                         (json-object
+                                          "error"
+                                          (json-object
+                                           "message"
+                                           (oauth-credentials-refresh-token
+                                            credentials))))))
+                                  (if signaled-p
+                                      (error
+                                       (make-condition
+                                        'http-request-failed
+                                        :body body
+                                        :status 400
+                                        :headers headers
+                                        :uri nil
+                                        :method :post))
+                                      (values
+                                       (make-string-input-stream body)
+                                       400
+                                       headers))))
+                              #'identity)
+                             nil)
+                         (provider-error (failure)
+                           failure))))
+                 (provider-tests--assert-credential-free
+                  condition
+                  secrets
+                  "HTTP provider failures contain no credential")
+                 (test-assert
+                  (test-object-contains-string-p
+                   condition
+                   *provider-credential-redaction-marker*)
+                  "HTTP credential echoes carry a redaction marker")))
+             (let* ((collision "PROVIDER")
+                    (marker
+                      (safe-redaction-marker
+                       *provider-credential-redaction-marker*
+                       (list collision))))
+               (test-assert
+                (not (search collision marker))
+                "credential collisions select a marker without the credential")))
+        (uiop:delete-directory-tree
+         root :validate t :if-does-not-exist :ignore)))
+    (test-assert
+     (and (null *provider-active-credential-values*)
+          (null *provider-active-credential-redaction-marker*))
+     "provider attempts retain no dynamic credential redaction state"))
+  nil)
+
 (defclass test-codex-provider (codex-subscription-provider)
   ((outcomes
     :initarg :outcomes

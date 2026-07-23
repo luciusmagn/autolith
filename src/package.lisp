@@ -76,6 +76,69 @@
                 #:native-library-path
                 #:segment-category
                 #:segment-text)
+  (:import-from #:closer-mop
+                #:class-slots
+                #:slot-definition-name)
+  (:import-from #:ironclad
+                #:make-mac
+                #:produce-mac
+                #:random-data
+                #:update-mac)
+  (:import-from #:mcparen
+                #:make-mcp-client
+                #:make-mcp-stdio-transport
+                #:make-mcp-streamable-http-transport
+                #:mcp-call-result
+                #:mcp-call-result-content
+                #:mcp-call-result-error-p
+                #:mcp-call-result-structured-content
+                #:mcp-client
+                #:mcp-client-call-tool
+                #:mcp-client-close
+                #:mcp-client-connect
+                #:mcp-client-connection-generation
+                #:mcp-client-connected-p
+                #:mcp-client-detach
+                #:mcp-client-get-prompt
+                #:mcp-client-instructions
+                #:mcp-client-list-prompts
+                #:mcp-client-list-resource-templates
+                #:mcp-client-list-resources
+                #:mcp-client-list-tools
+                #:mcp-client-read-resource
+                #:mcp-client-server-capabilities
+                #:mcp-client-server-info
+                #:mcp-client-transport
+                #:mcp-http-transport-exchange-scope-function
+                #:mcp-http-transport-listener-failure
+                #:mcp-http-transport-pending-session-identifier
+                #:mcp-http-transport-session-identifier
+                #:mcp-session-expired
+                #:mcp-stdio-transport
+                #:mcp-stdio-transport-ingress-projector
+                #:mcp-stdio-transport-stderr-text
+                #:mcp-streamable-http-transport
+                #:mcp-tool
+                #:mcp-tool-annotations
+                #:mcp-tool-description
+                #:mcp-tool-destructive-p
+                #:mcp-tool-execution
+                #:mcp-tool-input-schema
+                #:mcp-tool-name
+                #:mcp-tool-output-schema
+                #:mcp-tool-read-only-p
+                #:mcp-tool-raw
+                #:mcp-tool-task-required-p
+                #:mcp-tool-task-support
+                #:mcp-tool-title
+                #:mcp-transport
+                #:mcp-transport-close
+                #:mcp-transport-detach
+                #:mcp-transport-notify
+                #:mcp-transport-open
+                #:mcp-transport-open-p
+                #:mcp-transport-request
+                #:mcp-transport-set-protocol-version)
   (:import-from #:bordeaux-threads
                 #:condition-notify
                 #:condition-wait
@@ -108,7 +171,18 @@
                 #:rgba-image
                 #:write-png-file)
   (:import-from #:quri
+                #:ip-addr-p
+                #:ip-addr=
+                #:ipv4-addr-p
+                #:ipv6-addr-p
+                #:uri
+                #:uri-fragment
+                #:uri-host
                 #:uri-path
+                #:uri-port
+                #:uri-query
+                #:uri-scheme
+                #:uri-userinfo
                 #:url-decode
                 #:url-encode-params)
   (:import-from #:serapeum

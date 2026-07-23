@@ -8,6 +8,10 @@
 (defparameter *device-authentication-timeout* 900
   "The maximum number of seconds allowed for device authorization.")
 
+(defparameter *device-authentication-redaction-marker*
+  "[DEVICE CREDENTIAL REDACTED]"
+  "The preferred replacement for echoed device-flow credential material.")
+
 
 ;;;; -- Device Authentication Conditions --
 
@@ -142,60 +146,66 @@
 (defmethod device-authentication-request-code
     ((client device-authentication-client))
   "Request a fresh user code from CLIENT's configured OpenAI issuer."
-  (let* ((document
-           (device-authentication--json-request
-            :client client
-            :url (device-authentication--issuer-url
-                  client
-                  "/api/accounts/deviceauth/usercode")
-            :content-type "application/json"
-            :content (json-encode
-                      (json-object
-                       "client_id"
-                       (device-authentication-client-id client)))
-            :stage ':request-code))
-         (device-authorization-id
-           (json-get document "device_auth_id"))
-         (user-code
-           (or (json-get document "user_code")
-               (json-get document "usercode")))
-         (poll-interval
-           (device-authentication--poll-interval
-            (json-get document "interval"))))
-    (unless (and (non-empty-string-p device-authorization-id)
-                 (non-empty-string-p user-code))
-      (device-authentication--fail
-       :stage ':request-code
-       :message "The device authorization response omitted required fields."))
-    (make-instance 'device-authorization
-                   :verification-url
-                   (device-authentication--issuer-url client "/codex/device")
-                   :user-code user-code
-                   :device-authorization-id device-authorization-id
-                   :poll-interval poll-interval)))
+  (call-with-secret-use
+   (lambda ()
+     (let* ((document
+              (device-authentication--json-request
+               :client client
+               :url (device-authentication--issuer-url
+                     client
+                     "/api/accounts/deviceauth/usercode")
+               :content-type "application/json"
+               :content (json-encode
+                         (json-object
+                          "client_id"
+                          (device-authentication-client-id client)))
+               :stage ':request-code))
+            (device-authorization-id
+              (json-get document "device_auth_id"))
+            (user-code
+              (or (json-get document "user_code")
+                  (json-get document "usercode")))
+            (poll-interval
+              (device-authentication--poll-interval
+               (json-get document "interval"))))
+       (unless (and (non-empty-string-p device-authorization-id)
+                    (non-empty-string-p user-code))
+         (device-authentication--fail
+          :stage ':request-code
+          :message "The device authorization response omitted required fields."))
+       (make-instance 'device-authorization
+                      :verification-url
+                      (device-authentication--issuer-url client "/codex/device")
+                      :user-code user-code
+                      :device-authorization-id device-authorization-id
+                      :poll-interval poll-interval)))))
 
 (defmethod device-authentication-complete
     ((client device-authentication-client)
      (authorization device-authorization)
      (manager credential-manager))
   "Poll AUTHORIZATION, exchange its code, and securely publish the result."
-  (let* ((authorization-code
-           (funcall (device-authentication-client-poll-function client)
-                    client
-                    authorization))
-         (primary-source (credential-manager-primary-source manager)))
-    (unless (typep authorization-code 'device-authorization-code)
-      (device-authentication--fail
-       :stage ':poll
-       :message "The device authorization poll returned an invalid result."))
-    (let ((credentials
-            (device-authentication--exchange-code
-             :client client
-             :authorization-code authorization-code
-             :source-path (credential-source-pathname primary-source))))
-      (credential-manager-accept-account manager credentials :allow-change t)
-      (credential-source-save primary-source credentials))
-    t))
+  (call-with-secret-use
+   (lambda ()
+     (let* ((authorization-code
+              (funcall
+               (device-authentication-client-poll-function client)
+               client
+               authorization))
+            (primary-source (credential-manager-primary-source manager)))
+       (unless (typep authorization-code 'device-authorization-code)
+         (device-authentication--fail
+          :stage ':poll
+          :message "The device authorization poll returned an invalid result."))
+       (let ((credentials
+               (device-authentication--exchange-code
+                :client client
+                :authorization-code authorization-code
+                :source-path (credential-source-pathname primary-source))))
+         (credential-manager-accept-account
+          manager credentials :allow-change t)
+         (credential-source-save primary-source credentials))
+       t))))
 
 (defmethod device-authentication-login
     ((client device-authentication-client)
@@ -204,15 +214,17 @@
        (stream *standard-output*)
        (open-browser-p t))
   "Run device authentication while keeping every credential off STREAM."
-  (let ((authorization (device-authentication-request-code client)))
-    (device-authentication-display-code authorization stream)
-    (when open-browser-p
-      (handler-case
-          (funcall (device-authentication-client-browser-function client)
-                   (device-authorization-verification-url authorization))
-        (error ()
-          nil)))
-    (device-authentication-complete client authorization manager)))
+  (call-with-secret-use
+   (lambda ()
+     (let ((authorization (device-authentication-request-code client)))
+       (device-authentication-display-code authorization stream)
+       (when open-browser-p
+         (handler-case
+             (funcall (device-authentication-client-browser-function client)
+                      (device-authorization-verification-url authorization))
+           (error ()
+             nil)))
+       (device-authentication-complete client authorization manager)))))
 
 
 ;;;; -- Public Construction and Presentation --
@@ -383,6 +395,26 @@
        :stage stage
        :message "The device authentication transport failed."))))
 
+(-> device-authentication--error-code (string list) (option string))
+(defun device-authentication--error-code (body secret-values)
+  "Return BODY's OAuth error code with exact SECRET-VALUES removed."
+  (let ((code (oauth-error-code body))
+        (secrets
+          (stable-sort
+           (remove-duplicates
+            (remove-if-not #'non-empty-string-p secret-values)
+            :test #'string=)
+           #'>
+           :key #'length)))
+    (and
+     code
+     (redact-exact-string-values
+      code
+      secrets
+      (safe-redaction-marker
+       *device-authentication-redaction-marker*
+       secrets)))))
+
 (-> device-authentication--success-status-p (integer) boolean)
 (defun device-authentication--success-status-p (status)
   "Return true when STATUS is an HTTP success status."
@@ -394,10 +426,11 @@
      (:url string)
      (:content-type string)
      (:content string)
-     (:stage keyword))
+     (:stage keyword)
+     (:secret-values list))
     json-object)
 (defun device-authentication--json-request
-    (&key client url content-type content stage)
+    (&key client url content-type content stage secret-values)
   "POST CONTENT to URL and return its validated JSON object for STAGE."
   (multiple-value-bind (body status response-headers)
       (device-authentication--invoke-request
@@ -411,7 +444,9 @@
        :stage stage)
     (declare (ignore response-headers))
     (unless (device-authentication--success-status-p status)
-      (let ((code (oauth-error-code body)))
+      (let ((code
+              (device-authentication--error-code
+               body secret-values)))
         (device-authentication--fail
          :stage stage
          :message (if (and (eq stage :request-code) (= status 404))
@@ -525,7 +560,13 @@
                       (min (device-authorization-poll-interval authorization)
                            (max 0 (- deadline now))))))
           (t
-           (let ((code (oauth-error-code body)))
+           (let ((code
+                   (device-authentication--error-code
+                    body
+                    (list
+                     (device-authorization-id authorization)
+                     (device-authorization-user-code authorization)
+                     content))))
              (device-authentication--fail
               :stage ':poll
               :message (format nil "Device authorization was not completed~@[ (~A)~]."
@@ -560,7 +601,12 @@
             :url (device-authentication--issuer-url client "/oauth/token")
             :content-type "application/x-www-form-urlencoded"
             :content content
-            :stage ':exchange))
+            :stage ':exchange
+            :secret-values
+            (list
+             (device-authorization-code-value authorization-code)
+             (device-authorization-code-verifier authorization-code)
+             content)))
          (id-token (json-get document "id_token"))
          (access-token (json-get document "access_token"))
          (refresh-token (json-get document "refresh_token"))

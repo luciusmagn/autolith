@@ -3,7 +3,13 @@
 ;;;; -- Scripted Agent Boundary --
 
 (defclass scripted-provider (model-provider)
-  ((results
+  ((configuration
+    :initarg :configuration
+    :initform nil
+    :reader scripted-provider-configuration
+    :type (option configuration)
+    :documentation "Optional configuration used to inspect request-local Skills.")
+   (results
     :initarg :results
     :accessor scripted-provider-results
     :type list
@@ -13,6 +19,21 @@
     :accessor scripted-provider-input-counts
     :type list
     :documentation "Conversation input lengths observed before each request.")
+   (input-snapshots
+    :initform nil
+    :accessor scripted-provider-input-snapshots
+    :type list
+    :documentation "Request projections observed before each provider request.")
+   (skill-selection-snapshots
+    :initform nil
+    :accessor scripted-provider-skill-selection-snapshots
+    :type list
+    :documentation "Logical-turn Skill names observed before each request.")
+   (skill-contribution-snapshots
+    :initform nil
+    :accessor scripted-provider-skill-contribution-snapshots
+    :type list
+    :documentation "Skill contribution identifiers observed before each request.")
    (turn-states
     :initform nil
     :accessor scripted-provider-turn-states
@@ -46,8 +67,25 @@
   "Return PROVIDER's next scripted result after recording request state."
   (declare (type vector tool-namespaces)
            (type function event-callback))
-  (push (length (conversation-input-items conversation))
+  (let ((input-items
+          (conversation-input-items-for-request
+           conversation
+           :include-ephemeral-p (not compaction-p))))
+    (push (copy-list input-items)
+          (scripted-provider-input-snapshots provider))
+    (push (length input-items)
         (scripted-provider-input-counts provider))
+    (push (and *skill-logical-turn-active-p*
+               (copy-list *skill-logical-turn-selection-names*))
+          (scripted-provider-skill-selection-snapshots provider))
+    (push
+     (and (scripted-provider-configuration provider)
+          (mapcar
+           #'context-contribution-identifier
+           (skill-request-contributions
+            (scripted-provider-configuration provider)
+            conversation)))
+     (scripted-provider-skill-contribution-snapshots provider)))
   (push (conversation-turn-state conversation)
         (scripted-provider-turn-states provider))
   (push (length tool-namespaces)
@@ -511,6 +549,99 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-agent-provider-credential-failure-containment () null)
+(defun test-agent-provider-credential-failure-containment ()
+  "Test provider credential echoes cannot reach durable failure metadata."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create
+            configuration
+            :identifier "provider-secret-failure"))
+         (provider (provider-create configuration))
+         (credentials (provider-tests--credentials configuration))
+         (secrets (oauth-credentials-secret-values credentials))
+         (source
+           (test-sse-event-string
+            (json-object
+             "type" "response.failed"
+             "response"
+             (json-object
+              "id" (oauth-credentials-access-token credentials)
+              "error"
+              (json-object
+               "code" "invalid_prompt"
+               "message"
+               (format
+                nil
+                "~A/~A"
+                (oauth-credentials-refresh-token credentials)
+                (oauth-credentials-id-token credentials))
+               "request_id"
+               (oauth-credentials-account-id credentials))))))
+         (agent
+           (agent-create
+            :configuration configuration
+            :provider provider
+            :conversation conversation
+            :tool-registry (agent-test-registry)
+            :worker ':unused)))
+    (unwind-protect
+         (progn
+           (credential-source-save
+            (credential-manager-primary-source
+             (provider-credential-manager provider))
+            credentials)
+           (test-assert
+            (handler-case
+                (test-call-with-function-replacements
+                 (list
+                  (list
+                   'provider-open-response-stream
+                   (lambda (active-provider request &rest arguments)
+                     (declare
+                      (ignore active-provider request arguments))
+                     (values
+                      (make-instance
+                       'test-character-input-stream
+                       :source source)
+                      200
+                      nil))))
+                 (lambda ()
+                   (agent-run-user-turn
+                    agent
+                    "persist a provider credential echo")))
+              (provider-error ()
+                t))
+            "a credential-echoing provider failure reaches the caller")
+           (let* ((pathname (conversation-pathname conversation))
+                  (records (conversation--read-records pathname))
+                  (text (uiop:read-file-string pathname))
+                  (provider-record
+                    (find-if
+                     (lambda (record)
+                       (eq (first record) ':provider))
+                     records))
+                  (failure
+                    (getf
+                     (getf (rest provider-record) :metadata)
+                     :failure)))
+             (provider-tests--assert-credential-free
+              (list records text)
+              secrets
+              "durable provider failure state contains no credential")
+             (test-assert
+              (and
+               (string= (getf failure :code) "invalid_prompt")
+               (test-object-contains-string-p
+                failure
+                *provider-credential-redaction-marker*)
+               (search *provider-credential-redaction-marker* text))
+              "durable provider failure metadata retains sanitized diagnostics")))
+      (uiop:delete-directory-tree
+       root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-agent-long-tool-turn () null)
 (defun test-agent-long-tool-turn ()
   "Test a useful turn may execute more than eight tool batches before completion."
@@ -660,6 +791,154 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-agent-skill-provider-barrier () null)
+(defun test-agent-skill-provider-barrier ()
+  "Test skill.load correlation, persistence, and same-result action blocking."
+  (let* ((base-configuration (test-configuration))
+         (root (test-configuration-root base-configuration))
+         (project (merge-pathnames "project/" root))
+         (skill-root (merge-pathnames ".autolith/skills/" project))
+         (configuration
+           (progn
+             (ensure-directories-exist
+              (merge-pathnames ".git/marker" project))
+             (configuration-with-working-directory
+              base-configuration
+              project)))
+         (conversation
+           (conversation-create configuration
+                                :identifier "agent-skill-barrier"))
+         (before-call
+           (agent-test-call
+            :call-id "before-call"
+            :arguments "{\"value\":\"before\"}"))
+         (skill-call
+           (agent-test-call
+            :call-id "skill-call"
+            :namespace "skill"
+            :name "load"
+            :arguments "{\"name\":\"alpha\"}"))
+         (after-call
+           (agent-test-call
+            :call-id "after-call"
+            :arguments "{\"value\":\"after\"}"))
+         (provider
+           (make-instance
+            'scripted-provider
+            :configuration configuration
+            :results
+            (list
+             (agent-test-result
+              "skill-barrier-1"
+              (list before-call skill-call after-call))
+             (agent-test-result
+              "skill-barrier-2"
+              (list (agent-test-message "Applied selected instructions."))
+              :turn-completion :end))))
+         (registry
+           (skill-augment-tool-registry (agent-test-registry))))
+    (unwind-protect
+         (progn
+           (skill-tests--write
+            skill-root
+            "alpha/SKILL.sexp"
+            (skill-tests--definition
+             "alpha"
+             "Apply the barrier test instructions."
+             "BARRIER-SKILL-INSTRUCTIONS"))
+           (agent-run-user-turn
+            (agent-create :configuration configuration
+                          :provider provider
+                          :conversation conversation
+                          :tool-registry registry
+                          :worker nil)
+            "Select the relevant Skill, then continue.")
+           (let* ((snapshots
+                    (reverse
+                     (scripted-provider-input-snapshots provider)))
+                  (second-request (second snapshots))
+                  (outputs
+                    (loop for item in second-request
+                          when (string=
+                                (or (json-get item "type") "")
+                                "function_call_output")
+                            collect item))
+                  (records
+                    (conversation--read-records
+                     (conversation-pathname conversation)))
+                  (record-source
+                    (with-output-to-string (stream)
+                      (prin1 records stream))))
+             (test-assert
+              (equal
+               (reverse
+                (scripted-provider-skill-selection-snapshots provider))
+               '(nil ("alpha")))
+              "skill.load selection remains active at the required provider boundary")
+             (test-assert
+              (equal
+               (second
+                (reverse
+                 (scripted-provider-skill-contribution-snapshots provider)))
+               '("skill-catalog" "skill-selected-alpha"))
+              "the provider retry receives the selected instructions before more actions")
+             (test-assert
+              (and (= (length second-request) 7)
+                   (equal
+                    (mapcar
+                     (lambda (item)
+                       (json-get item "call_id"))
+                     (rest second-request))
+                    '("before-call"
+                      "skill-call"
+                      "after-call"
+                      "before-call"
+                      "skill-call"
+                      "after-call")))
+              "mixed durable and request-local calls preserve provider wire order")
+             (test-assert
+              (and (= (length outputs) 3)
+                   (search "echo: before"
+                           (json-get (first outputs) "output"))
+                   (search "Selected skill alpha"
+                           (json-get (second outputs) "output"))
+                   (search "preceding tool requires a provider round trip"
+                           (json-get (third outputs) "output"))
+                   (null (search "echo: after"
+                                 (json-get (third outputs) "output"))))
+              "calls after skill.load are explicitly deferred instead of executed")
+             (test-assert
+              (and (null (search "skill-call" record-source))
+                   (null (search "after-call" record-source))
+                   (null (search "BARRIER-SKILL-INSTRUCTIONS" record-source)))
+              "Skill selection correlation and instruction text never enter durable history")
+             (test-assert
+              (and (= (length (conversation-input-items conversation)) 4)
+                   (null (conversation-ephemeral-input-entries conversation)))
+              "the next successful provider response consumes ephemeral correlation")
+             (let ((reloaded
+                     (conversation-load-by-id
+                      configuration
+                      "agent-skill-barrier")))
+               (test-assert
+                (and (= (length (conversation-input-items reloaded)) 4)
+                     (find "before-call"
+                           (conversation-input-items reloaded)
+                           :key (lambda (item)
+                                  (json-get item "call_id"))
+                           :test #'string=)
+                     (null
+                      (find "skill-call"
+                            (conversation-input-items reloaded)
+                            :key (lambda (item)
+                                   (json-get item "call_id"))
+                            :test #'string=)))
+                "crash replay retains only the complete durable call pair"))))
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-agent-compaction () null)
 (defun test-agent-compaction ()
   "Test threshold-triggered compaction through the scripted provider."
@@ -739,8 +1018,10 @@
   (test-agent-invalid-call-history)
   (test-agent-tool-failures)
   (test-agent-provider-failure-persistence)
+  (test-agent-provider-credential-failure-containment)
   (test-agent-long-tool-turn)
   (test-agent-unbounded-tool-calls)
   (test-agent-default-turn-has-no-step-guillotine)
+  (test-agent-skill-provider-barrier)
   (test-agent-compaction)
   t)
