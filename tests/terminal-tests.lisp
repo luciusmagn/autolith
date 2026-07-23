@@ -521,7 +521,9 @@
                         (string (code-char 8))
                         (format nil "~C[127;5u" escape)
                         (format nil "~C[1;5D" escape)
-                        (format nil "~C[1;5C" escape)))
+                        (format nil "~C[1;5C" escape)
+                        (format nil "~C[99;5u" escape)
+                        (format nil "~C[27;5;99~~" escape)))
          (terminal
            (make-instance 'stream-terminal
                           :input-stream (make-string-input-stream input)
@@ -553,7 +555,11 @@
     (test-assert (eq (terminal-read-event terminal) :word-left)
                  "Ctrl-Left requests backward word movement")
     (test-assert (eq (terminal-read-event terminal) :word-right)
-                 "Ctrl-Right requests forward word movement"))
+                 "Ctrl-Right requests forward word movement")
+    (test-assert (eq (terminal-read-event terminal) :interrupt)
+                 "Kitty keyboard protocol Ctrl-C requests interruption")
+    (test-assert (eq (terminal-read-event terminal) :interrupt)
+                 "xterm modifyOtherKeys Ctrl-C requests interruption"))
   (let* ((output (make-string-output-stream))
          (terminal
            (make-instance 'stream-terminal
