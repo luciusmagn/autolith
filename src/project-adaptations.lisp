@@ -340,41 +340,35 @@ discarded or obsolete candidates.
 
 ;;;; -- Resume Qualification --
 
-(-> project-adaptation--records-activity
-    (list)
-    (values (option timestamp) integer))
-(defun project-adaptation--records-activity (records)
-  "Return newest recorded activity and user-turn count from RECORDS."
-  (let ((last-activity-at nil)
-        (user-turns 0))
-    (dolist (record records)
-      (when (consp record)
-        (let ((time (getf (rest record) :time)))
-          (when (typep time 'timestamp)
-            (setf last-activity-at
-                  (max (or last-activity-at 0) time))))
-        (when (and (eq (first record) ':message)
-                   (eq (getf (rest record) :role) ':user))
-          (incf user-turns))))
-    (values last-activity-at user-turns)))
-
 (-> project-adaptation--conversation-metadata (pathname) (option list))
 (defun project-adaptation--conversation-metadata (pathname)
   "Return project identity and exact recorded activity from PATHNAME."
   (handler-case
-      (let* ((records (conversation--read-records pathname))
-             (header (first records)))
+      (let ((header nil)
+            (last-activity-at nil)
+            (user-turns 0))
+        (conversation--map-records
+         pathname
+         (lambda (record)
+           (if header
+               (when (consp record)
+                 (let ((time (getf (rest record) :time)))
+                   (when (typep time 'timestamp)
+                     (setf last-activity-at
+                           (max (or last-activity-at 0) time))))
+                 (when (and (eq (first record) ':message)
+                            (eq (getf (rest record) :role) ':user))
+                   (incf user-turns)))
+               (setf header record))))
         (when (and (consp header)
                    (eq (first header) ':conversation))
           (let* ((properties (rest header))
                  (created-at (getf properties :created-at))
                  (directory (getf properties :directory)))
-            (multiple-value-bind (last-activity-at user-turns)
-                (project-adaptation--records-activity (rest records))
-              (list :directory directory
-                    :created-at created-at
-                    :last-activity-at last-activity-at
-                    :user-turns user-turns)))))
+            (list :directory directory
+                  :created-at created-at
+                  :last-activity-at last-activity-at
+                  :user-turns user-turns))))
     (error ()
       nil)))
 

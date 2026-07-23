@@ -202,6 +202,8 @@
                           "the observer receives deltas from every provider request")
              (test-assert (member :tool-call-completed statuses)
                           "the observer receives correlated tool lifecycle status")
+             (test-assert (member :user-message-persisted statuses)
+                          "the observer learns when user input becomes durable")
              (let* ((records
                       (conversation--read-records
                        (conversation-pathname conversation)))

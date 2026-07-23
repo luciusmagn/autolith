@@ -24,6 +24,16 @@
     :accessor conversation-incomplete-tail-p
     :type boolean
     :documentation "Whether the next append must repair an interrupted final form.")
+   (log-generation
+    :initform 0
+    :accessor conversation-log-generation
+    :type (integer 0)
+    :documentation "The count of whole-log replacements since this object loaded.")
+   (append-lock
+    :initform (make-recursive-lock "Autolith conversation append")
+    :reader conversation-append-lock
+    :type t
+    :documentation "The lock serializing durable record sequence assignment.")
    (created-at
     :initarg :created-at
     :reader conversation-created-at
@@ -57,6 +67,11 @@
     :accessor conversation-input-items
     :type list
     :documentation "Provider wire items in chronological order.")
+   (input-items-tail
+    :initform nil
+    :accessor conversation-input-items-tail
+    :type list
+    :documentation "The final cons of the provider projection for constant-time append.")
    (turn-state
     :initform nil
     :accessor conversation-turn-state
@@ -76,8 +91,24 @@
     :initform 0
     :accessor conversation-user-turn-count
     :type (integer 0)
-    :documentation "The number of durable user message records."))
+    :documentation "The number of durable user message records.")
+   (latest-goal-record
+    :initform nil
+    :accessor conversation-latest-goal-record
+    :type (option list)
+    :documentation "The newest durable goal record observed in this conversation."))
   (:documentation "An append-only conversation and its provider projection."))
+
+(defmethod initialize-instance
+    :after ((conversation conversation) &key &allow-other-keys)
+  "Initialize CONVERSATION's constant-time provider projection tail."
+  (setf (conversation-input-items-tail conversation)
+        (last (conversation-input-items conversation))))
+
+(defmethod (setf conversation-input-items)
+    :after ((items list) (conversation conversation))
+  "Keep CONVERSATION's projection tail synchronized after whole-list replacement."
+  (setf (conversation-input-items-tail conversation) (last items)))
 
 (-> conversation--note-activity (conversation list) null)
 (defun conversation--note-activity (conversation record)
@@ -162,44 +193,57 @@
 
 (defmethod conversation-append-record ((conversation conversation) (record list))
   "Assign metadata, initialize persistence if needed, and append RECORD."
-  (unless (keywordp (first record))
-    (error 'conversation-invariant-error
-           :message "A conversation record must begin with a keyword."
-           :pathname (conversation-pathname conversation)
-           :sequence (conversation-next-sequence conversation)))
-  (let* ((sequence (conversation-next-sequence conversation))
-         (sequenced (list* (first record)
-                           :seq sequence
-                           :time (get-universal-time)
-                           (rest record))))
-    (handler-case
-        (if (conversation-persisted-p conversation)
-            (progn
-              (unless (probe-file (conversation-pathname conversation))
-                (error 'conversation-invariant-error
-                       :message "The persisted conversation file is missing."
-                       :pathname (conversation-pathname conversation)
-                       :sequence sequence))
-              (log-append
-               (conversation-pathname conversation)
-               sequenced
-               :repair-tail-p (conversation-incomplete-tail-p conversation))
-              (setf (conversation-incomplete-tail-p conversation) nil))
-            (conversation--write-initial-record conversation sequenced))
-      (error (condition)
-        (error 'conversation-invariant-error
-               :message (format nil "Could not append conversation record: ~A" condition)
-               :pathname (conversation-pathname conversation)
-               :sequence sequence)))
-    (incf (conversation-next-sequence conversation))
-    (conversation--note-activity conversation sequenced)
-    sequenced))
+  (with-recursive-lock-held ((conversation-append-lock conversation))
+    (unless (keywordp (first record))
+      (error 'conversation-invariant-error
+             :message "A conversation record must begin with a keyword."
+             :pathname (conversation-pathname conversation)
+             :sequence (conversation-next-sequence conversation)))
+    (let* ((sequence (conversation-next-sequence conversation))
+           (repair-tail-p (conversation-incomplete-tail-p conversation))
+           (sequenced (list* (first record)
+                             :seq sequence
+                             :time (get-universal-time)
+                             (rest record))))
+      (handler-case
+          (if (conversation-persisted-p conversation)
+              (progn
+                (unless (probe-file (conversation-pathname conversation))
+                  (error 'conversation-invariant-error
+                         :message "The persisted conversation file is missing."
+                         :pathname (conversation-pathname conversation)
+                         :sequence sequence))
+                (log-append
+                 (conversation-pathname conversation)
+                 sequenced
+                 :repair-tail-p repair-tail-p)
+                (setf (conversation-incomplete-tail-p conversation) nil)
+                (when repair-tail-p
+                  (incf (conversation-log-generation conversation))))
+              (conversation--write-initial-record conversation sequenced))
+        (error (condition)
+          (error 'conversation-invariant-error
+                 :message
+                 (format nil
+                         "Could not append conversation record: ~A"
+                         condition)
+                 :pathname (conversation-pathname conversation)
+                 :sequence sequence)))
+      (incf (conversation-next-sequence conversation))
+      (conversation--note-activity conversation sequenced)
+      (when (eq (first sequenced) :goal)
+        (setf (conversation-latest-goal-record conversation) sequenced))
+      sequenced)))
 
 (-> conversation--append-input-item (conversation json-object) json-object)
 (defun conversation--append-input-item (conversation item)
   "Append provider ITEM to CONVERSATION's in-memory chronological projection."
-  (setf (conversation-input-items conversation)
-        (nconc (conversation-input-items conversation) (list item)))
+  (let ((cell (list item))
+        (tail (conversation-input-items-tail conversation)))
+    (if tail
+        (setf (rest tail) cell)
+        (setf (conversation-input-items conversation) cell))
+    (setf (conversation-input-items-tail conversation) cell))
   item)
 
 (-> conversation-image-artifact-root (conversation) pathname)
@@ -260,9 +304,9 @@
 
 (-> conversation-append-user-message
     (conversation (or string user-message-input))
-    json-object)
+    (values json-object list))
 (defun conversation-append-user-message (conversation input)
-  "Persist user INPUT and its image descriptors before projecting it."
+  "Persist user INPUT and return its provider item and sequenced record."
   (let* ((submission
            (etypecase input
              (string (user-message-input-create :text input))
@@ -273,22 +317,26 @@
             conversation
             (user-message-input-image-pathnames submission)))
          (item (user-message-item content attachments))
+         (record nil)
          (durable-p nil))
     (unwind-protect
          (progn
-           (conversation-append-record
-            conversation
-            (append
-             (list :message
-                   :role :user
-                   :content content)
-             (when attachments
-               (list :images (mapcar #'image-attachment-record attachments)))
-             (unless attachments
-               (list :wire-json (json-encode item)))))
+           (setf record
+                 (conversation-append-record
+                  conversation
+                  (append
+                   (list :message
+                         :role :user
+                         :content content)
+                   (when attachments
+                     (list :images
+                           (mapcar #'image-attachment-record attachments)))
+                   (unless attachments
+                     (list :wire-json (json-encode item))))))
            (setf durable-p t
                  (conversation-turn-state conversation) nil)
-           (conversation--append-input-item conversation item))
+           (values (conversation--append-input-item conversation item)
+                   record))
       (unless durable-p
         (conversation--delete-image-attachments attachments)))))
 
@@ -594,6 +642,35 @@ it described the uncompacted context."
 
 ;;;; -- Conversation Loading --
 
+(-> conversation--map-records
+    (pathname function &key (:start-position (integer 0)))
+    (values integer boolean integer))
+(defun conversation--map-records (pathname function &key (start-position 0))
+  "Call FUNCTION for complete records in PATHNAME from START-POSITION.
+
+Return the next readable file position, whether the final form is incomplete,
+and the number of records visited. Storage failures become conversation
+invariant errors while callback conditions propagate unchanged."
+  (let ((callback-store-error nil))
+    (handler-case
+        (log-map
+         (lambda (record)
+           (handler-case
+               (funcall function record)
+             (store-error (condition)
+               (setf callback-store-error condition)
+               (error condition))))
+         pathname
+         :start-position start-position)
+      (store-error (condition)
+        (if (eq condition callback-store-error)
+            (error condition)
+            (error 'conversation-invariant-error
+                   :message (format nil "Malformed conversation record: ~A"
+                                    condition)
+                   :pathname pathname
+                   :sequence nil))))))
+
 (-> conversation--read-records (pathname) (values list boolean))
 (defun conversation--read-records (pathname)
   "Read complete forms and report whether PATHNAME has an incomplete tail."
@@ -617,6 +694,8 @@ it described the uncompacted context."
   (let ((sequence (getf (rest record) :seq))
         (wire-json (getf (rest record) :wire-json)))
     (conversation--note-activity conversation record)
+    (when (eq (first record) :goal)
+      (setf (conversation-latest-goal-record conversation) record))
     (when (integerp sequence)
       (setf (conversation-next-sequence conversation)
             (max (conversation-next-sequence conversation) (1+ sequence))))
@@ -710,48 +789,62 @@ conversation files."
     (error ()
       nil)))
 
+(-> conversation--from-header (pathname list) conversation)
+(defun conversation--from-header (pathname header)
+  "Validate HEADER and return its empty in-memory conversation projection."
+  (unless (and (listp header)
+               (eq (first header) :conversation)
+               (= (or (getf (rest header) :version) 0) 1)
+               (non-empty-string-p (getf (rest header) :id)))
+    (error 'conversation-invariant-error
+           :message "The conversation header is missing or unsupported."
+           :pathname pathname
+           :sequence nil))
+  (let* ((directory (getf (rest header) :directory))
+         (model (getf (rest header) :model))
+         (reasoning-effort (getf (rest header) :reasoning-effort)))
+    (unless (or (and (null model) (null reasoning-effort))
+                (conversation--model-selection-p model reasoning-effort))
+      (error 'conversation-invariant-error
+             :message "The conversation header has an invalid model selection."
+             :pathname pathname
+             :sequence nil))
+    (make-instance 'conversation
+                   :identifier (getf (rest header) :id)
+                   :pathname pathname
+                   :persisted-p t
+                   :incomplete-tail-p nil
+                   :created-at (getf (rest header) :created-at)
+                   :origin-directory (and (stringp directory) directory)
+                   :model (and (non-empty-string-p model) model)
+                   :reasoning-effort
+                   (and (non-empty-string-p reasoning-effort)
+                        reasoning-effort)
+                   :next-sequence 1
+                   :input-items nil)))
+
 (-> conversation-load (pathname) conversation)
 (defun conversation-load (pathname)
   "Load a conversation from PATHNAME and rebuild its provider input projection."
-  (multiple-value-bind (records incomplete-tail-p)
-      (conversation--read-records pathname)
-    (let ((header (first records)))
-    (unless (and (listp header)
-                 (eq (first header) :conversation)
-                 (= (or (getf (rest header) :version) 0) 1)
-                 (non-empty-string-p (getf (rest header) :id)))
-      (error 'conversation-invariant-error
-             :message "The conversation header is missing or unsupported."
-             :pathname pathname
-             :sequence nil))
-    (let* ((directory (getf (rest header) :directory))
-           (model (getf (rest header) :model))
-           (reasoning-effort (getf (rest header) :reasoning-effort))
-           (conversation
-             (make-instance 'conversation
-                            :identifier (getf (rest header) :id)
-                            :pathname pathname
-                            :persisted-p t
-                            :incomplete-tail-p incomplete-tail-p
-                            :created-at (getf (rest header) :created-at)
-                            :origin-directory (and (stringp directory)
-                                                   directory)
-                            :model (and (non-empty-string-p model) model)
-                            :reasoning-effort
-                            (and (non-empty-string-p reasoning-effort)
-                                 reasoning-effort)
-                            :next-sequence 1
-                            :input-items nil)))
-      (unless (or (and (null model) (null reasoning-effort))
-                  (conversation--model-selection-p model reasoning-effort))
+  (let ((conversation nil))
+    (multiple-value-bind (position incomplete-tail-p count)
+        (conversation--map-records
+         pathname
+         (lambda (record)
+           (if conversation
+               (conversation--apply-record conversation record)
+               (setf conversation
+                     (conversation--from-header pathname record)))))
+      (declare (ignore position count))
+      (unless conversation
         (error 'conversation-invariant-error
-               :message "The conversation header has an invalid model selection."
+               :message "The conversation header is missing or unsupported."
                :pathname pathname
                :sequence nil))
-      (dolist (record (rest records))
-        (conversation--apply-record conversation record))
+      (setf (conversation-incomplete-tail-p conversation)
+            incomplete-tail-p)
       (conversation--repair-incomplete-tool-calls conversation)
-      conversation))))
+      conversation)))
 
 (-> conversation-pathname-for-id (configuration string) pathname)
 (defun conversation-pathname-for-id (configuration identifier)
@@ -778,13 +871,19 @@ conversation files."
 (defun conversation--pathname-non-empty-p (pathname)
   "Return true when PATHNAME has a header and at least one complete record."
   (handler-case
-      (let ((records (conversation--read-records pathname)))
-        (not
-         (null
-          (and (consp records)
-               (listp (first records))
-               (eq (first (first records)) :conversation)
-               (rest records)))))
+      (let ((header-seen-p nil))
+        (conversation--map-records
+         pathname
+         (lambda (record)
+           (cond
+             ((not header-seen-p)
+              (unless (and (listp record)
+                           (eq (first record) :conversation))
+                (return-from conversation--pathname-non-empty-p nil))
+              (setf header-seen-p t))
+             (t
+              (return-from conversation--pathname-non-empty-p t)))))
+        nil)
     (error ()
       nil)))
 

@@ -387,10 +387,56 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-conversation-concurrent-appends () null)
+(defun test-conversation-concurrent-appends ()
+  "Test concurrent writers retain one contiguous durable sequence."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration :identifier "concurrent-appends"))
+         (threads
+           (loop for writer below 4
+                 collect
+                 (make-thread
+                  (lambda ()
+                    (dotimes (index 25)
+                      (conversation-append-record
+                       conversation
+                       (list :goal
+                             :writer writer
+                             :index index))))
+                  :name (format nil
+                                "Autolith conversation writer ~D"
+                                writer)))))
+    (unwind-protect
+         (progn
+           (dolist (thread threads)
+             (join-thread thread))
+           (multiple-value-bind (records incomplete-tail-p)
+               (conversation--read-records
+                (conversation-pathname conversation))
+             (let ((sequences
+                     (mapcar (lambda (record)
+                               (getf (rest record) :seq))
+                             (rest records))))
+               (test-assert
+                (and (not incomplete-tail-p)
+                     (= (length records) 101)
+                     (equal sequences
+                            (loop for sequence from 1 to 100
+                                  collect sequence)))
+                "concurrent appends preserve every unique sequence in order"))))
+      (dolist (thread threads)
+        (when (thread-alive-p thread)
+          (join-thread thread)))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-conversation-persistence () null)
 (defun test-conversation-persistence ()
   "Test append-only conversation projection and incomplete-tail recovery."
   (test-conversation-image-input)
+  (test-conversation-concurrent-appends)
   (test-conversation-interrupted-tool-call)
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration)))
@@ -424,6 +470,10 @@
             :tool-name "lisp.eval"
             :output "42"
             :success-p t)
+           (test-assert
+            (eq (conversation-input-items-tail conversation)
+                (last (conversation-input-items conversation)))
+            "provider projection appends retain their constant-time tail")
            (with-open-file (stream (conversation-pathname conversation)
                                    :direction :output
                                    :if-exists :append
@@ -438,7 +488,11 @@
               (string= (json-get (first (conversation-input-items loaded)) "role")
                        "user")
               "conversation reload preserves the first user message")
+             (test-assert (zerop (conversation-log-generation loaded))
+                          "a loaded log begins at generation zero")
              (conversation-append-user-message loaded "after interrupted write")
+             (test-assert (= (conversation-log-generation loaded) 1)
+                          "tail repair invalidates incremental log positions")
              (multiple-value-bind (records incomplete-tail-p)
                  (conversation--read-records (conversation-pathname loaded))
                (test-assert

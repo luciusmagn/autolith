@@ -89,12 +89,12 @@ let
 
   sexpStore = pkgs.sbcl.buildASDFSystem {
     pname = "sexp-store";
-    version = "0.1.0";
+    version = "0.2.0";
     src = pkgs.fetchFromGitHub {
       owner = "luciusmagn";
       repo = "sexp-store";
-      rev = "92a2ad458e92ecf4526ccb9bb387f89283c4dcc3";
-      hash = "sha256-aGo0wuhpk2w4Qk1oGRwdtKSZqwRDPp6og8r/XwZJgHA=";
+      rev = "a03ddb709eb43efdd2f1a98dd87aa4e7f444940c";
+      hash = "sha256-ftX6Ohcy748mzgWC9qe1/09aczXjyvAdPC9O5zEaGtg=";
     };
   };
 

@@ -167,9 +167,11 @@
                 #:sbcl-worker-used-image-identifier)
   (:import-from #:sexp-store
                 #:log-append
+                #:log-map
                 #:log-read
                 #:snapshot-read
-                #:snapshot-write)
+                #:snapshot-write
+                #:store-error)
   (:import-from #:yason
                 #:false)
   (:export #:application-command

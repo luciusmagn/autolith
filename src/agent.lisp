@@ -287,7 +287,13 @@
       ;; verbatim instead of being folded into the summary.
       (when (agent--should-compact-p agent)
         (agent-compact-conversation agent observer))
-      (conversation-append-user-message conversation content)
+      (multiple-value-bind (item record)
+          (conversation-append-user-message conversation content)
+        (declare (ignore item))
+        (agent-observer-status
+         observer
+         :user-message-persisted
+         (list :sequence (getf (rest record) :seq))))
       (unwind-protect
            (agent--run-provider-loop agent observer goal-context)
         (setf (conversation-turn-state conversation) nil)))))
