@@ -1,7 +1,5 @@
 (defpackage #:autolith
   (:use #:cl)
-  (:import-from #:alexandria
-                #:define-constant)
   (:import-from #:cl-base64
                 #:base64-string-to-usb8-array
                 #:base64-string-to-string

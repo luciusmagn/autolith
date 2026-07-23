@@ -28,32 +28,6 @@
         (error ()
           nil)))))
 
-(-> overlay--constant-target-p (string) boolean)
-(defun overlay--constant-target-p (target)
-  "Return true when TARGET names a constant-defining operation."
-  (and (or (search "define-constant" target)
-           (search "defconstant" target))
-       t))
-
-(-> overlay--write-constant-form (stream string) null)
-(defun overlay--write-constant-form (stream source)
-  "Write SOURCE wrapped so its constant redefinition continues deliberately.
-
-Constant definitions signal their redefinition check during the compile-time
-processing of a loaded top-level form, where no outer handler can reach the
-restart. Evaluating the definition as data at load time keeps the restart
-inside this wrapper's dynamic extent."
-  (format stream
-          "(handler-bind ((error~%~
-           ~16T(lambda (overlay-condition)~%~
-           ~18T(let ((overlay-restart~%~
-           ~24T(find-restart 'continue overlay-condition)))~%~
-           ~20T(when overlay-restart~%~
-           ~22T(invoke-restart overlay-restart))))))~%~
-           ~2T(eval (quote~%~A~%~2T)))~%"
-          source)
-  nil)
-
 (-> overlay-write (configuration string string) pathname)
 (defun overlay-write (configuration target source)
   "Atomically write SOURCE as TARGET's overlay and return its pathname."
@@ -70,11 +44,8 @@ inside this wrapper's dynamic extent."
       (format stream ";;;; Autolith overlay for ~A~%" target)
       (format stream ";;;; Written ~D. Loaded at startup after the system.~2%"
               (get-universal-time))
-      (if (overlay--constant-target-p target)
-          (overlay--write-constant-form stream source)
-          (progn
-            (write-string source stream)
-            (fresh-line stream))))
+      (write-string source stream)
+      (fresh-line stream))
     (rename-file temporary pathname)
     pathname))
 

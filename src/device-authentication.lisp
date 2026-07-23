@@ -1,6 +1,6 @@
 (in-package #:autolith)
 
-;;;; -- Device Authentication Constants --
+;;;; -- Device Authentication Defaults --
 
 (defparameter *openai-oauth-issuer* "https://auth.openai.com"
   "The issuer for Autolith-owned ChatGPT device authentication.")

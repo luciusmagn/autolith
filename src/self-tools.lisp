@@ -302,7 +302,7 @@ protocol."
 
 (defparameter *definition-operators*
   '(defun defgeneric defmethod defmacro defclass defstruct define-condition
-    deftype define-compiler-macro defvar defparameter define-constant
+    deftype define-compiler-macro defvar defparameter
     define-context-contributor define-application-command)
   "Top-level defining operators accepted by self.redefine and source persistence.")
 
@@ -517,7 +517,7 @@ protocol."
                (unless generic-function-existed-p
                  (when (fboundp name)
                    (fmakunbound name))))))))
-      ((defvar defparameter define-constant)
+      ((defvar defparameter)
        (let ((bound-p (boundp name))
              (value (and (boundp name) (symbol-value name)))
              (kind (multiple-value-list
@@ -629,15 +629,7 @@ protocol."
              :message "A private image commit contains an invalid definition."
              :tool-name "self.commit"
              :pathname nil))
-    (if (overlay--constant-target-p (definition-key definition))
-        (handler-bind
-            ((error
-               (lambda (condition)
-                 (let ((restart (find-restart 'continue condition)))
-                   (when restart
-                     (invoke-restart restart))))))
-          (self--install-definition definition source :package package))
-        (self--install-definition definition source :package package))))
+    (self--install-definition definition source :package package)))
 
 (-> self-restore-definition
     (string serious-condition

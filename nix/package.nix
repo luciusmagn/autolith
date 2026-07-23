@@ -174,7 +174,6 @@ let
     inherit src;
     systems = [ "autolith" "autolith/tests" ];
     lispLibs = with pkgs.sbclPackages; [
-      alexandria
       bordeaux-threads
       cl-base64
       cffi

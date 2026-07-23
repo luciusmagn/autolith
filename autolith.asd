@@ -3,8 +3,7 @@
   :author "Lukáš Hozda"
   :version "0.14.0"
   :serial t
-  :depends-on (#:alexandria
-               #:cl-base64
+  :depends-on (#:cl-base64
                #:cl-colorist
                #:cl-exec-sandbox
                #:clifff

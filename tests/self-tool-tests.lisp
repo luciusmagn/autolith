@@ -234,6 +234,12 @@
             "definition identity accepts SETF function names")
            (test-assert (definition-form-p '(defparameter *sample-value* 42))
                         "durable definitions include mutable global parameters")
+           (test-assert
+            (not (definition-form-p '(defconstant constant-trial 42)))
+            "durable definitions reject Common Lisp constants")
+           (test-assert
+            (not (definition-form-p '(define-constant constant-trial 42)))
+            "durable definitions reject compatibility constant macros")
            (let ((original
                    (make-condition 'simple-error
                                    :format-control "original failure"
@@ -737,22 +743,7 @@
                                 (run "form"
                                      "(cerror \"Keep going.\" \"Stop.\")"
                                      "restart" "NO-SUCH-RESTART")))
-                          "unknown restart names still fail with the menu")
-             (test-assert (tool-result-success-p
-                           (run "form"
-                                "(define-constant +self-restart-trial+ 1 :test #'=)"))
-                          "defining a fresh constant succeeds")
-             (test-assert (not (tool-result-success-p
-                                (run "form"
-                                     "(define-constant +self-restart-trial+ 2 :test #'=)")))
-                          "conflicting constant redefinition asks for a restart")
-             (test-assert (tool-result-success-p
-                           (run "form"
-                                "(define-constant +self-restart-trial+ 2 :test #'=)"
-                                "restart" "CONTINUE"))
-                          "continue redefines the constant deliberately")
-             (test-assert (= (symbol-value '+self-restart-trial+) 2)
-                          "the constant carries the deliberately chosen value")))
+                          "unknown restart names still fail with the menu")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -1036,15 +1027,9 @@
                            "broken.lisp"
                            (configuration-overlay-root configuration))))
              (overlay-write
-              configuration
-              "(defun test-legacy-image-target)"
-              "(defun test-legacy-image-target () \"Return migrated state.\" 9)")
-             (eval '(define-constant +overlay-constant-trial+ 1 :test #'=))
-             (overlay-write
-              configuration
-              "(alexandria:define-constant +overlay-constant-trial+)"
-              (format nil
-                      "(define-constant +overlay-constant-trial+ 2 :test #'=)"))
+             configuration
+             "(defun test-legacy-image-target)"
+             "(defun test-legacy-image-target () \"Return migrated state.\" 9)")
              (ensure-directories-exist broken)
              (with-open-file (stream broken
                                      :direction :output
@@ -1060,9 +1045,7 @@
                (test-assert (= (length failures) 1)
                             "legacy startup reports one broken overlay")
                (test-assert (= (test-legacy-image-target) 9)
-                            "legacy startup loads valid definitions past failures")
-               (test-assert (= (symbol-value '+overlay-constant-trial+) 2)
-                            "legacy constant overlays continue deliberately"))
+                            "legacy startup loads valid definitions past failures"))
              (delete-file broken)
              (test-assert (null (image-commit-current configuration))
                           "legacy overlays begin without a private image commit")

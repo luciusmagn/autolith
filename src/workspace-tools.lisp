@@ -56,7 +56,7 @@
   t)
 
 
-;;;; -- Workspace Constants --
+;;;; -- Workspace Defaults --
 
 (defparameter *fs-read-default-line-count* 400
   "The file lines returned by fs.read when no window is given.")
