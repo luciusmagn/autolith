@@ -35,8 +35,17 @@
         export HOME="$TMPDIR/home"
         export XDG_DATA_HOME="$HOME/.local/share"
         mkdir -p "$HOME"
+        runtime_root="$XDG_DATA_HOME/autolith/runtimes/${pkgs.sbcl.version}"
+        mkdir -p "$runtime_root"
         autolith --version >/dev/null
+        test ! -e "$runtime_root/command"
+        printf '%s\n' /managed/sbcl > "$runtime_root/command"
         test "$(autolith --version)" = "autolith ${autolith.autolithSystem.version}"
+        test "$(cat "$runtime_root/command")" = /managed/sbcl
+        printf '%s\n' \
+          "${autolith.runtime}/bin/sbcl" > "$runtime_root/command"
+        autolith --version >/dev/null
+        test ! -e "$runtime_root/command"
 
         export COLORLISP_NATIVE_LIBRARY="${autolith.colorlispNativeLibrary}/lib/libcolorlisp-tree-sitter.so"
         "${autolith.runtime}/bin/sbcl" \

@@ -339,7 +339,17 @@ pkgs.writeShellApplication {
     printf '%s %s\n' \
       "${expectedSbclVersion}" \
       "${expectedSbclSourceHash}" > "$runtime_root/source.identity"
-    printf '%s\n' "${runtime}/bin/sbcl" > "$runtime_root/command"
+    # The Nix runtime needs companion libraries and environment from this
+    # wrapper. Its bare persisted SBCL path would poison source-based tooling.
+    recorded_runtime=
+    if [ -r "$runtime_root/command" ]; then
+      IFS= read -r recorded_runtime < "$runtime_root/command" || recorded_runtime=
+    fi
+    case "$recorded_runtime" in
+      /nix/store/*-sbcl-with-packages*/bin/sbcl)
+        rm -f "$runtime_root/command"
+        ;;
+    esac
 
     recovery_core="$data_home/autolith/recovery/autolith-recovery.core"
     active_core="$data_home/autolith/active/autolith-active.core"
