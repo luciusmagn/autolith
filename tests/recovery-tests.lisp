@@ -1,0 +1,370 @@
+(in-package #:autolith)
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (unless (fboundp 'recovery-context-create)
+    (load (merge-pathnames "recovery/runtime.lisp"
+                           (asdf:system-source-directory :autolith)))))
+
+
+;;;; -- Recovery Runtime Tests --
+
+(-> recovery-tests--write-form (pathname t) pathname)
+(defun recovery-tests--write-form (pathname form)
+  "Write one readable FORM to PATHNAME and return PATHNAME."
+  (ensure-directories-exist pathname)
+  (with-open-file (stream pathname
+                          :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create
+                          :external-format :utf-8)
+    (let ((*print-readably* t))
+      (prin1 form stream)
+      (terpri stream)
+      (finish-output stream)))
+  pathname)
+
+(-> recovery-tests--context (pathname) recovery-context)
+(defun recovery-tests--context (root)
+  "Return a recovery context isolated below test ROOT."
+  (let ((state-root (merge-pathnames "state/autolith/" root)))
+    (make-instance
+     'recovery-context
+     :source-root (asdf:system-source-directory :autolith)
+     :generation-root (merge-pathnames "data/autolith/generations/" root)
+     :worktree-root (merge-pathnames "data/autolith/recovery-worktrees/" root)
+     :state-root state-root
+     :current-pathname (merge-pathnames "current-generation.sexp" state-root))))
+
+(-> recovery-tests--migration-record (list) list)
+(defun recovery-tests--migration-record (entries)
+  "Return one complete conversation identifier migration record for ENTRIES."
+  (list :conversation-identifier-migration
+        :version 1
+        :status ':complete
+        :updated-at (get-universal-time)
+        :entries entries))
+
+(-> recovery-tests--migration-pathname (recovery-context) pathname)
+(defun recovery-tests--migration-pathname (context)
+  "Return CONTEXT's durable conversation identifier migration pathname."
+  (merge-pathnames "conversation-identifier-migration.sexp"
+                   (recovery-context-state-root context)))
+
+(-> recovery-tests--restore-environment (string (or null string)) null)
+(defun recovery-tests--restore-environment (name previous)
+  "Restore environment variable NAME to PREVIOUS."
+  (if previous
+      (sb-posix:setenv name previous 1)
+      (sb-posix:unsetenv name))
+  nil)
+
+(-> recovery-tests--write-executable (pathname string) pathname)
+(defun recovery-tests--write-executable (pathname content)
+  "Write executable CONTENT to PATHNAME and return PATHNAME."
+  (ensure-directories-exist pathname)
+  (with-open-file (stream pathname
+                          :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create
+                          :external-format :utf-8)
+    (write-string content stream)
+    (finish-output stream))
+  (uiop:run-program (list "chmod" "755" (namestring pathname))
+                    :output nil
+                    :error-output nil)
+  pathname)
+
+(-> test-recovery-conversation-identifiers () null)
+(defun test-recovery-conversation-identifiers ()
+  "Test recovery-side short syntax and strict legacy identifier migration."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (context (recovery-tests--context root))
+         (legacy "cb472f21-969d-48f5-9c1e-e793d19054b9")
+         (unmapped "de916e8a-8227-443d-9e10-11794a62ebd6")
+         (current "K8vQ2mp")
+         (entry (list :old legacy
+                      :new current
+                      :created-at (get-universal-time)))
+         (migration-pathname
+           (recovery-tests--migration-pathname context)))
+    (unwind-protect
+         (progn
+           (recovery-tests--write-form
+            migration-pathname
+            (recovery-tests--migration-record (list entry)))
+           (test-assert
+            (string= (recovery-conversation-identifier-normalize-display
+                      "K-8vQ2mp")
+                     current)
+            "recovery normalizes displayed short conversation identifiers")
+           (test-assert
+            (string= (recovery-conversation-identifier-normalize-display
+                      current)
+                     current)
+            "recovery preserves stored short conversation identifiers")
+           (test-assert
+            (string= (recovery-conversation-identifier-normalize-display
+                      "K-8vQ2m0")
+                     "K-8vQ2m0")
+            "recovery does not normalize malformed displayed identifiers")
+           (test-assert
+            (equal (recovery-conversation-migration-entries context)
+                   (list entry))
+            "recovery reads a complete strict migration mapping")
+           (test-assert
+            (string= (recovery-conversation-identifier-resolve context legacy)
+                     current)
+            "recovery resolves a mapped legacy UUID")
+           (test-assert
+            (string= (recovery-conversation-identifier-resolve context unmapped)
+                     unmapped)
+            "recovery leaves an unmapped legacy UUID unchanged")
+           (let ((arguments (list "--immutable" "resume" legacy)))
+             (test-assert
+              (equal (recovery-normalize-forwarded-arguments context arguments)
+                     (list "--immutable" "resume" current))
+              "recovery canonicalizes forwarded resume identifiers")
+             (test-assert
+              (string= (third arguments) legacy)
+              "recovery does not mutate the caller's forwarded arguments"))
+           (recovery-tests--write-form
+            migration-pathname
+            (recovery-tests--migration-record
+             (list entry
+                   (list :old legacy
+                         :new "96kpbjY"
+                         :created-at (get-universal-time)))))
+           (test-assert
+            (handler-case
+                (progn
+                  (recovery-conversation-migration-entries context)
+                  nil)
+              (error ()
+                t))
+            "recovery rejects duplicate legacy migration sources")
+           (recovery-tests--write-form
+            migration-pathname
+            (recovery-tests--migration-record
+             (list entry
+                   (list :old unmapped
+                         :new current
+                         :created-at (get-universal-time)))))
+           (test-assert
+            (handler-case
+                (progn
+                  (recovery-conversation-migration-entries context)
+                  nil)
+              (error ()
+                t))
+            "recovery rejects duplicate current migration destinations"))
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-recovery-session-handoff () null)
+(defun test-recovery-session-handoff ()
+  "Test session fallback, capsule precedence, and history-floor propagation."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (context (recovery-tests--context root))
+         (state-root (recovery-context-state-root context))
+         (migration-pathname
+           (recovery-tests--migration-pathname context))
+         (session-pathname
+           (merge-pathnames "recovery-session-pointers/launcher-test.sexp"
+                            state-root))
+         (capsule-pathname
+           (merge-pathnames "crashes/capsule-test.sexp" state-root))
+         (outside-pointer-pathname
+           (merge-pathnames "outside-session-pointer.sexp" root))
+         (legacy "cb472f21-969d-48f5-9c1e-e793d19054b9")
+         (session-id "96kpbjY")
+         (capsule-id "K8vQ2mp")
+         (pointer-name "AUTOLITH_RECOVERY_SESSION_POINTER")
+         (conversation-name "AUTOLITH_RECOVERY_CONVERSATION_ID")
+         (sequence-name "AUTOLITH_RECOVERY_RENDERED_SEQUENCE")
+         (history-floor-name
+           "AUTOLITH_RECOVERY_HISTORY_FLOOR_SEQUENCE")
+         (crash-pointer-name "AUTOLITH_CRASH_POINTER")
+         (previous-pointer (uiop:getenv pointer-name))
+         (previous-conversation (uiop:getenv conversation-name))
+         (previous-sequence (uiop:getenv sequence-name))
+         (previous-history-floor (uiop:getenv history-floor-name))
+         (previous-crash-pointer (uiop:getenv crash-pointer-name)))
+    (unwind-protect
+         (let ((*error-output* (make-broadcast-stream)))
+           (recovery-tests--write-form
+            migration-pathname
+            (recovery-tests--migration-record
+             (list (list :old legacy
+                         :new session-id
+                         :created-at (get-universal-time)))))
+           (recovery-tests--write-form
+            session-pathname
+            (list :recovery-session
+                  :version 1
+                  :conversation-id legacy
+                  :rendered-sequence 41
+                  :history-floor-sequence 17))
+           (recovery-tests--write-form
+            capsule-pathname
+            (list :crash
+                  :condition "fixture crash"
+                  :conversation-id capsule-id
+                  :rendered-sequence 73
+                  :history-floor-sequence 29))
+           (sb-posix:setenv pointer-name (namestring session-pathname) 1)
+           (recovery-report-crash context :status nil :capsule nil)
+           (test-assert
+            (string= (uiop:getenv conversation-name) session-id)
+            "recovery falls back to the per-launch session after a hard crash")
+           (test-assert
+            (string= (uiop:getenv sequence-name) "41")
+            "session fallback propagates the rendered transcript cursor")
+           (test-assert
+            (string= (uiop:getenv history-floor-name) "17")
+            "session fallback separately propagates the history floor")
+           (recovery-report-crash
+            context
+            :status nil
+            :capsule (namestring capsule-pathname))
+           (test-assert
+            (string= (uiop:getenv conversation-name) capsule-id)
+            "a valid crash capsule takes precedence over the session pointer")
+           (test-assert
+            (string= (uiop:getenv sequence-name) "73")
+            "the preferred crash capsule propagates its rendered cursor")
+           (test-assert
+            (string= (uiop:getenv history-floor-name) "29")
+            "the preferred crash capsule separately propagates its history floor")
+           (sb-posix:unsetenv crash-pointer-name)
+           (recovery-refresh-crash-context
+            context (namestring capsule-pathname) :session-p nil)
+           (test-assert
+            (string= (uiop:getenv sequence-name) "73")
+            "initial fallback setup preserves crash-capsule precedence")
+           (recovery-tests--write-form
+            session-pathname
+            (list :recovery-session
+                  :version 1
+                  :conversation-id session-id
+                  :rendered-sequence 81
+                  :history-floor-sequence 31))
+           (recovery-refresh-crash-context
+            context (namestring capsule-pathname))
+           (test-assert
+            (and (string= (uiop:getenv conversation-name) session-id)
+                 (string= (uiop:getenv sequence-name) "81")
+                 (string= (uiop:getenv history-floor-name) "31"))
+            "fallback retries refresh handoff state advanced by the failed child")
+           (recovery-tests--write-form
+            outside-pointer-pathname
+            (list :recovery-session
+                  :version 1
+                  :conversation-id session-id
+                  :rendered-sequence 41
+                  :history-floor-sequence 17))
+           (sb-posix:setenv
+            pointer-name
+            (namestring outside-pointer-pathname)
+            1)
+           (test-assert
+            (handler-case
+                (progn
+                  (recovery-read-session-pointer context)
+                  nil)
+              (error ()
+                t))
+            "recovery rejects a session pointer outside private state")
+           (dolist (invalid-floor '("invalid" 0))
+             (recovery-tests--write-form
+              session-pathname
+              (list :recovery-session
+                    :version 1
+                    :conversation-id session-id
+                    :rendered-sequence 41
+                    :history-floor-sequence invalid-floor))
+             (sb-posix:setenv pointer-name (namestring session-pathname) 1)
+             (test-assert
+              (handler-case
+                  (progn
+                    (recovery-read-session-pointer context)
+                    nil)
+                (error ()
+                  t))
+              "recovery rejects malformed session pointer metadata")))
+      (recovery-tests--restore-environment pointer-name previous-pointer)
+      (recovery-tests--restore-environment
+       conversation-name previous-conversation)
+      (recovery-tests--restore-environment sequence-name previous-sequence)
+      (recovery-tests--restore-environment
+       history-floor-name previous-history-floor)
+      (recovery-tests--restore-environment
+       crash-pointer-name previous-crash-pointer)
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-recovery-status-boundary () null)
+(defun test-recovery-status-boundary ()
+  "Test status 64 fallback within recovery and termination at the launcher."
+  (test-assert
+   (not (recovery-generation-terminal-status-p 64))
+   "status 64 advances to another retained generation")
+  (dolist (status '(0 130 143))
+    (test-assert
+     (recovery-generation-terminal-status-p status)
+     "success and terminal signals stop retained-generation fallback"))
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (source-root (asdf:system-source-directory :autolith))
+         (fake-sbcl (merge-pathnames "bin/fake-sbcl" root))
+         (log (merge-pathnames "calls.log" root))
+         (data-home (merge-pathnames "data/" root))
+         (state-home (merge-pathnames "state/" root)))
+    (unwind-protect
+         (progn
+           (recovery-tests--write-executable
+            fake-sbcl
+            "#!/bin/sh
+set -eu
+printf 'call\\n' >> \"$AUTOLITH_TEST_LOG\"
+exit 64
+")
+           (multiple-value-bind (output error-output status)
+               (uiop:run-program
+                (list "env"
+                      (format nil "AUTOLITH_SBCL=~A"
+                              (namestring fake-sbcl))
+                      (format nil "AUTOLITH_TEST_LOG=~A"
+                              (namestring log))
+                      (format nil "XDG_DATA_HOME=~A"
+                              (namestring data-home))
+                      (format nil "XDG_STATE_HOME=~A"
+                              (namestring state-home))
+                      (namestring (merge-pathnames "bin/autolith" source-root))
+                      "--from-source")
+                :ignore-error-status t
+                :output nil
+                :error-output nil)
+             (declare (ignore output error-output))
+             (test-assert (= status 64)
+                          "the stable launcher preserves active status 64"))
+           (test-assert
+            (= (count #\Newline (uiop:read-file-string log)) 1)
+            "the stable launcher does not enter recovery for active status 64"))
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil)
+
+(-> run-recovery-tests () null)
+(defun run-recovery-tests ()
+  "Run recovery runtime regression tests."
+  (test-recovery-conversation-identifiers)
+  (test-recovery-session-handoff)
+  (test-recovery-status-boundary)
+  nil)

@@ -429,12 +429,32 @@
                           :ui nil))
          (pointer (merge-pathnames "crash-pointers/test-launch.path"
                                    (configuration-state-root configuration)))
-         (previous-pointer (uiop:getenv "AUTOLITH_CRASH_POINTER")))
+         (session-pointer
+           (merge-pathnames
+            "recovery-session-pointers/test-launch.sexp"
+            (configuration-state-root configuration)))
+         (previous-pointer (uiop:getenv "AUTOLITH_CRASH_POINTER"))
+         (previous-session-pointer
+           (uiop:getenv "AUTOLITH_RECOVERY_SESSION_POINTER")))
     (unwind-protect
          (progn
            (conversation-append-user-message conversation "preserve crash context")
-           (setf (application-rendered-sequence application) 42)
+           (setf (application-rendered-sequence application) 42
+                 (application-history-floor-sequence application) 7)
            (sb-posix:setenv "AUTOLITH_CRASH_POINTER" (namestring pointer) 1)
+           (sb-posix:setenv "AUTOLITH_RECOVERY_SESSION_POINTER"
+                            (namestring session-pointer)
+                            1)
+           (application-publish-recovery-session application)
+           (let ((record (read-portable-form session-pointer)))
+             (test-assert
+              (and (eq (first record) :recovery-session)
+                   (= (getf (rest record) :version) 1)
+                   (string= (getf (rest record) :conversation-id)
+                            "crash-capsule")
+                   (= (getf (rest record) :rendered-sequence) 42)
+                   (= (getf (rest record) :history-floor-sequence) 7))
+              "the per-launch session pointer preserves transcript position"))
            (test-assert (string= (uiop:getenv "AUTOLITH_CRASH_POINTER")
                                  (namestring pointer))
                         "the launch pointer is visible in the active environment")
@@ -460,6 +480,9 @@
              (test-assert (= (getf (rest record) :rendered-sequence) 42)
                           "crash capsules retain scrollback presentation progress")
              (test-assert
+              (= (getf (rest record) :history-floor-sequence) 7)
+              "crash capsules retain the bounded history floor")
+             (test-assert
               (string= (getf (rest record) :conversation-id) "crash-capsule")
               "crash capsules correlate persisted conversations")
              (test-assert
@@ -478,12 +501,21 @@
                                        :format-control "empty crash"
                                        :format-arguments nil))))
                   (empty-record (read-portable-form empty-capsule)))
+             (application-publish-recovery-session application)
              (test-assert (null (getf (rest empty-record) :conversation-id))
                           "crashes do not advertise an unpersisted conversation")
              (test-assert (not (probe-file (conversation-pathname empty)))
-                          "crash reporting does not materialize an empty conversation")))
+                          "crash reporting does not materialize an empty conversation")
+             (test-assert
+              (not (probe-file session-pointer))
+              "an empty active conversation clears stale recovery correlation")))
       (if previous-pointer
           (sb-posix:setenv "AUTOLITH_CRASH_POINTER" previous-pointer 1)
           (sb-posix:unsetenv "AUTOLITH_CRASH_POINTER"))
+      (if previous-session-pointer
+          (sb-posix:setenv "AUTOLITH_RECOVERY_SESSION_POINTER"
+                           previous-session-pointer
+                           1)
+          (sb-posix:unsetenv "AUTOLITH_RECOVERY_SESSION_POINTER"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

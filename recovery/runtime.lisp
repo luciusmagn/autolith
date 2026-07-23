@@ -529,6 +529,7 @@
   "Remove retained crash reconnection metadata from the recovery environment."
   (sb-posix:unsetenv "AUTOLITH_RECOVERY_CONVERSATION_ID")
   (sb-posix:unsetenv "AUTOLITH_RECOVERY_RENDERED_SEQUENCE")
+  (sb-posix:unsetenv "AUTOLITH_RECOVERY_HISTORY_FLOOR_SEQUENCE")
   nil)
 
 (serapeum:-> recovery-conversation-identifier-display (string) string)
@@ -543,6 +544,175 @@
             identifier))
       (format nil "~A-~A" (subseq identifier 0 1) (subseq identifier 1))
       identifier))
+
+(serapeum:-> recovery-conversation-identifier-stored-p (t) boolean)
+(defun recovery-conversation-identifier-stored-p (value)
+  "Return true when VALUE is one stored short conversation identifier."
+  (and (stringp value)
+       (= (length value) 7)
+       (every
+        (lambda (character)
+          (find character
+                "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+                :test #'char=))
+        value)
+       t))
+
+(serapeum:-> recovery-conversation-identifier-normalize-display (string) string)
+(defun recovery-conversation-identifier-normalize-display (identifier)
+  "Return stored syntax for a displayed short IDENTIFIER, otherwise IDENTIFIER."
+  (if (and (= (length identifier) 8)
+           (char= (char identifier 1) #\-)
+           (recovery-conversation-identifier-stored-p
+            (concatenate 'string
+                         (subseq identifier 0 1)
+                         (subseq identifier 2))))
+      (concatenate 'string
+                   (subseq identifier 0 1)
+                   (subseq identifier 2))
+      identifier))
+
+(serapeum:-> recovery-legacy-conversation-identifier-p (t) boolean)
+(defun recovery-legacy-conversation-identifier-p (value)
+  "Return true when VALUE has the historical UUID conversation ID shape."
+  (and (stringp value)
+       (= (length value) 36)
+       (loop for index below (length value)
+             for character = (char value index)
+             always (if (member index '(8 13 18 23))
+                        (char= character #\-)
+                        (not (null (digit-char-p character 16)))))))
+
+(serapeum:-> recovery-proper-list-p (t) boolean)
+(defun recovery-proper-list-p (value)
+  "Return true when VALUE is a finite proper list."
+  (handler-case
+      (and (listp value) (or (list-length value) (null value)) t)
+    (type-error ()
+      nil)))
+
+(serapeum:-> recovery-conversation-migration-entry-p (t) boolean)
+(defun recovery-conversation-migration-entry-p (value)
+  "Return true when VALUE is one safe legacy conversation mapping entry."
+  (and (recovery-proper-list-p value)
+       (= (length value) 6)
+       (recovery-legacy-conversation-identifier-p (getf value :old))
+       (recovery-conversation-identifier-stored-p (getf value :new))
+       (integerp (getf value :created-at))
+       (not (minusp (getf value :created-at)))
+       (loop for key in value by #'cddr
+             always (member key '(:old :new :created-at) :test #'eq))))
+
+(serapeum:-> recovery-conversation-migration-entries
+    (recovery-context)
+    list)
+(defun recovery-conversation-migration-entries (context)
+  "Return validated durable legacy conversation mappings for CONTEXT."
+  (let ((pathname
+          (merge-pathnames "conversation-identifier-migration.sexp"
+                           (recovery-context-state-root context))))
+    (if (probe-file pathname)
+        (let* ((record (recovery-read-form pathname))
+               (properties (and (recovery-proper-list-p record)
+                                (rest record)))
+               (entries (and properties (getf properties :entries))))
+          (unless (and (recovery-proper-list-p record)
+                       (= (length record) 9)
+                       (eq (first record) :conversation-identifier-migration)
+                       (= (or (getf properties :version) 0) 1)
+                       (member (getf properties :status)
+                               '(:prepared :conversations :references
+                                 :artifacts :complete)
+                               :test #'eq)
+                       (integerp (getf properties :updated-at))
+                       (not (minusp (getf properties :updated-at)))
+                       (loop for key in properties by #'cddr
+                             always
+                             (member key
+                                     '(:version :status :updated-at :entries)
+                                     :test #'eq))
+                       (recovery-proper-list-p entries)
+                       (every #'recovery-conversation-migration-entry-p
+                              entries)
+                       (= (length entries)
+                          (length
+                           (remove-duplicates
+                            entries
+                            :test #'string=
+                            :key (lambda (entry) (getf entry :old)))))
+                       (= (length entries)
+                          (length
+                           (remove-duplicates
+                            entries
+                            :test #'string=
+                            :key (lambda (entry) (getf entry :new))))))
+            (error "The conversation identifier migration record is invalid."))
+          entries)
+        nil)))
+
+(serapeum:-> recovery-conversation-identifier-resolve
+    (recovery-context string)
+    string)
+(defun recovery-conversation-identifier-resolve (context identifier)
+  "Resolve displayed syntax or a durable legacy alias for old retained code."
+  (let ((normalized
+          (recovery-conversation-identifier-normalize-display identifier)))
+    (if (recovery-legacy-conversation-identifier-p normalized)
+        (handler-case
+            (let ((entry
+                    (find normalized
+                          (recovery-conversation-migration-entries context)
+                          :test #'string=
+                          :key (lambda (candidate)
+                                 (getf candidate :old)))))
+              (if entry (getf entry :new) normalized))
+          (error (condition)
+            (format *error-output*
+                    "Could not resolve legacy conversation ~A: ~A~%"
+                    (recovery-sanitize-text normalized)
+                    (recovery-sanitize-text condition))
+            normalized))
+        normalized)))
+
+(serapeum:-> recovery-normalize-forwarded-arguments
+    (recovery-context list)
+    list)
+(defun recovery-normalize-forwarded-arguments (context arguments)
+  "Return application ARGUMENTS with an explicit resume identifier resolved."
+  (let ((normalized (copy-list arguments)))
+    (loop for remaining on normalized
+          when (and (stringp (first remaining))
+                    (string= (first remaining) "resume")
+                    (rest remaining)
+                    (stringp (second remaining))
+                    (plusp (length (second remaining)))
+                    (not (uiop:string-prefix-p "-" (second remaining))))
+            do (setf (second remaining)
+                     (recovery-conversation-identifier-resolve
+                      context
+                      (second remaining)))
+               (return))
+    normalized))
+
+(serapeum:-> recovery-publish-reconnection-environment
+    (string t &key (:history-floor-sequence t))
+    null)
+(defun recovery-publish-reconnection-environment
+    (conversation-id rendered-sequence &key history-floor-sequence)
+  "Publish validated canonical recovery metadata for a child process."
+  (when (recovery-identifier-p conversation-id)
+    (sb-posix:setenv "AUTOLITH_RECOVERY_CONVERSATION_ID" conversation-id 1))
+  (when (and (integerp rendered-sequence)
+             (not (minusp rendered-sequence)))
+    (sb-posix:setenv "AUTOLITH_RECOVERY_RENDERED_SEQUENCE"
+                     (write-to-string rendered-sequence)
+                     1))
+  (when (and (integerp history-floor-sequence)
+             (plusp history-floor-sequence))
+    (sb-posix:setenv "AUTOLITH_RECOVERY_HISTORY_FLOOR_SEQUENCE"
+                     (write-to-string history-floor-sequence)
+                     1))
+  nil)
 
 (serapeum:-> recovery-report-crash-capsule
     (recovery-context t)
@@ -562,7 +732,15 @@
                  (conversation-id (and properties
                                        (getf properties :conversation-id)))
                  (rendered-sequence (and properties
-                                         (getf properties :rendered-sequence))))
+                                         (getf properties :rendered-sequence)))
+                 (history-floor-sequence
+                   (and properties
+                        (getf properties :history-floor-sequence)))
+                 (resolved-conversation-id
+                   (and (stringp conversation-id)
+                        (recovery-conversation-identifier-resolve
+                         context
+                         conversation-id))))
             (unless (eq (first record) :crash)
               (error "The crash capsule has an invalid header."))
             (recovery-clear-reconnection-environment)
@@ -572,20 +750,15 @@
                     (recovery-sanitize-text
                      (or (getf properties :condition) "unknown"))
                     (recovery-sanitize-text
-                     (if (stringp conversation-id)
+                     (if resolved-conversation-id
                          (recovery-conversation-identifier-display
-                          conversation-id)
+                          resolved-conversation-id)
                          "unknown")))
-            (when (and (stringp conversation-id)
-                       (recovery-identifier-p conversation-id))
-              (sb-posix:setenv "AUTOLITH_RECOVERY_CONVERSATION_ID"
-                               conversation-id
-                               1))
-            (when (and (integerp rendered-sequence)
-                       (not (minusp rendered-sequence)))
-              (sb-posix:setenv "AUTOLITH_RECOVERY_RENDERED_SEQUENCE"
-                               (write-to-string rendered-sequence)
-                               1))
+            (when resolved-conversation-id
+              (recovery-publish-reconnection-environment
+               resolved-conversation-id
+               rendered-sequence
+               :history-floor-sequence history-floor-sequence))
             (namestring capsule-pathname)))
       (error (condition)
         (format *error-output* "Could not read crash capsule ~A: ~A~%"
@@ -624,17 +797,104 @@
                   (error "The crash pointer names an invalid capsule."))
                 (namestring capsule-pathname)))))))))
 
+(serapeum:-> recovery-read-session-pointer
+    (recovery-context)
+    (or null list))
+(defun recovery-read-session-pointer (context)
+  "Return this launcher's validated recovery-session record, when published."
+  (let ((pointer-value
+          (uiop:getenv "AUTOLITH_RECOVERY_SESSION_POINTER")))
+    (when (and (stringp pointer-value) (plusp (length pointer-value)))
+      (let* ((pointer-pathname (pathname pointer-value))
+             (pointer-root
+               (merge-pathnames "recovery-session-pointers/"
+                                (recovery-context-state-root context))))
+        (unless (uiop:subpathp pointer-pathname pointer-root)
+          (error "The recovery-session pointer is outside private Autolith state."))
+        (when (probe-file pointer-pathname)
+          (let* ((record (recovery-read-form pointer-pathname))
+                 (properties (and (recovery-proper-list-p record)
+                                  (rest record)))
+                 (conversation-id
+                   (and properties (getf properties :conversation-id)))
+                 (rendered-sequence
+                   (and properties (getf properties :rendered-sequence)))
+                 (history-floor-sequence
+                   (and properties
+                        (getf properties :history-floor-sequence)))
+                 (history-floor-present-p
+                   (and properties
+                        (loop for key in properties by #'cddr
+                              thereis (eq key :history-floor-sequence)))))
+            (unless (and (recovery-proper-list-p record)
+                         (member (length record) '(7 9) :test #'=)
+                         (eq (first record) :recovery-session)
+                         (= (or (getf properties :version) 0) 1)
+                         (stringp conversation-id)
+                         (recovery-identifier-p conversation-id)
+                         (integerp rendered-sequence)
+                         (not (minusp rendered-sequence))
+                         (or (not history-floor-present-p)
+                             (null history-floor-sequence)
+                             (and (integerp history-floor-sequence)
+                                  (plusp history-floor-sequence)))
+                         (loop for key in properties by #'cddr
+                               always
+                               (member key
+                                       '(:version :conversation-id
+                                         :rendered-sequence
+                                         :history-floor-sequence)
+                                       :test #'eq)))
+              (error "The recovery-session pointer record is invalid."))
+            record))))))
+
+(serapeum:-> recovery-report-session-pointer (recovery-context) boolean)
+(defun recovery-report-session-pointer (context)
+  "Publish a valid per-launch session pointer and return whether one existed."
+  (handler-case
+      (let ((record (recovery-read-session-pointer context)))
+        (when record
+          (let* ((properties (rest record))
+                 (conversation-id (getf properties :conversation-id))
+                 (rendered-sequence (getf properties :rendered-sequence))
+                 (history-floor-sequence
+                   (getf properties :history-floor-sequence))
+                 (resolved-conversation-id
+                   (recovery-conversation-identifier-resolve
+                    context
+                    conversation-id)))
+            (recovery-clear-reconnection-environment)
+            (recovery-publish-reconnection-environment
+             resolved-conversation-id
+             rendered-sequence
+             :history-floor-sequence history-floor-sequence)
+            (format *error-output*
+                    "Recovery session: ~A~%"
+                    (recovery-sanitize-text
+                     (recovery-conversation-identifier-display
+                      resolved-conversation-id))))
+          t))
+    (error (condition)
+      (format *error-output* "Could not read the recovery-session pointer: ~A~%"
+              (recovery-sanitize-text condition))
+      nil)))
+
 (serapeum:-> recovery-refresh-crash-context
-    (recovery-context (or null string))
+    (recovery-context (or null string) &key (:session-p boolean))
     (or null string))
-(defun recovery-refresh-crash-context (context current-capsule)
-  "Publish a newer capsule from this launcher's pointer, when one exists."
+(defun recovery-refresh-crash-context
+    (context current-capsule &key (session-p t))
+  "Publish the newest capsule or per-launch session available after a failed boot."
   (handler-case
       (let ((pointer-capsule (recovery-read-crash-pointer context)))
         (cond
           ((null pointer-capsule)
+           (when session-p
+             (recovery-report-session-pointer context))
            current-capsule)
           ((and current-capsule (string= pointer-capsule current-capsule))
+           (when session-p
+             (recovery-report-session-pointer context))
            current-capsule)
           (t
            (format *error-output*
@@ -658,6 +918,8 @@
     (format *error-output* "Active Autolith exited with status ~A.~%"
             (recovery-sanitize-text status)))
   (let ((reported-capsule (recovery-report-crash-capsule context capsule)))
+    (unless reported-capsule
+      (recovery-report-session-pointer context))
     (when original-arguments
       (format *error-output* "Original arguments: ~{~A~^ ~}~%"
               (mapcar #'recovery-sanitize-text original-arguments)))
@@ -848,6 +1110,11 @@
            (uiop:wait-process process))
       (recovery-terminal-state-restore terminal-state))))
 
+(serapeum:-> recovery-generation-terminal-status-p (integer) boolean)
+(defun recovery-generation-terminal-status-p (status)
+  "Return true when STATUS should end retained-generation fallback."
+  (not (null (member status '(0 130 143) :test #'=))))
+
 (serapeum:-> recovery-boot-with-fallback
     (recovery-context recovery-generation list
      &key (:capsule (or null string)))
@@ -863,7 +1130,8 @@
                         :test #'string=)))
         (terminal-state (recovery-terminal-state-capture))
         (current-capsule
-          (recovery-refresh-crash-context context capsule)))
+          (recovery-refresh-crash-context
+           context capsule :session-p nil)))
     (loop for remaining on candidates
           for generation = (first remaining)
           do (if (recovery-generation-compatible-p generation)
@@ -885,7 +1153,7 @@
                                     (recovery-sanitize-text condition))))
                      (recovery-terminal-state-restore terminal-state))
                    (when (and completed-p
-                              (member status '(0 64 130 143) :test #'=))
+                              (recovery-generation-terminal-status-p status))
                      (return-from recovery-boot-with-fallback status))
                    (when completed-p
                      (format *error-output*
@@ -993,6 +1261,8 @@
           (multiple-value-bind
               (generation list-p status capsule forwarded original-arguments)
               (recovery-parse-arguments (rest arguments))
+            (setf forwarded
+                  (recovery-normalize-forwarded-arguments context forwarded))
             (if list-p
                 (progn
                   (recovery-print-generations context)

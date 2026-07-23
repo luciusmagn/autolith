@@ -51,6 +51,7 @@ recovery_manifest=$(dirname -- "$recovery_core")/manifest.sexp
 active_core=${AUTOLITH_ACTIVE_CORE:-$data_home/autolith/active/autolith-active.core}
 active_manifest=$(dirname -- "$active_core")/manifest.sexp
 crash_pointer=
+recovery_session_pointer=
 
 for argument in "$@"; do
   case "$argument" in
@@ -83,6 +84,9 @@ finish_launcher()
   restore_terminal
   if [[ -n "$crash_pointer" ]]; then
     rm -f -- "$crash_pointer"
+  fi
+  if [[ -n "$recovery_session_pointer" ]]; then
+    rm -f -- "$recovery_session_pointer"
   fi
 }
 
@@ -218,6 +222,13 @@ chmod 700 -- "$crash_pointer_directory"
 crash_pointer="$crash_pointer_directory/launcher-$$.path"
 rm -f -- "$crash_pointer"
 export AUTOLITH_CRASH_POINTER="$crash_pointer"
+
+recovery_session_pointer_directory="$state_home/autolith/recovery-session-pointers"
+mkdir -p -- "$recovery_session_pointer_directory"
+chmod 700 -- "$recovery_session_pointer_directory"
+recovery_session_pointer="$recovery_session_pointer_directory/launcher-$$.sexp"
+rm -f -- "$recovery_session_pointer"
+export AUTOLITH_RECOVERY_SESSION_POINTER="$recovery_session_pointer"
 
 if run_active "${remaining_arguments[@]}"; then
   exit 0

@@ -99,6 +99,8 @@
              (and (conversation-persisted-p conversation)
                   (conversation-identifier conversation)))
            :rendered-sequence (application-rendered-sequence application)
+           :history-floor-sequence
+           (application-history-floor-sequence application)
            :git-commit commit
            :journal-position
            (let ((journal (configuration-journal-path configuration)))

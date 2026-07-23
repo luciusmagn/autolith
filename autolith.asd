@@ -127,6 +127,7 @@
                              (:file "search-tool-tests")
                              (:file "generation-tests")
                              (:file "active-image-tests")
+                             (:file "recovery-tests")
                              (:file "lisp-worker-tests")
                              (:file "self-tool-tests")
                              (:file "device-authentication-tests")

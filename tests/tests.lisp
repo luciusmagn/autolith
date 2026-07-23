@@ -132,6 +132,7 @@
     (test-active-image-build-record)
     (test-image-commit-replay-probe)
     (test-crash-capsule-correlation)
+    (run-recovery-tests)
     (run-device-authentication-tests)
     (run-agent-tests)
     (test-task-agent-native-reader)

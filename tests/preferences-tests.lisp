@@ -45,6 +45,27 @@
               (preference-state-compact-view-p preferences)
               "missing preferences default to compact tool presentation"))
            (ensure-directories-exist pathname)
+           (snapshot-write
+            pathname
+            '(:preferences
+              :version 3
+              :model "gpt-5.6-luna"
+              :reasoning-effort "high"
+              :reasoning-traces-p t
+              :compact-view-p nil))
+           (let ((preferences (preferences-load configuration)))
+             (test-assert
+              (not (preference-state-compact-view-p preferences))
+              "version three compact preferences remain readable")
+             (multiple-value-bind (form sole-form-p)
+                 (snapshot-read pathname)
+               (test-assert sole-form-p
+                            "normalizing preferences preserves one form")
+               (test-assert (= (getf (rest form) :version) 2)
+                            "version three preferences normalize to version two")
+               (test-assert
+                (not (getf (rest form) :compact-view-p))
+                "normalizing preferences preserves compact presentation")))
            (with-open-file (stream pathname
                                    :direction :output
                                    :if-exists :supersede

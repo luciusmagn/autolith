@@ -2,7 +2,7 @@
 
 ;;;; -- Global Preferences --
 
-(defparameter *preferences-version* 3
+(defparameter *preferences-version* 2
   "The readable global preferences file format version.")
 
 (defclass preference-state ()
@@ -49,7 +49,10 @@
                      t)
                     ((2 3)
                      (let ((model (getf properties :model))
-                           (effort (getf properties :reasoning-effort)))
+                           (effort (getf properties :reasoning-effort))
+                           (compact-present-p
+                             (readable-state-property-present-p
+                              properties :compact-view-p)))
                        (and
                         (readable-state-property-present-p properties :model)
                         (readable-state-property-present-p
@@ -61,12 +64,10 @@
                               (member effort
                                       *supported-reasoning-efforts*
                                       :test #'string=))))
-                        (or (= version 2)
-                            (and
-                             (readable-state-property-present-p
-                              properties :compact-view-p)
-                             (typep (getf properties :compact-view-p)
-                                    'boolean))))))
+                        (or (not compact-present-p)
+                            (typep (getf properties :compact-view-p)
+                                   'boolean))
+                        (or (= version 2) compact-present-p))))
                     (otherwise
                      nil)))))
     (error ()
@@ -83,13 +84,29 @@
                    (getf properties :reasoning-traces-p)
                    :compact-view-p (getf properties :compact-view-p t))))
 
-(-> preferences--read (configuration) preference-state)
+(-> preferences--state-form (preference-state) list)
+(defun preferences--state-form (preferences)
+  "Return the backward-compatible durable record for PREFERENCES."
+  (list :preferences
+        :version *preferences-version*
+        :model (preference-state-model preferences)
+        :reasoning-effort
+        (preference-state-reasoning-effort preferences)
+        :reasoning-traces-p
+        (preference-state-reasoning-traces-p preferences)
+        :compact-view-p
+        (preference-state-compact-view-p preferences)))
+
+(-> preferences--read
+    (configuration)
+    (values preference-state integer))
 (defun preferences--read (configuration)
-  "Read CONFIGURATION's preference state or return empty defaults."
+  "Read CONFIGURATION's preference state and its durable format version."
   (block nil
     (let ((pathname (configuration-preferences-path configuration)))
       (unless (probe-file pathname)
-        (return (make-instance 'preference-state)))
+        (return (values (make-instance 'preference-state)
+                        *preferences-version*)))
       (handler-case
           (multiple-value-bind (form sole-form-p)
               (snapshot-read pathname)
@@ -101,7 +118,8 @@
                      :pathname pathname
                      :operation ':read
                      :cause nil))
-            (preferences--form->state form))
+            (values (preferences--form->state form)
+                    (getf (rest form) :version)))
         (preferences-error (condition)
           (error condition))
         (error (cause)
@@ -117,7 +135,14 @@
 (defun preferences-load (configuration)
   "Return validated preferences, warning and using defaults after corruption."
   (handler-case
-      (preferences--read configuration)
+      (multiple-value-bind (preferences version)
+          (preferences--read configuration)
+        (when (= version 3)
+          (ignore-errors
+            (snapshot-write
+             (configuration-preferences-path configuration)
+             (preferences--state-form preferences))))
+        preferences)
     (preferences-error (condition)
       (warn 'preferences-load-warning
             :pathname (preferences-error-pathname condition)
@@ -158,15 +183,7 @@
     (handler-case
         (snapshot-write
          pathname
-         (list :preferences
-               :version *preferences-version*
-               :model (preference-state-model preferences)
-               :reasoning-effort
-               (preference-state-reasoning-effort preferences)
-               :reasoning-traces-p
-               (preference-state-reasoning-traces-p preferences)
-               :compact-view-p
-               (preference-state-compact-view-p preferences)))
+         (preferences--state-form preferences))
       (error (cause)
         (error 'preferences-error
                :message (format nil "Could not persist preferences at ~A: ~A"
