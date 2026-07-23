@@ -112,7 +112,9 @@ of repeating type or state dispatch in `cond` trees.
 ### Naming
 
 - Use kebab-case symbols without abbreviations.
-- Constants use surrounding plus signs, for example `+max-input-length+`.
+- Do not use `defconstant` or `define-constant`.
+- Use `defparameter` for reloadable policy and defaults.
+- Use `defvar` only for state or identity intended to survive reload.
 - Special variables use surrounding asterisks, for example `*active-image*`.
 - Functions use clear, entity-prefixed names where an entity exists, for
   example `generation-find` and `conversation-append-record`.

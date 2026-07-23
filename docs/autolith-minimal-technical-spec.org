@@ -456,6 +456,13 @@ accidental-damage and reliability boundaries, not a hostile-code sandbox.
 Autolith may redefine functions, methods, classes, macros, and mutable
 global state while running.
 
+Autolith does not use =defconstant= or compatibility constant macros. A
+compiler may inline constant values, and changing one can invoke an
+implementation-specific redefinition protocol that leaves a live image
+incoherent. Reloadable policy and defaults are special variables declared with
+=defparameter=. =defvar= is reserved for state or identity intended to survive
+source reloads.
+
 A restart is not required for ordinary modification.
 
 There are two levels of change.

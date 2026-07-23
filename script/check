@@ -5,5 +5,41 @@ set -euo pipefail
 launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
 source_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
 
+constant_pattern='^[[:space:]]*\([[:space:]]*([^[:space:]()]+:)?(define-constant|defconstant)([[:space:]()]|$)'
+
+set +e
+constant_matches=$(
+  git -C "$source_root" grep \
+    --untracked \
+    -nIiE \
+    "$constant_pattern" \
+    -- \
+    autolith.asd \
+    ':(glob)src/**/*.lisp' \
+    ':(glob)recovery/**/*.lisp' \
+    ':(glob)server/**/*.lisp' \
+    ':(glob)script/**/*.lisp' \
+    ':(glob)tests/**/*.lisp' 2>&1
+)
+constant_status=$?
+set -e
+
+case "$constant_status" in
+  0)
+    printf '%s\n' \
+      'Autolith source must not declare constants:' \
+      "$constant_matches" >&2
+    exit 1
+    ;;
+  1)
+    ;;
+  *)
+    printf '%s\n' \
+      'Could not inspect Autolith source for constant declarations:' \
+      "$constant_matches" >&2
+    exit "$constant_status"
+    ;;
+esac
+
 exec "$source_root/bin/autolith-runtime" \
   --script "$source_root/script/check.lisp" "$@"
