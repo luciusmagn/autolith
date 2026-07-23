@@ -620,6 +620,34 @@
        (task-orchestrator-jobs orchestrator)))
     (sort jobs #'< :key (lambda (job) (getf (task-job-identity job) :index)))))
 
+(-> task-job-live-activity (task-job) (option list))
+(defun task-job-live-activity (job)
+  "Return JOB's lightweight queued or running presentation snapshot."
+  (with-lock-held ((task-job-lock job))
+    (let ((state (task-job-state job)))
+      (when (member state '(:queued :running) :test #'eq)
+        (let ((progress (task-job-progress job))
+              (identity (task-job-identity job)))
+          (with-lock-held ((task-progress-lock progress))
+            (list :id (getf identity :id)
+                  :index (getf identity :index)
+                  :agent (task-job-agent-name job)
+                  :state state
+                  :current-tool (task-progress-current-tool progress)
+                  :assignment
+                  (bounded-string
+                   (getf (task-job-item job) :task)
+                   :limit *task-retained-assignment-limit*)
+                  :detached (task-job-detached-p job))))))))
+
+(-> task-orchestrator-live-activities (task-orchestrator) list)
+(defun task-orchestrator-live-activities (orchestrator)
+  "Return stable lightweight snapshots for every queued or running child."
+  (loop for job in (task-orchestrator-list-jobs orchestrator)
+        for activity = (task-job-live-activity job)
+        when activity
+          collect activity))
+
 (-> task-job-visible-to-agent-p (task-job agent) boolean)
 (defun task-job-visible-to-agent-p (job viewer)
   "Return true when VIEWER owns JOB through conversation or task ancestry."

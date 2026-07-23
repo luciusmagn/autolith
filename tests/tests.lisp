@@ -156,6 +156,7 @@
     (test-task-terminal-cancellation-and-publication)
     (test-task-retention-and-admission)
     (test-task-evicted-identity-retention)
+    (test-task-live-activity-snapshots)
     (test-task-run-native-manifest)
     (test-task-scheduler)
     (run-terminal-tests)

@@ -1346,6 +1346,84 @@
                                        :if-does-not-exist :ignore)))
   nil)
 
+(-> test-task-live-activity-snapshots () null)
+(defun test-task-live-activity-snapshots ()
+  "Test stable lightweight projection of queued and running task jobs."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (orchestrator (task-orchestrator-create))
+         (definition
+           (task-agent-definition-create
+            :name "activity"
+            :description "Exercise live task presentation."
+            :instructions "Remain observable while the test inspects you."
+            :source ':test))
+         (primary
+           (task-tests--primary-agent configuration "activity-primary"))
+         (queued nil)
+         (running nil))
+    (unwind-protect
+         (progn
+           (setf queued
+                 (task-tests--register-job
+                  orchestrator primary definition :name "queued-child")
+                 running
+                 (task-tests--register-job
+                  orchestrator primary definition :name "running-child"))
+           (with-lock-held ((task-job-lock running))
+             (setf (task-job-state running) ':running)
+             (task-job--set-progress-state running ':running))
+           (task-progress-note-status
+            running ':tool-call-started
+            (list :tool "search.content"))
+           (let ((activities
+                   (task-orchestrator-live-activities orchestrator)))
+             (test-assert
+              (and (= (length activities) 2)
+                   (equal
+                    (mapcar (lambda (activity)
+                              (getf activity :id))
+                            activities)
+                    (mapcar (lambda (job)
+                              (getf (task-job-identity job) :id))
+                            (list queued running)))
+                   (eq (getf (first activities) :state) ':queued)
+                   (eq (getf (second activities) :state) ':running)
+                   (string= (getf (second activities) :current-tool)
+                            "search.content")
+                   (string= (getf (second activities) :agent) "activity")
+                   (getf (second activities) :detached))
+              "live activity snapshots are ordered, bounded task summaries"))
+           (task-job--publish-terminal
+            queued
+            ':completed
+            (task-tests--terminal-result
+             queued :status ':success :output "queued complete"))
+           (test-assert
+            (equal (mapcar (lambda (activity)
+                             (getf activity :id))
+                           (task-orchestrator-live-activities orchestrator))
+                   (list (getf (task-job-identity running) :id)))
+            "terminal publication immediately removes a child snapshot")
+           (task-job--publish-terminal
+            running
+            ':completed
+            (task-tests--terminal-result
+             running :status ':success :output "running complete"))
+           (test-assert
+            (null (task-orchestrator-live-activities orchestrator))
+            "no task presentation remains after every child is terminal"))
+      (dolist (job (remove nil (list queued running)))
+        (unless (task-job-terminal-p job)
+          (task-job--publish-terminal
+           job
+           ':aborted
+           (task-tests--terminal-result
+            job :status ':aborted :output "test cleanup"))))
+      (uiop:delete-directory-tree root :validate t
+                                       :if-does-not-exist :ignore)))
+  nil)
+
 (-> task-tests--run-scheduler-case (task-test-provider json-object) list)
 (defun task-tests--run-scheduler-case (provider arguments)
   "Execute one real task tool case and return observations after clean shutdown."
