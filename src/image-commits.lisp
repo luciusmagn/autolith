@@ -690,19 +690,18 @@
 
 ;;;; -- Clean Replay Probe --
 
-(define-constant +image-commit-replay-probe-argument+
+(defparameter *image-commit-replay-probe-argument*
   "--autolith-internal-image-commit-replay-probe"
-  :test #'string=
-  :documentation "The private command argument requesting a clean replay probe.")
+  "The private command argument requesting a clean replay probe.")
 
-(define-constant +image-commit-replay-probe-version+ 1
-  :documentation "The clean replay probe protocol version.")
+(defparameter *image-commit-replay-probe-version* 1
+  "The clean replay probe protocol version.")
 
 (-> image-commit-replay-probe-output (string) string)
 (defun image-commit-replay-probe-output (identifier)
   "Return the canonical success marker for private commit IDENTIFIER."
   (format nil "(:AUTOLITH-IMAGE-COMMIT-REPLAY :VERSION ~D :ID ~S)"
-          +image-commit-replay-probe-version+
+          *image-commit-replay-probe-version*
           identifier))
 
 (-> image-commit-replay-probe-main (string string) null)
@@ -746,7 +745,7 @@
                       "--noinform"
                       "--script"
                       (namestring entry)
-                      +image-commit-replay-probe-argument+
+                      *image-commit-replay-probe-argument*
                       (namestring script)
                       identifier)
                 :input nil

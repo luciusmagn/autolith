@@ -86,10 +86,9 @@
     :documentation "The SBCL executable used to boot an unpublished core."))
   (:documentation "A core probe runner implemented by a separate SBCL process."))
 
-(define-constant +checkpoint-core-probe-argument+
+(defparameter *checkpoint-core-probe-argument*
   "--autolith-internal-checkpoint-probe"
-  :test #'string=
-  :documentation "The exact private argument that requests a retained-core identity probe.")
+  "The exact private argument that requests a retained-core identity probe.")
 
 (defvar *checkpoint-in-progress-p* nil
   "True while this active process has one unpublished checkpoint.")
@@ -114,7 +113,7 @@
              "--core"
              (namestring (generation-temporary-core-pathname generation))
              "--end-runtime-options"
-             +checkpoint-core-probe-argument+)
+             *checkpoint-core-probe-argument*)
        :input nil
        :output :string
        :error-output :output)
@@ -659,7 +658,7 @@
   "Run a retained core's exact identity probe or Autolith's normal entry point."
   (sb-ext:disable-debugger)
   (let ((arguments (uiop:command-line-arguments)))
-    (if (equal arguments (list +checkpoint-core-probe-argument+))
+    (if (equal arguments (list *checkpoint-core-probe-argument*))
         (progn
           (write-string
            (generation-core-probe-output *checkpoint-core-probe-record*)

@@ -78,11 +78,11 @@
              "A supplied task name must be a non-empty string." :tool-name
              "task.run"))
     (when (and name
-               (> (length name) +task-identifier-maximum-characters+))
+               (> (length name) *task-identifier-maximum-characters*))
       (error 'task-error
              :message
              (format nil "A task name may contain at most ~D characters."
-                     +task-identifier-maximum-characters+)
+                     *task-identifier-maximum-characters*)
              :tool-name "task.run"))
     (unless (non-empty-string-p agent)
       (error 'task-error :message "A task agent must be a non-empty string."
@@ -150,11 +150,11 @@
                    collect (task--normalize-item item shared-context
                                                  top-async)))
             (t (list (task--normalize-item arguments nil top-async)))))
-    (when (> (length items) +task-maximum-batch-size+)
+    (when (> (length items) *task-maximum-batch-size*)
       (error 'task-error
              :message
              (format nil "A task batch may contain at most ~D children."
-                     +task-maximum-batch-size+)
+                     *task-maximum-batch-size*)
              :tool-name "task.run"))
     (let ((names (make-hash-table :test #'equal)))
       (dolist (item items)
@@ -224,7 +224,7 @@
 (defun task-tool-result (content details &optional (success-p t))
   "Return exact readable CONTENT and portable DETAILS as a task tool result."
   (unless (and (stringp content)
-               (<= (length content) +task-tool-content-limit+))
+               (<= (length content) *task-tool-content-limit*))
     (error 'task-error
            :message "A task tool produced an oversized native result."
            :tool-name "task.run"))
@@ -252,11 +252,11 @@
 (defun task--validate-job-identifier (value tool-name)
   "Return bounded non-empty job identifier VALUE for TOOL-NAME."
   (unless (and (non-empty-string-p value)
-               (<= (length value) +task-identifier-maximum-characters+))
+               (<= (length value) *task-identifier-maximum-characters*))
     (error 'task-error
            :message
            (format nil "~A requires a non-empty job id of at most ~D characters."
-                   tool-name +task-identifier-maximum-characters+)
+                   tool-name *task-identifier-maximum-characters*)
            :tool-name tool-name))
   value)
 
@@ -422,7 +422,7 @@
 (defun task--task-run-native-form
     (jobs snapshots &key duration-milliseconds artifact-root success-p)
   "Fit every admitted JOB into one fair bounded native task.run manifest."
-  (loop with preview-limit = +task-result-preview-limit+
+  (loop with preview-limit = *task-result-preview-limit*
         for records =
           (loop for job in jobs
                 for snapshot in snapshots
@@ -440,7 +440,7 @@
                 :artifact-root artifact-root
                 :results records)
         for content = (task--write-readable-sexp form :pretty-p t)
-        when (<= (length content) +task-tool-content-limit+)
+        when (<= (length content) *task-tool-content-limit*)
           return (values form content)
         when (zerop preview-limit)
           do (error 'task-error
@@ -477,7 +477,7 @@
                          (funcall wrapper record)
                          (list :job record))
           for content = (task--write-readable-sexp form :pretty-p t)
-          when (<= (length content) +task-tool-content-limit+)
+          when (<= (length content) *task-tool-content-limit*)
             return (values form content)
           when (zerop limit)
             do (error 'task-error
@@ -559,7 +559,7 @@
                      :next-offset (and (< next total) next)
                      :entries trial))
              (content (task--write-readable-sexp form :pretty-p t)))
-        (if (<= (length content) +task-tool-content-limit+)
+        (if (<= (length content) *task-tool-content-limit*)
             (setf selected trial)
             (return))))
     (when (and candidates (null selected))
@@ -601,7 +601,7 @@
                      :next-offset (and (< next total) next)
                      :jobs trial))
              (content (task--write-readable-sexp form :pretty-p t)))
-        (if (<= (length content) +task-tool-content-limit+)
+        (if (<= (length content) *task-tool-content-limit*)
             (setf selected trial)
             (return))))
     (when (and candidates (null selected))
@@ -703,17 +703,17 @@
                                    "task.agents")
     (let ((offset (or (tool-argument arguments "offset") 0))
           (limit (or (tool-argument arguments "limit")
-                     +task-agent-page-default+)))
+                     *task-agent-page-default*)))
       (unless (and (integerp offset) (<= 0 offset 1000000))
         (error 'task-error
                :message "task.agents offset must be an integer from 0 to 1000000."
                :tool-name "task.agents"))
       (unless (and (integerp limit)
-                   (<= 1 limit +task-agent-page-maximum+))
+                   (<= 1 limit *task-agent-page-maximum*))
         (error 'task-error
                :message
                (format nil "task.agents limit must be an integer from 1 to ~D."
-                       +task-agent-page-maximum+)
+                       *task-agent-page-maximum*)
                :tool-name "task.agents"))
       (multiple-value-bind (definitions diagnostics)
           (task-discover-agents (agent-configuration parent))
@@ -762,17 +762,17 @@
                                       "job.list")
        (let ((offset (or (tool-argument arguments "offset") 0))
              (limit (or (tool-argument arguments "limit")
-                        +task-job-page-default+)))
+                        *task-job-page-default*)))
          (unless (and (integerp offset) (<= 0 offset 1000000))
            (error 'task-error
                   :message "job.list offset must be an integer from 0 to 1000000."
                   :tool-name "job.list"))
          (unless (and (integerp limit)
-                      (<= 1 limit +task-job-page-maximum+))
+                      (<= 1 limit *task-job-page-maximum*))
            (error 'task-error
                   :message
                   (format nil "job.list limit must be an integer from 1 to ~D."
-                          +task-job-page-maximum+)
+                          *task-job-page-maximum*)
                   :tool-name "job.list"))
          (let* ((jobs
                   (task-orchestrator-list-visible-jobs orchestrator viewer))
@@ -817,12 +817,12 @@
             (let ((timeout (or (tool-argument arguments "timeout-seconds")
                                60)))
               (unless (and (integerp timeout)
-                           (<= 0 timeout +task-job-wait-maximum-seconds+))
+                           (<= 0 timeout *task-job-wait-maximum-seconds*))
                 (error 'task-error
                        :message
                        (format nil
                                "job.wait timeout-seconds must be an integer from 0 to ~D."
-                               +task-job-wait-maximum-seconds+)
+                               *task-job-wait-maximum-seconds*)
                        :tool-name "job.wait"))
               (when (and (plusp timeout)
                          (typep viewer 'task-child-agent))
@@ -887,7 +887,7 @@
                        (json-object "type" "array" "description"
                                     "Child assignments executed with shared context."
                                     "items" item-schema "minItems" 1
-                                    "maxItems" +task-maximum-batch-size+))))
+                                    "maxItems" *task-maximum-batch-size*))))
     (tool-object-schema properties nil)))
 
 (-> task-agents-parameters-schema () hash-table)
@@ -900,8 +900,8 @@
     "limit"
     (tool-integer-property
      (format nil "Page size from 1 to ~D; defaults to ~D."
-             +task-agent-page-maximum+
-             +task-agent-page-default+)))
+             *task-agent-page-maximum*
+             *task-agent-page-default*)))
    nil))
 
 (defun task-augment-tool-registry (registry)
@@ -921,8 +921,8 @@
              "limit"
              (tool-integer-property
               (format nil "Page size from 1 to ~D; defaults to ~D."
-                      +task-job-page-maximum+
-                      +task-job-page-default+)))
+                      *task-job-page-maximum*
+                      *task-job-page-default*)))
             nil)))
     (tool-registry-register registry
                             (make-instance 'task-run-tool :orchestrator

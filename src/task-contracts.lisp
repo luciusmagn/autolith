@@ -87,53 +87,59 @@
 
 ;;;; -- Native Definition Bounds --
 
-(define-constant +task-agent-file-maximum-bytes+ 131072
-  :documentation "The largest external child-role file accepted by the native reader.")
+(defparameter *task-agent-file-maximum-bytes* 131072
+  "The largest external child-role file accepted by the native reader.")
 
-(define-constant +task-agent-form-maximum-nodes+ 8192
-  :documentation "The largest readable object tree accepted from one role file.")
+(defparameter *task-agent-form-maximum-nodes* 8192
+  "The largest readable object tree accepted from one role file.")
 
-(define-constant +task-agent-form-maximum-depth+ 128
-  :documentation "The deepest list nesting accepted in a native child-role file.")
+(defparameter *task-agent-form-maximum-depth* 128
+  "The deepest list nesting accepted in a native child-role file.")
 
-(define-constant +task-agent-string-maximum-characters+ 32768
-  :documentation "The largest individual string accepted in a role form.")
+(defparameter *task-agent-string-maximum-characters* 32768
+  "The largest individual string accepted in a role form.")
 
-(define-constant +task-agent-name-maximum-characters+ 64
-  :documentation "The maximum normalized child-role name length.")
+(defparameter *task-agent-name-maximum-characters* 64
+  "The maximum normalized child-role name length.")
 
-(define-constant +task-agent-description-maximum-characters+ 512
-  :documentation "The maximum child-role description length.")
+(defparameter *task-agent-description-maximum-characters* 512
+  "The maximum child-role description length.")
 
-(define-constant +task-agent-instructions-maximum-characters+ 32768
-  :documentation "The maximum child-role instruction body length.")
+(defparameter *task-agent-instructions-maximum-characters* 32768
+  "The maximum child-role instruction body length.")
 
-(defparameter +task-agent-definition-fields+
+(defparameter *task-agent-definition-fields*
   '(:name :description :instructions :tools :spawns :models
     :reasoning-effort :output :blocking-p)
   "The complete native child-role plist vocabulary.")
 
-(defparameter +task-output-types+
+(defparameter *task-output-types*
   '(:object :array :string :number :integer :boolean :null)
   "The value types supported by native task output contracts.")
 
-(defparameter +task-forbidden-child-tool-namespaces+
+(defparameter *task-forbidden-child-tool-namespaces*
   '("self" "task" "job" "yield")
   "Tool namespaces structurally unavailable to ordinary child-role grants.")
 
-(defparameter +task-model-aliases+
+(defparameter *task-model-aliases*
   '("@task" "@parent" "@auto" "@smol" "@slow" "@designer")
   "The model aliases accepted by child-role definitions.")
 
-(defparameter +task-agent-native-keyword-names+
-  (append
-   '("name" "description" "instructions" "tools" "spawns" "models"
-     "reasoning-effort" "output" "blocking-p" "type" "enum" "properties"
-     "required" "additional-properties" "items" "min-items" "max-items"
-     "all" "auto" "object" "array" "string" "number" "integer" "boolean"
-     "null")
-   +supported-reasoning-efforts+)
-  "The complete keyword vocabulary accepted by native child-role files.")
+(defparameter *task-agent-native-keyword-names*
+  '("name" "description" "instructions" "tools" "spawns" "models"
+    "reasoning-effort" "output" "blocking-p" "type" "enum" "properties"
+    "required" "additional-properties" "items" "min-items" "max-items"
+    "all" "auto" "object" "array" "string" "number" "integer" "boolean"
+    "null")
+  "Native child-role keywords other than live reasoning-effort names.")
+
+(-> task-agent-native-keyword-name-p (string) boolean)
+(defun task-agent-native-keyword-name-p (name)
+  "Return true when NAME is accepted by the native child-role reader."
+  (not
+   (null
+    (or (member name *task-agent-native-keyword-names* :test #'string-equal)
+        (member name *supported-reasoning-efforts* :test #'string-equal)))))
 
 
 ;;;; -- Contract Diagnostics --
@@ -347,7 +353,7 @@
          :pathname pathname :source source :field :properties
          :cause "Each output property must be a two-element list of name and schema."
          :definition-name definition-name))
-      (when (> (length (first entry)) +task-agent-string-maximum-characters+)
+      (when (> (length (first entry)) *task-agent-string-maximum-characters*)
         (task-agent-definition--error
          :pathname pathname :source source :field :properties
          :cause "An output property name exceeds the string bound."
@@ -405,7 +411,7 @@ inside enum value positions."
        :cause "An output schema requires :TYPE or :ENUM."
        :definition-name definition-name))
     (when (and type-present-p
-               (not (member type +task-output-types+ :test #'eq)))
+               (not (member type *task-output-types* :test #'eq)))
       (task-agent-definition--error
        :pathname pathname :source source :field :type
        :cause (format nil "Unsupported output type ~S." type)

@@ -25,13 +25,13 @@
   (unless (terminal-started-p terminal)
     (setf (terminal-started-p terminal) t
           (terminal-interactive-p terminal) t)
-    (terminal--write terminal +terminal-bracketed-paste-enable+))
+    (terminal--write terminal (terminal-bracketed-paste-enable-sequence)))
   terminal)
 
 (defmethod terminal-stop ((terminal recording-terminal))
   "Stop TERMINAL and emulate only bracketed paste deactivation."
   (when (terminal-started-p terminal)
-    (terminal--write terminal +terminal-bracketed-paste-disable+)
+    (terminal--write terminal (terminal-bracketed-paste-disable-sequence))
     (setf (terminal-started-p terminal) nil
           (terminal-interactive-p terminal) nil))
   terminal)
@@ -194,7 +194,7 @@
 (-> test-terminal-untrusted-text () null)
 (defun test-terminal-untrusted-text ()
   "Test that every untrusted text path neutralizes terminal control injection."
-  (let* ((escape (string +terminal-escape-character+))
+  (let* ((escape (string *terminal-escape-character*))
          (c1 (string (code-char #x9b)))
          (malicious
            (concatenate 'string
@@ -409,7 +409,7 @@
 (-> test-terminal-input-decoding () null)
 (defun test-terminal-input-decoding ()
   "Test production escape decoding and complete bracketed paste collection."
-  (let* ((escape +terminal-escape-character+)
+  (let* ((escape *terminal-escape-character*)
          (paste-start (format nil "~C[200~~" escape))
          (paste-end (format nil "~C[201~~" escape))
          (input
@@ -469,14 +469,14 @@
     (terminal--disable-input-protocols terminal)
     (let ((controls (get-output-stream-string output)))
       (test-assert (and (search (format nil "~C[>1u"
-                                        +terminal-escape-character+)
+                                        *terminal-escape-character*)
                                 controls)
                         (search (format nil "~C[>4;2m"
-                                        +terminal-escape-character+)
+                                        *terminal-escape-character*)
                                 controls))
                    "terminal startup requests distinguishable modified keys")
       (test-assert (search (format nil "~C[<u"
-                                   +terminal-escape-character+)
+                                   *terminal-escape-character*)
                            controls)
                    "terminal shutdown restores ordinary keyboard reporting")))
   nil)
@@ -528,7 +528,7 @@
              (terminal-span :plain " ready")))
       (let ((finalized (recording-terminal-output terminal)))
         (test-assert
-         (search (format nil "~C[1;35mautolith" +terminal-escape-character+)
+         (search (format nil "~C[1;35mautolith" *terminal-escape-character*)
                  finalized)
          "styled finalized spans emit basic rendition controls")
         (test-assert
@@ -681,13 +681,13 @@
                      "one editor change is one terminal write")
         (test-assert
          (= (terminal-tests--substring-count
-             (format nil "~C[?25l" +terminal-escape-character+)
+             (format nil "~C[?25l" *terminal-escape-character*)
              output)
             1)
          "one editor repaint hides the cursor once")
         (test-assert
          (= (terminal-tests--substring-count
-             (format nil "~C[?25h" +terminal-escape-character+)
+             (format nil "~C[?25h" *terminal-escape-character*)
              output)
             1)
          "one editor repaint restores the cursor once")
@@ -844,7 +844,7 @@
                      "the fluid tail is painted live")
         (test-assert
          (zerop (terminal-tests--substring-count
-                 (format nil "~C[?25h" +terminal-escape-character+)
+                 (format nil "~C[?25h" *terminal-escape-character*)
                  output))
          "streaming leaves cursor motion hidden")
         (test-assert (not (terminal-tests--forbidden-control-p output))
@@ -857,13 +857,13 @@
                      "a fluid-tail update is one terminal write")
         (test-assert
          (= (terminal-tests--substring-count
-             (format nil "~C[?25l" +terminal-escape-character+)
+             (format nil "~C[?25l" *terminal-escape-character*)
              output)
             1)
          "a fluid-tail update hides cursor motion once")
         (test-assert
          (= (terminal-tests--substring-count
-             (format nil "~C[?25h" +terminal-escape-character+)
+             (format nil "~C[?25h" *terminal-escape-character*)
              output)
             1)
          "a fluid-tail update restores the input cursor once"))
@@ -1139,18 +1139,18 @@
   (test-assert
    (let ((sequence (terminal-style-sequence :dim)))
      (and (stringp sequence)
-          (char= (char sequence 0) +terminal-escape-character+)
+          (char= (char sequence 0) *terminal-escape-character*)
           (char= (char sequence (1- (length sequence))) #\m)))
    "semantic styles resolve to rendition controls")
   (test-assert (null (terminal-style-sequence :plain))
                "the plain style resolves to no control sequence")
   (test-assert
    (and (string= (terminal-style-sequence :syntax-keyword)
-                 (format nil "~C[35m" +terminal-escape-character+))
+                 (format nil "~C[35m" *terminal-escape-character*))
         (string= (terminal-style-sequence :syntax-string)
-                 (format nil "~C[32m" +terminal-escape-character+))
+                 (format nil "~C[32m" *terminal-escape-character*))
         (string= (terminal-style-sequence :syntax-function)
-                 (format nil "~C[34m" +terminal-escape-character+)))
+                 (format nil "~C[34m" *terminal-escape-character*)))
    "syntax styles use the terminal's base ANSI palette")
   (let ((indexed-sequences
           (loop for style in '(:brand-gradient-1 :brand-gradient-2
@@ -1162,11 +1162,11 @@
      "every brand-gradient row has a distinct indexed color")
     (test-assert
      (string= (first indexed-sequences)
-              (format nil "~C[1;38;5;193m" +terminal-escape-character+))
+              (format nil "~C[1;38;5;193m" *terminal-escape-character*))
      "the brand gradient begins with its lightest green"))
   (test-assert
    (string= (terminal-style-sequence :brand-gradient-1 nil)
-            (format nil "~C[1;32m" +terminal-escape-character+))
+            (format nil "~C[1;32m" *terminal-escape-character*))
    "the brand gradient falls back to solid bold green")
   (let ((indexed-sequences
           (loop for style in '(:recovery-gradient-1 :recovery-gradient-2
@@ -1178,25 +1178,25 @@
      "every recovery-gradient row has a distinct indexed color")
     (test-assert
      (string= (first indexed-sequences)
-              (format nil "~C[1;38;5;224m" +terminal-escape-character+))
+              (format nil "~C[1;38;5;224m" *terminal-escape-character*))
      "the recovery gradient begins with its lightest red"))
   (test-assert
    (string= (terminal-style-sequence :recovery-gradient-1 nil)
-            (format nil "~C[1;31m" +terminal-escape-character+))
+            (format nil "~C[1;31m" *terminal-escape-character*))
    "the recovery gradient falls back to solid bold red")
   (test-assert
    (and (string= (terminal-style-sequence :status-model t)
                  (format nil "~C[1;96;48;5;236m"
-                         +terminal-escape-character+))
+                         *terminal-escape-character*))
         (string= (terminal-style-sequence :status-model nil)
-                 (format nil "~C[1;96;40m" +terminal-escape-character+)))
+                 (format nil "~C[1;96;40m" *terminal-escape-character*)))
    "status text keeps a base color over indexed and basic neutral backgrounds")
   (test-assert
    (and (string= (terminal-style-sequence :status-dim t)
                  (format nil "~C[37;48;5;236m"
-                         +terminal-escape-character+))
+                         *terminal-escape-character*))
         (string= (terminal-style-sequence :status-dim nil)
-                 (format nil "~C[37;40m" +terminal-escape-character+)))
+                 (format nil "~C[37;40m" *terminal-escape-character*)))
    "neutral status text stays readable without terminal-dependent faint color")
   (test-assert
    (let ((cl-colorist:*color-level* ':indexed))
@@ -1231,7 +1231,7 @@
   (let ((hostile (terminal--clip-spans
                   (list (terminal-span :plain
                                        (format nil "a~C[31mb~%c"
-                                               +terminal-escape-character+)))
+                                               *terminal-escape-character*)))
                   40)))
     (test-assert
      (not (terminal-tests--contains-control-character-p
@@ -1284,7 +1284,7 @@
            (let ((captured (get-output-stream-string output)))
              (test-assert (search "fallback output" captured)
                           "fallback mode writes finalized transcript output")
-             (test-assert (not (find +terminal-escape-character+ captured))
+             (test-assert (not (find *terminal-escape-character* captured))
                           "fallback mode emits no terminal controls")))
       (sb-posix:close read-descriptor)
       (sb-posix:close write-descriptor)))

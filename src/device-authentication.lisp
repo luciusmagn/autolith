@@ -2,11 +2,10 @@
 
 ;;;; -- Device Authentication Constants --
 
-(define-constant +openai-oauth-issuer+ "https://auth.openai.com"
-  :test #'string=
-  :documentation "The issuer for Autolith-owned ChatGPT device authentication.")
+(defparameter *openai-oauth-issuer* "https://auth.openai.com"
+  "The issuer for Autolith-owned ChatGPT device authentication.")
 
-(defconstant +device-authentication-timeout+ 900
+(defparameter *device-authentication-timeout* 900
   "The maximum number of seconds allowed for device authorization.")
 
 
@@ -231,14 +230,14 @@
     device-authentication-client)
 (defun device-authentication-client-create
     (&key
-       (issuer +openai-oauth-issuer+)
-       (client-id +openai-oauth-client-id+)
+       (issuer *openai-oauth-issuer*)
+       (client-id *openai-oauth-client-id*)
        request-function
        poll-function
        (sleep-function #'sleep)
        (clock-function #'device-authentication--monotonic-seconds)
        (browser-function #'device-authentication-open-browser)
-       (poll-timeout +device-authentication-timeout+))
+       (poll-timeout *device-authentication-timeout*))
   "Create a device client, optionally replacing every external effect."
   (unless (and (non-empty-string-p issuer)
                (non-empty-string-p client-id)
@@ -321,7 +320,7 @@
 (defun device-authentication--user-agent ()
   "Return the honest Autolith user agent sent to device endpoints."
   (format nil "autolith/~A (~A ~A; ~A)"
-          +autolith-version+
+          *autolith-version*
           (software-type)
           (software-version)
           (machine-type)))

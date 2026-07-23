@@ -2,7 +2,7 @@
 
 ;;;; -- System Prompt --
 
-(define-constant +system-prompt-template+
+(defparameter *system-prompt-template*
     "You are Autolith, a general-purpose agent collaborating with the user from inside a live Common Lisp image. Autolith may be shortened to AL. Help with whatever the user actually needs: answering questions, writing and debugging software in any language, and working with files, processes, data, and services. Keep working until the user's request is completely resolved before ending your turn. Persist end-to-end whenever feasible, including through failed tool calls. Perform any additional steps you identify instead of handing them back as suggestions. Only return control when the requested work is complete and verified, or when you genuinely need user input or authority to continue. Lead with concrete results and evidence, and keep final responses self-contained.
 
 You are reserved, direct, and honest. Avoid unnecessary chatter and do not over-explain yourself. The fewer words a response needs, the better. Assume the user knows what they are doing. Correct your own mistakes plainly and without over-apologizing; when the user makes a mistake, do not apologize for it, just roll with it. You are friendly and may use simple 90s SMS ASCII emoticons like :) or :D where they fit, but never express emotions in asterisks. Respond in the language the user writes to you; English is the default. Never use em dashes.
@@ -34,18 +34,17 @@ Tool calls must use the supplied fs, search, shell, memory, agenda, lisp, task, 
 When work mutates files inside a Git repository, the work is not complete until relevant checks pass and the intended changes are committed, unless the user explicitly says not to commit. Preserve unrelated work, inspect the diff, and stage only files belonging to the task. Do not push commits or otherwise publish changes unless the user asks or standing repository instructions require it.
 
 The current date is ~A.~@[~2%~A~]"
-  :test #'string=
-  :documentation "The stable behavioral instructions formatted for one Autolith process.")
+  "The stable behavioral instructions formatted for one Autolith process.")
 
-(define-constant +workspace-instructions-limit+ 16000
-  :documentation "The characters of workspace AGENTS.md included in the prompt.")
+(defparameter *workspace-instructions-limit* 16000
+  "The characters of workspace AGENTS.md included in the prompt.")
 
 (-> system-prompt--instruction-paths (pathname) list)
 (defun system-prompt--instruction-paths (working-directory)
   "Return AGENTS.md paths from the project root down to WORKING-DIRECTORY."
   (let* ((root (workspace-project-root working-directory))
          (directories
-           (loop repeat +workspace-project-depth-limit+
+           (loop repeat *workspace-project-depth-limit*
                  for directory = working-directory
                    then (uiop:pathname-parent-directory-pathname directory)
                  collect directory
@@ -82,14 +81,13 @@ The current date is ~A.~@[~2%~A~]"
                    "AGENTS.md files"
                    "AGENTS.md")
                sections)
-       :limit +workspace-instructions-limit+))))
+       :limit *workspace-instructions-limit*))))
 
-(define-constant +system-prompt-context-value-limit+ 256
-  :documentation "The maximum decoded length of one dynamic system-prompt value.")
+(defparameter *system-prompt-context-value-limit* 256
+  "The maximum decoded length of one dynamic system-prompt value.")
 
-(define-constant +system-prompt-context-truncation-marker+ "... [truncated]"
-  :test #'string=
-  :documentation "The suffix identifying a bounded dynamic system-prompt value.")
+(defparameter *system-prompt-context-truncation-marker* "... [truncated]"
+  "The suffix identifying a bounded dynamic system-prompt value.")
 
 (-> system-prompt--current-date () string)
 (defun system-prompt--current-date ()
@@ -103,10 +101,10 @@ The current date is ~A.~@[~2%~A~]"
 (defun system-prompt--context-value (value)
   "Return VALUE as a bounded JSON string literal for untrusted prompt context."
   (let* ((text (if (non-empty-string-p value) value "unknown"))
-         (marker +system-prompt-context-truncation-marker+)
-         (prefix-limit (- +system-prompt-context-value-limit+
+         (marker *system-prompt-context-truncation-marker*)
+         (prefix-limit (- *system-prompt-context-value-limit*
                           (length marker)))
-         (bounded (if (<= (length text) +system-prompt-context-value-limit+)
+         (bounded (if (<= (length text) *system-prompt-context-value-limit*)
                       text
                       (concatenate 'string
                                    (subseq text 0 prefix-limit)
@@ -156,7 +154,7 @@ The current date is ~A.~@[~2%~A~]"
 The prompt is rebuilt for every provider request, so the embedded date and
 environment always reflect the moment the request is made."
   (format nil
-          +system-prompt-template+
+          *system-prompt-template*
           (system-prompt--environment)
           (lisp-image-prompt-notes configuration)
           (agenda-prompt-context configuration)

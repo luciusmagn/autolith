@@ -11,7 +11,7 @@
                           :if-exists :supersede
                           :if-does-not-exist :create
                           :element-type '(unsigned-byte 8))
-    (file-position stream +minimum-lisp-image-core-size+)
+    (file-position stream (minimum-lisp-image-core-size))
     (write-byte 0 stream))
   pathname)
 
@@ -30,7 +30,7 @@
                    (lisp-image-publish-manifest
                     configuration
                     :identifier identifier
-                    :parent-identifier +pristine-lisp-image-identifier+
+                    :parent-identifier (pristine-lisp-image-identifier)
                     :note "Traces compiler type derivation for comparison."
                     :core-pathname core
                     :source-commit "0123456789abcdef")))
@@ -59,7 +59,7 @@
                  (lisp-image-publish-manifest
                   configuration
                   :identifier identifier
-                  :parent-identifier +pristine-lisp-image-identifier+
+                  :parent-identifier (pristine-lisp-image-identifier)
                   :note "A duplicate image."
                   :core-pathname core)
                  (test-assert nil "saved image identifiers are immutable"))

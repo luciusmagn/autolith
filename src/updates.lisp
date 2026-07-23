@@ -2,16 +2,15 @@
 
 ;;;; -- Release Versions --
 
-(define-constant +update-state-version+ 1
-  :documentation "The readable cached release-availability format version.")
+(defparameter *update-state-version* 1
+  "The readable cached release-availability format version.")
 
-(define-constant +update-check-interval+ (* 20 60 60)
-  :documentation "Seconds between nonblocking release-availability attempts.")
+(defparameter *update-check-interval* (* 20 60 60)
+  "Seconds between nonblocking release-availability attempts.")
 
-(define-constant +update-latest-url+
+(defparameter *update-latest-url*
   "https://sh.lambda-symbolics.com/releases/latest"
-  :test #'string=
-  :documentation "The default redirect identifying the newest complete release.")
+  "The default redirect identifying the newest complete release.")
 
 (-> release-tag->version (string) (option list))
 (defun release-tag->version (tag)
@@ -167,7 +166,7 @@
       (when (and release-root
                  source-root
                  tag
-                 (string= version +autolith-version+)
+                 (string= version *autolith-version*)
                  (stringp release-directory-name)
                  (string= release-directory-name tag)
                  (installation--same-directory-p
@@ -205,7 +204,7 @@
                (equal source-root nix-source-root))
       (make-instance 'installation-provenance
                      :method ':nix
-                     :current-tag (format nil "v~A" +autolith-version+)))))
+                     :current-tag (format nil "v~A" *autolith-version*)))))
 
 (-> installation-provenance-detect
     (configuration &key (:kind (option string))
@@ -286,7 +285,7 @@
                   (every (lambda (key)
                            (= (count key keys :test #'eq) 1))
                          expected)
-                  (= (getf properties :version -1) +update-state-version+)
+                  (= (getf properties :version -1) *update-state-version*)
                   (update-state--optional-time-p
                    (getf properties :last-attempt-at))
                   (update-state--optional-time-p
@@ -312,7 +311,7 @@
 (defun update-state--state->form (state)
   "Return the complete readable form for STATE."
   (list :update-state
-        :version +update-state-version+
+        :version *update-state-version*
         :last-attempt-at (update-state-last-attempt-at state)
         :last-success-at (update-state-last-success-at state)
         :latest-tag (update-state-latest-tag state)
@@ -345,7 +344,7 @@
     boolean)
 (defun update-state-check-due-p
     (state &key (now (get-universal-time))
-                (interval +update-check-interval+))
+                (interval *update-check-interval*))
   "Return true when STATE permits a new bounded release request at NOW."
   (let ((last-attempt (update-state-last-attempt-at state)))
     (or (null last-attempt)
@@ -456,7 +455,7 @@
   "Return the newest release tag through one bounded HTTPS redirect request."
   (multiple-value-bind (body status headers final-uri)
       (dexador:get (or (uiop:getenv "AUTOLITH_RELEASE_LATEST_URL")
-                       +update-latest-url+)
+                       *update-latest-url*)
                    :connect-timeout 3
                    :read-timeout 5
                    :max-redirects 5

@@ -2,7 +2,7 @@
 
 ;;;; -- Recovery State --
 
-(defconstant +recovery-image-protocol-version+ 2
+(defparameter *recovery-image-protocol-version* 2
   "The launcher handshake version implemented by this pristine recovery image.")
 
 (defclass recovery-context ()
@@ -981,7 +981,7 @@
         (progn
           (let ((*print-readably* t))
             (prin1 (list :recovery-probe
-                         :version +recovery-image-protocol-version+
+                         :version *recovery-image-protocol-version*
                          :sbcl-version (lisp-implementation-version)
                          :operating-system (software-type)
                          :operating-system-version (software-version)

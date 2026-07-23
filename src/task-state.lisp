@@ -2,80 +2,80 @@
 
 ;;;; -- In-Process Task Orchestration --
 
-(define-constant +task-default-maximum-concurrency+ 8 :documentation
-                 "The default number of child agents that may run concurrently.")
+(defparameter *task-default-maximum-concurrency* 8
+  "The default number of child agents that may run concurrently.")
 
-(define-constant +task-maximum-concurrency+ 32 :documentation
-                 "The largest supported child-agent worker pool.")
+(defparameter *task-maximum-concurrency* 32
+  "The largest supported child-agent worker pool.")
 
-(define-constant +task-default-maximum-runtime-milliseconds+ 1800000
-  :documentation "The default 30-minute wall-clock cap for one child agent.")
+(defparameter *task-default-maximum-runtime-milliseconds* 1800000
+  "The default 30-minute wall-clock cap for one child agent.")
 
-(define-constant +task-maximum-batch-size+ 16 :documentation
-                 "The largest task batch accepted atomically.")
+(defparameter *task-maximum-batch-size* 16
+  "The largest task batch accepted atomically.")
 
-(define-constant +task-maximum-live-jobs+ 64 :documentation
-                 "The maximum combined queued and running task jobs.")
+(defparameter *task-maximum-live-jobs* 64
+  "The maximum combined queued and running task jobs.")
 
-(define-constant +task-terminal-retention-limit+ 64 :documentation
-                 "The maximum terminal task summaries retained in one session.")
+(defparameter *task-terminal-retention-limit* 64
+  "The maximum terminal task summaries retained in one session.")
 
-(define-constant +task-shutdown-timeout-seconds+ 10 :documentation
-                 "The maximum time allowed for task worker shutdown.")
+(defparameter *task-shutdown-timeout-seconds* 10
+  "The maximum time allowed for task worker shutdown.")
 
-(define-constant +task-default-maximum-depth+ 2 :documentation
-                 "The default maximum child-agent depth below the primary agent.")
+(defparameter *task-default-maximum-depth* 2
+  "The default maximum child-agent depth below the primary agent.")
 
-(define-constant +task-default-maximum-output-bytes+ 500000 :documentation
-                 "The default maximum UTF-8 bytes retained from one child result.")
+(defparameter *task-default-maximum-output-bytes* 500000
+  "The default maximum UTF-8 bytes retained from one child result.")
 
-(define-constant +task-default-maximum-output-lines+ 5000 :documentation
-                 "The default maximum lines retained from one child result.")
+(defparameter *task-default-maximum-output-lines* 5000
+  "The default maximum lines retained from one child result.")
 
-(define-constant +task-progress-output-limit+ 8000 :documentation
-                 "The assistant-text tail retained in a live child progress snapshot.")
+(defparameter *task-progress-output-limit* 8000
+  "The assistant-text tail retained in a live child progress snapshot.")
 
-(define-constant +task-result-preview-limit+ 6000 :documentation
-                 "The result characters shown inline before referring to an artifact.")
+(defparameter *task-result-preview-limit* 6000
+  "The result characters shown inline before referring to an artifact.")
 
-(define-constant +task-identifier-maximum-characters+ 64 :documentation
-                 "The maximum friendly task identifier fragment retained by the scheduler.")
+(defparameter *task-identifier-maximum-characters* 64
+  "The maximum friendly task identifier fragment retained by the scheduler.")
 
-(define-constant +task-retained-assignment-limit+ 1000 :documentation
-                 "The assignment characters retained after a task becomes terminal.")
+(defparameter *task-retained-assignment-limit* 1000
+  "The assignment characters retained after a task becomes terminal.")
 
-(define-constant +task-retained-output-limit+ 2000 :documentation
-                 "The result output characters retained after artifact publication.")
+(defparameter *task-retained-output-limit* 2000
+  "The result output characters retained after artifact publication.")
 
-(define-constant +task-retained-progress-output-limit+ 1000 :documentation
-                 "The streamed output characters retained for a terminal job.")
+(defparameter *task-retained-progress-output-limit* 1000
+  "The streamed output characters retained for a terminal job.")
 
-(define-constant +task-retained-structured-output-limit+ 2000 :documentation
-                 "The readable structured-result characters retained outside its artifact.")
+(defparameter *task-retained-structured-output-limit* 2000
+  "The readable structured-result characters retained outside its artifact.")
 
-(define-constant +task-retained-usage-limit+ 1000 :documentation
-                 "The provider-usage characters retained after a task becomes terminal.")
+(defparameter *task-retained-usage-limit* 1000
+  "The provider-usage characters retained after a task becomes terminal.")
 
-(define-constant +task-tool-content-limit+ 16000 :documentation
-                 "The maximum provider-visible characters returned by task and job tools.")
+(defparameter *task-tool-content-limit* 16000
+  "The maximum provider-visible characters returned by task and job tools.")
 
-(define-constant +task-agent-page-default+ 16 :documentation
-                 "The default number of task-agent discovery records returned at once.")
+(defparameter *task-agent-page-default* 16
+  "The default number of task-agent discovery records returned at once.")
 
-(define-constant +task-agent-page-maximum+ 32 :documentation
-                 "The largest task-agent discovery page accepted by the provider tool.")
+(defparameter *task-agent-page-maximum* 32
+  "The largest task-agent discovery page accepted by the provider tool.")
 
-(define-constant +task-job-wait-maximum-seconds+ 3600 :documentation
-                 "The longest blocking wait accepted by job.wait.")
+(defparameter *task-job-wait-maximum-seconds* 3600
+  "The longest blocking wait accepted by job.wait.")
 
-(define-constant +task-job-page-default+ 32 :documentation
-                 "The default number of job.list records returned at once.")
+(defparameter *task-job-page-default* 32
+  "The default number of job.list records returned at once.")
 
-(define-constant +task-job-page-maximum+ 64 :documentation
-                 "The largest job.list page accepted by the provider tool.")
+(defparameter *task-job-page-maximum* 64
+  "The largest job.list page accepted by the provider tool.")
 
-(define-constant +task-result-label-maximum-characters+ 256 :documentation
-                 "The maximum child yield label length accepted and retained.")
+(defparameter *task-result-label-maximum-characters* 256
+  "The maximum child yield label length accepted and retained.")
 
 
 (defclass task-completion nil

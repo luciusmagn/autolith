@@ -121,7 +121,7 @@
       ((member value '("@task" "@parent" "@auto") :test #'string=) parent-model)
       ((string= value "@smol") "gpt-5.6-luna")
       ((member value '("@slow" "@designer") :test #'string=) "gpt-5.6-terra")
-      ((member alias +supported-models+ :test #'string=) alias) (t nil))))
+      ((member alias *supported-models* :test #'string=) alias) (t nil))))
 
 (defun task--thinking-effort (level parent-effort)
   "Resolve child reasoning LEVEL to a supported provider effort."
@@ -129,7 +129,7 @@
     (cond
       ((or (null value) (string= value "auto"))
        parent-effort)
-      ((member value +supported-reasoning-efforts+ :test #'string=) value)
+      ((member value *supported-reasoning-efforts* :test #'string=) value)
       (t parent-effort))))
 
 (defun task-configuration-for-definition (parent-configuration definition)
@@ -238,11 +238,11 @@
                   (declare (ignore label-present-p))
                   (when (and label
                              (> (length label)
-                                +task-result-label-maximum-characters+))
+                                *task-result-label-maximum-characters*))
                     (yield-error
                      (format nil
                              "Yield label may contain at most ~D characters."
-                             +task-result-label-maximum-characters+)))
+                             *task-result-label-maximum-characters*)))
                   (multiple-value-bind (data data-present-p)
                       (gethash "data" arguments)
                     (case status
@@ -292,11 +292,11 @@
   "Bound TEXT by configured UTF-8 bytes and lines, marking truncation."
   (let* ((maximum-bytes
           (task--environment-integer "AUTOLITH_TASK_MAX_OUTPUT_BYTES"
-                                     +task-default-maximum-output-bytes+
+                                     *task-default-maximum-output-bytes*
                                      :minimum 1))
          (maximum-lines
           (task--environment-integer "AUTOLITH_TASK_MAX_OUTPUT_LINES"
-                                     +task-default-maximum-output-lines+
+                                     *task-default-maximum-output-lines*
                                      :minimum 1))
          (lines (task--split-lines (or text "")))
          (line-bounded-p (> (length lines) maximum-lines))

@@ -2,57 +2,51 @@
 
 ;;;; -- Defaults --
 
-(define-constant +autolith-version+ "0.14.0"
-  :test #'string=
-  :documentation "The user-visible Autolith version.")
+(defparameter *autolith-version* "0.14.0"
+  "The user-visible Autolith version.")
 
-(define-constant +default-model+ "gpt-5.6-sol"
-  :test #'string=
-  :documentation "The default model requested from the subscription provider.")
+(defparameter *default-model* "gpt-5.6-sol"
+  "The default model requested from the subscription provider.")
 
-(define-constant +default-reasoning-effort+ "ultra"
-  :test #'string=
-  :documentation "The user-visible default reasoning effort.")
+(defparameter *default-reasoning-effort* "ultra"
+  "The user-visible default reasoning effort.")
 
-(define-constant +codex-responses-endpoint+
+(defparameter *codex-responses-endpoint*
   "https://chatgpt.com/backend-api/codex/responses"
-  :test #'string=
-  :documentation "The current ChatGPT Codex Responses endpoint.")
+  "The current ChatGPT Codex Responses endpoint.")
 
-(define-constant +openai-oauth-token-endpoint+
+(defparameter *openai-oauth-token-endpoint*
   "https://auth.openai.com/oauth/token"
-  :test #'string=
-  :documentation "The OpenAI OAuth token endpoint.")
+  "The OpenAI OAuth token endpoint.")
 
-(define-constant +openai-oauth-client-id+ "app_EMoamEEZ73f0CkXaXp7hrann"
-  :test #'string=
-  :documentation "The public OAuth client identifier used by Codex-compatible clients.")
+(defparameter *openai-oauth-client-id* "app_EMoamEEZ73f0CkXaXp7hrann"
+  "The public OAuth client identifier used by Codex-compatible clients.")
 
-(defparameter +supported-reasoning-efforts+
+(defparameter *supported-reasoning-efforts*
   '("none" "low" "medium" "high" "xhigh" "max" "ultra")
   "Reasoning effort names accepted by Autolith configuration.")
 
-(defparameter +supported-web-search-modes+
+(defparameter *supported-web-search-modes*
   '("cached" "live" "disabled")
   "Hosted web search modes accepted by Autolith configuration.")
 
-(defparameter +supported-models+
+(defparameter *supported-models*
   '("gpt-5.6-sol" "gpt-5.6-luna" "gpt-5.6-terra")
   "The 5.6 model family identifiers offered by the interactive model picker.")
 
 ;; Window sizes read from the live Codex model catalog on 2026-07-19 and
 ;; confirmed in Codex reference commit 0fb559f0f6e231a88ac02ea002d3ecd248e2b515.
-(defparameter +model-context-windows+
+(defparameter *model-context-windows*
   '(("gpt-5.6-sol"   . 272000)
     ("gpt-5.6-luna"  . 272000)
     ("gpt-5.6-terra" . 272000))
   "Provider context window sizes in tokens for known models.")
 
-(define-constant +default-context-window+ 272000
-  :documentation "The conservative context window assumed for unknown models.")
+(defparameter *default-context-window* 272000
+  "The conservative context window assumed for unknown models.")
 
-(define-constant +default-compaction-threshold-percent+ 80
-  :documentation "The context window percentage that triggers compaction.")
+(defparameter *default-compaction-threshold-percent* 80
+  "The context window percentage that triggers compaction.")
 
 
 (-> environment-directory (string pathname) pathname)
@@ -137,13 +131,13 @@
     :documentation "The hosted web search mode: cached, live, or disabled.")
    (context-window
     :initarg :context-window
-    :initform +default-context-window+
+    :initform *default-context-window*
     :reader configuration-context-window
     :type (integer 1)
     :documentation "The provider context window in tokens for the model.")
    (compaction-threshold-percent
     :initarg :compaction-threshold-percent
-    :initform +default-compaction-threshold-percent+
+    :initform *default-compaction-threshold-percent*
     :reader configuration-compaction-threshold-percent
     :type (integer 1 95)
     :documentation "The context window percentage that triggers compaction.")
@@ -161,8 +155,8 @@
     (or (and (non-empty-string-p override)
              (let ((parsed (parse-integer override :junk-allowed t)))
                (and parsed (plusp parsed) parsed)))
-        (rest (assoc model +model-context-windows+ :test #'string=))
-        +default-context-window+)))
+        (rest (assoc model *model-context-windows* :test #'string=))
+        *default-context-window*)))
 
 (-> configuration--compaction-threshold () integer)
 (defun configuration--compaction-threshold ()
@@ -176,7 +170,7 @@
                                          a percentage between 1 and 95, not ~S."
                                     override)))
           parsed)
-        +default-compaction-threshold-percent+)))
+        *default-compaction-threshold-percent*)))
 
 (-> configuration-compaction-token-limit (configuration) integer)
 (defun configuration-compaction-token-limit (configuration)
@@ -212,18 +206,18 @@
                         "CODEX_HOME"
                         (merge-pathnames ".codex/" home)))
            (environment-source-root (uiop:getenv "AUTOLITH_SOURCE_ROOT"))
-           (selected-model (or model (uiop:getenv "AUTOLITH_MODEL") +default-model+))
+           (selected-model (or model (uiop:getenv "AUTOLITH_MODEL") *default-model*))
            (selected-effort (or reasoning-effort
                                 (uiop:getenv "AUTOLITH_REASONING_EFFORT")
-                                +default-reasoning-effort+))
+                                *default-reasoning-effort*))
            (selected-web-search (let ((mode (uiop:getenv "AUTOLITH_WEB_SEARCH")))
                                   (if (non-empty-string-p mode)
                                       (string-downcase mode)
                                       "cached"))))
-    (unless (member selected-effort +supported-reasoning-efforts+ :test #'string=)
+    (unless (member selected-effort *supported-reasoning-efforts* :test #'string=)
       (error 'configuration-error
              :message (format nil "Unsupported reasoning effort ~S." selected-effort)))
-    (unless (member selected-web-search +supported-web-search-modes+
+    (unless (member selected-web-search *supported-web-search-modes*
                     :test #'string=)
       (error 'configuration-error
              :message (format nil "Unsupported web search mode ~S."
@@ -250,7 +244,7 @@
                    :compaction-threshold-percent
                    (configuration--compaction-threshold)
                    :provider-endpoint (or (uiop:getenv "AUTOLITH_PROVIDER_ENDPOINT")
-                                          +codex-responses-endpoint+))))
+                                          *codex-responses-endpoint*))))
 
 (-> configuration--clone
     (configuration &key (:working-directory (option pathname))
@@ -360,7 +354,7 @@ Selecting a different model recomputes the context window for that model."
 (-> configuration-with-reasoning-effort (configuration string) configuration)
 (defun configuration-with-reasoning-effort (configuration reasoning-effort)
   "Copy CONFIGURATION with only its REASONING-EFFORT changed."
-  (unless (member reasoning-effort +supported-reasoning-efforts+ :test #'string=)
+  (unless (member reasoning-effort *supported-reasoning-efforts* :test #'string=)
     (error 'configuration-error
            :message (format nil "Unsupported reasoning effort ~S."
                             reasoning-effort)))
@@ -369,11 +363,11 @@ Selecting a different model recomputes the context window for that model."
 (-> configuration-with-model (configuration string) configuration)
 (defun configuration-with-model (configuration model)
   "Copy CONFIGURATION with only its MODEL changed."
-  (unless (member model +supported-models+ :test #'string=)
+  (unless (member model *supported-models* :test #'string=)
     (error 'configuration-error
            :message (format nil "Unsupported model ~S. The choices are ~{~A~^, ~}."
                             model
-                            +supported-models+)))
+                            *supported-models*)))
   (configuration--clone configuration :model model))
 
 (-> configuration-ensure-directories (configuration) configuration)

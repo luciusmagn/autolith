@@ -2,9 +2,6 @@
 
 ;;;; -- OAuth Credentials --
 
-(defconstant +unix-to-universal-time+ 2208988800
-  "The number of seconds between the Unix and Common Lisp epochs.")
-
 (defvar *credentials-in-request-scope* nil
   "True only while provider credentials are dynamically available to a request.")
 
@@ -69,7 +66,7 @@
   (let* ((payload (jwt-payload token))
          (unix-expiration (and payload (json-get payload "exp"))))
     (when (integerp unix-expiration)
-      (+ unix-expiration +unix-to-universal-time+))))
+      (unix-time->universal-time unix-expiration))))
 
 (-> jwt-account-id (string) (option string))
 (defun jwt-account-id (token)
@@ -420,11 +417,11 @@
                :response nil))
       (handler-case
           (let* ((request (json-object
-                           "client_id" +openai-oauth-client-id+
+                           "client_id" *openai-oauth-client-id*
                            "grant_type" "refresh_token"
                            "refresh_token" refresh-token))
                  (body (dexador:post
-                        +openai-oauth-token-endpoint+
+                        *openai-oauth-token-endpoint*
                         :headers '(("Content-Type" . "application/json")
                                    ("Accept" . "application/json"))
                         :content (json-encode request)

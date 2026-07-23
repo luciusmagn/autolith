@@ -2,15 +2,14 @@
 
 ;;;; -- Release Server Configuration --
 
-(define-constant +release-server-default-address+ "127.0.0.1"
-  :test #'string=
-  :documentation "The default loopback address for the release HTTP service.")
+(defparameter *release-server-default-address* "127.0.0.1"
+  "The default loopback address for the release HTTP service.")
 
-(define-constant +release-server-default-port+ 8098
-  :documentation "The default loopback port for the release HTTP service.")
+(defparameter *release-server-default-port* 8098
+  "The default loopback port for the release HTTP service.")
 
-(define-constant +release-server-maximum-request-head-size+ 16384
-  :documentation "The maximum accepted HTTP request head size in bytes.")
+(defparameter *release-server-maximum-request-head-size* 16384
+  "The maximum accepted HTTP request head size in bytes.")
 
 (defclass release-server-configuration ()
   ((source-root
@@ -74,7 +73,7 @@
 (defun release-server--environment-port (value)
   "Parse an optional listener port VALUE, defaulting when it is absent."
   (if (null value)
-      +release-server-default-port+
+      *release-server-default-port*
       (handler-case
           (let ((port (parse-integer value :junk-allowed nil)))
             (unless (typep port '(integer 1 65535))
@@ -109,7 +108,7 @@
         #p"/srv/autolith-release-server/"))
    :address (or address
                 (uiop:getenv "AUTOLITH_RELEASE_LISTEN_ADDRESS")
-                +release-server-default-address+)
+                *release-server-default-address*)
    :port (or port
              (release-server--environment-port
               (uiop:getenv "AUTOLITH_RELEASE_LISTEN_PORT")))))
@@ -376,7 +375,7 @@
         do (error 'release-server-request-error
                   :message "The request ended before its headers.")
       do (vector-push-extend byte octets)
-         (when (> (length octets) +release-server-maximum-request-head-size+)
+         (when (> (length octets) *release-server-maximum-request-head-size*)
            (error 'release-server-request-error
                   :message "The request headers are too large."))
          (let ((length (length octets)))

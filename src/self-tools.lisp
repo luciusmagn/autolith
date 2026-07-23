@@ -300,7 +300,7 @@ protocol."
 
 ;;;; -- Definition Installation --
 
-(defparameter +definition-operators+
+(defparameter *definition-operators*
   '(defun defgeneric defmethod defmacro defclass defstruct define-condition
     deftype define-compiler-macro defvar defparameter define-constant
     define-context-contributor define-application-command)
@@ -320,7 +320,7 @@ protocol."
   "Return true when FORM is one supported complete top-level definition."
   (and (consp form)
        (symbolp (first form))
-       (member (first form) +definition-operators+ :test #'eq)
+       (member (first form) *definition-operators* :test #'eq)
        (definition-name-p (second form))))
 
 (-> method-specializers (list) list)

@@ -31,9 +31,9 @@
                    :cache-root (merge-pathnames "cache/" root)
                    :config-root (merge-pathnames "config/" root)
                    :codex-auth-path (merge-pathnames "missing-auth.json" root)
-                   :model +default-model+
-                   :reasoning-effort +default-reasoning-effort+
-                   :provider-endpoint +codex-responses-endpoint+)))
+                   :model *default-model*
+                   :reasoning-effort *default-reasoning-effort*
+                   :provider-endpoint *codex-responses-endpoint*)))
 (-> test-configuration-root (configuration) pathname)
 (defun test-configuration-root (configuration)
   "Return the common temporary root containing CONFIGURATION's data directory."
@@ -53,6 +53,6 @@
                    :cache-root (merge-pathnames "cache/" state-root)
                    :config-root (merge-pathnames "config/" state-root)
                    :codex-auth-path (merge-pathnames "missing-auth.json" state-root)
-                   :model +default-model+
-                   :reasoning-effort +default-reasoning-effort+
-                   :provider-endpoint +codex-responses-endpoint+)))
+                   :model *default-model*
+                   :reasoning-effort *default-reasoning-effort*
+                   :provider-endpoint *codex-responses-endpoint*)))

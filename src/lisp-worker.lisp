@@ -77,7 +77,7 @@
     lisp-worker)
 (defun lisp-worker-create
     (configuration &key (name "default")
-                        (image-identifier +pristine-lisp-image-identifier+))
+                        (image-identifier (pristine-lisp-image-identifier)))
   "Create a stopped named worker based on IMAGE-IDENTIFIER."
   (lisp-worker--call
    (lambda ()
@@ -371,7 +371,7 @@
   (let* ((manager (tool-context-worker context))
          (name (lisp-tool-repl-name arguments))
          (image (or (tool-argument arguments "image")
-                    +pristine-lisp-image-identifier+)))
+                    (pristine-lisp-image-identifier))))
     (typecase manager
       (lisp-worker-pool
        (lisp-worker-pool-reset manager name image))
@@ -397,7 +397,7 @@
   (let ((manager (tool-context-worker context))
         (name (lisp-tool-repl-name arguments))
         (image (or (tool-argument arguments "image")
-                   +pristine-lisp-image-identifier+)))
+                   (pristine-lisp-image-identifier))))
     (unless (typep manager 'lisp-worker-pool)
       (error 'worker-error
              :message "Named REPL creation requires a Lisp worker pool."

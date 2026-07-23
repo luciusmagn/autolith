@@ -2,8 +2,8 @@
 
 ;;;; -- Persistent Deferred Inputs --
 
-(define-constant +later-version+ 1
-  :documentation "The readable deferred-input state format version.")
+(defparameter *later-version* 1
+  "The readable deferred-input state format version.")
 
 (defclass later-entry ()
   ((identifier
@@ -76,7 +76,7 @@
            (= (length form) 5)
            (eq (first form) ':later)
            (eq (second form) ':version)
-           (= (third form) +later-version+)
+           (= (third form) *later-version*)
            (eq (fourth form) ':entries)
            (listp (fifth form))
            (every #'later--entry-form-p (fifth form))
@@ -172,7 +172,7 @@
 (defun later--state-form (state)
   "Return STATE as one portable readable form."
   (list :later
-        :version +later-version+
+        :version *later-version*
         :entries (mapcar #'later--entry->form
                          (later-state-entries state))))
 

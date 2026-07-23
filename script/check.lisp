@@ -102,7 +102,7 @@
              (format nil
                      "autolith ~A"
                      (symbol-value
-                      (find-symbol "+AUTOLITH-VERSION+" "AUTOLITH")))))
+                      (find-symbol "*AUTOLITH-VERSION*" "AUTOLITH")))))
       (unwind-protect
            (progn
              (ensure-directories-exist temporary-home)

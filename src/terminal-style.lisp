@@ -17,14 +17,10 @@
            :syntax-number :syntax-type :syntax-function :syntax-property
            :syntax-heading :syntax-link))
 
-;; General interface styles use the basic ANSI palette so Autolith follows the
-;; terminal theme. Only the startup mark opts into the indexed brand gradient.
-(define-constant +terminal-status-background+
-  (indexed-color 236 :fallback ':black)
-  :test #'equalp
-  :documentation "Neutral dark status background with a basic black fallback.")
-
-(define-constant +terminal-style-table+
+(defparameter *terminal-style-table*
+  ;; General interface styles use the basic ANSI palette so Autolith follows
+  ;; the terminal theme. Only the startup mark and status background opt into
+  ;; indexed colors.
   (append
    (loop for (name arguments) in
          '((:plain ())
@@ -74,15 +70,14 @@
          collect (cons name
                        (apply #'make-style
                               :foreground foreground
-                              :background +terminal-status-background+
+                              :background
+                              (indexed-color 236 :fallback ':black)
                               arguments))))
-  :test #'equalp
-  :documentation "Colorist style objects for Autolith's semantic styles.")
+  "Colorist style objects for Autolith's semantic styles.")
 
-(define-constant +terminal-style-reset+
+(defparameter *terminal-style-reset*
   (reset-sequence :level ':basic)
-  :test #'string=
-  :documentation "The trusted control that restores default terminal rendition.")
+  "The trusted control that restores default terminal rendition.")
 
 (-> terminal-environment-indexed-color-p () boolean)
 (defun terminal-environment-indexed-color-p ()
@@ -96,7 +91,7 @@
     (style &optional (indexed-color-p (terminal-environment-indexed-color-p)))
   "Return STYLE's trusted control, using INDEXED-COLOR-P for brand gradients."
   (let ((sequence
-          (sgr-sequence (rest (assoc style +terminal-style-table+))
+          (sgr-sequence (rest (assoc style *terminal-style-table*))
                         :level (if indexed-color-p ':indexed ':basic))))
     (and (plusp (length sequence)) sequence)))
 

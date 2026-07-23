@@ -2,8 +2,8 @@
 
 ;;;; -- Global Preferences --
 
-(define-constant +preferences-version+ 3
-  :documentation "The readable global preferences file format version.")
+(defparameter *preferences-version* 3
+  "The readable global preferences file format version.")
 
 (defclass preference-state ()
   ((model
@@ -59,7 +59,7 @@
                             (not
                              (null
                               (member effort
-                                      +supported-reasoning-efforts+
+                                      *supported-reasoning-efforts*
                                       :test #'string=))))
                         (or (= version 2)
                             (and
@@ -159,7 +159,7 @@
         (snapshot-write
          pathname
          (list :preferences
-               :version +preferences-version+
+               :version *preferences-version*
                :model (preference-state-model preferences)
                :reasoning-effort
                (preference-state-reasoning-effort preferences)

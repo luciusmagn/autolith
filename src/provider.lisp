@@ -142,15 +142,13 @@
     :documentation "The most recent portable rate limit snapshot from response headers."))
   (:documentation "A direct ChatGPT subscription client for the Codex Responses service."))
 
-(define-constant +provider-stream-retry-delays+
+(defparameter *provider-stream-retry-delays*
     '(1 2 4 8 16)
-  :test #'equal
-  :documentation "Backoff seconds for bounded provider stream reconnects.")
+  "Backoff seconds for bounded provider stream reconnects.")
 
-(define-constant +provider-retryable-event-error-codes+
+(defparameter *provider-retryable-event-error-codes*
     '("server_error" "internal_server_error")
-  :test #'equal
-  :documentation "Structured SSE error codes eligible for bounded retry.")
+  "Structured SSE error codes eligible for bounded retry.")
 
 (defparameter *provider-stream-retry-sleep-function* #'sleep
   "Function used to wait between provider stream reconnect attempts.")
@@ -253,10 +251,9 @@
 
 ;; Modeled on the Codex context checkpoint compaction instructions at
 ;; reference commit 5c19155c, restated for Autolith.
-(define-constant +compaction-instructions+
+(defparameter *compaction-instructions*
   "You are performing a context checkpoint compaction. Write a handoff summary for another model that will resume this conversation. Include the current progress and key decisions, important context, constraints, and user preferences, what remains to be done as clear next steps, and any critical data or references needed to continue. Be concise, structured, and complete enough that no earlier context is required."
-  :test #'string=
-  :documentation "The developer instructions driving one compaction request.")
+  "The developer instructions driving one compaction request.")
 
 (-> response-item-assistant-text (json-object) (option string))
 (defun response-item-assistant-text (item)
@@ -383,7 +380,7 @@ the transport consumes only after a completed response."
                                 (when context-message (list context-message))
                                 (when compaction-p
                                   (list (responses-lite-developer-message
-                                        +compaction-instructions+))))
+                                        *compaction-instructions*))))
                         'vector)))
     (when (and (provider-reasoning-summaries-p provider)
                (not compaction-p))
@@ -406,7 +403,7 @@ the transport consumes only after a completed response."
 (defun provider-user-agent ()
   "Return an honest, stable user agent for direct Autolith provider requests."
   (format nil "autolith/~A (~A ~A; ~A)"
-          +autolith-version+
+          *autolith-version*
           (software-type)
           (software-version)
           (machine-type)))
@@ -453,7 +450,7 @@ the transport consumes only after a completed response."
 
 ;;;; -- SSE Decoding --
 
-(defparameter +sse-end-of-stream+ (gensym "SSE-END-")
+(defvar *sse-end-of-stream* (gensym "SSE-END-")
   "A private marker returned after a clean SSE end of stream.")
 
 (-> sse-data-line (string) (option string))
@@ -471,12 +468,12 @@ the transport consumes only after a completed response."
 (defun sse-read-line (stream)
   "Read a line from STREAM using only the portable character-stream protocol."
   (let ((characters nil))
-    (loop for character = (read-char stream nil +sse-end-of-stream+)
+    (loop for character = (read-char stream nil *sse-end-of-stream*)
           do (cond
-               ((eq character +sse-end-of-stream+)
+               ((eq character *sse-end-of-stream*)
                 (return (if characters
                             (coerce (nreverse characters) 'string)
-                            +sse-end-of-stream+)))
+                            *sse-end-of-stream*)))
                ((char= character #\Newline)
                 (return (coerce (nreverse characters) 'string)))
                (t
@@ -488,10 +485,10 @@ the transport consumes only after a completed response."
   (let ((data-lines nil))
     (loop
       (let ((raw-line (sse-read-line stream)))
-        (when (eq raw-line +sse-end-of-stream+)
+        (when (eq raw-line *sse-end-of-stream*)
           (return (if data-lines
                       (format nil "~{~A~^~%~}" (nreverse data-lines))
-                      +sse-end-of-stream+)))
+                      *sse-end-of-stream*)))
         (let ((line (string-right-trim '(#\Return) raw-line)))
           (when (zerop (length line))
             (when data-lines
@@ -521,9 +518,6 @@ the transport consumes only after a completed response."
        nil))))
 
 ;;;; -- Rate Limit Snapshots --
-
-(define-constant +unix-epoch-universal-time+ 2208988800
-  :documentation "The Common Lisp universal time of the POSIX epoch.")
 
 (-> provider--parse-decimal (string) (option real))
 (defun provider--parse-decimal (text)
@@ -563,8 +557,7 @@ the transport consumes only after a completed response."
                                         (parse-integer resets
                                                        :junk-allowed t))))
                              (and seconds
-                                  (+ seconds
-                                     +unix-epoch-universal-time+)))))))))
+                                  (unix-time->universal-time seconds)))))))))
 
 (-> provider-rate-limit-snapshot (t) (option list))
 (defun provider-rate-limit-snapshot (headers)
@@ -785,7 +778,7 @@ the transport consumes only after a completed response."
   "Return true when structured provider CODE describes a transient failure."
   (not (null (and code
                   (member code
-                          +provider-retryable-event-error-codes+
+                          *provider-retryable-event-error-codes*
                           :test #'string-equal)))))
 
 (-> provider--signal-event-failure
@@ -830,7 +823,7 @@ the transport consumes only after a completed response."
         (completed-p nil))
     (loop until completed-p
           for data = (provider--read-sse-data stream headers)
-          do (when (eq data +sse-end-of-stream+)
+          do (when (eq data *sse-end-of-stream*)
                (provider--signal-stream-interruption
                 headers
                 "The provider stream closed before a terminal event."))
@@ -1021,15 +1014,15 @@ the transport consumes only after a completed response."
                    (attempt-with-authentication))
                (provider-retryable-error (condition)
                  (when (= retry-number
-                          (length +provider-stream-retry-delays+))
+                          (length *provider-stream-retry-delays*))
                    (error condition))
                  (let ((delay
-                         (nth retry-number +provider-stream-retry-delays+)))
+                         (nth retry-number *provider-stream-retry-delays*)))
                    (funcall event-callback
                             (make-instance
                              'provider-retry-event
                              :attempt (1+ retry-number)
                              :maximum-attempts
-                             (length +provider-stream-retry-delays+)
+                             (length *provider-stream-retry-delays*)
                              :delay delay))
                    (funcall *provider-stream-retry-sleep-function* delay)))))))

@@ -78,9 +78,9 @@
         (maximum-results
           (search-tool--bounded-integer
            arguments "max-results"
-           :fallback +search-default-result-limit+
+           :fallback *search-default-result-limit*
            :minimum 1
-           :maximum +search-maximum-result-limit+)))
+           :maximum *search-maximum-result-limit*)))
     (when (find #\Newline query)
       (error 'tool-error
              :message "search.files query must fit on one line."
@@ -106,9 +106,9 @@
         (maximum-results
           (search-tool--bounded-integer
            arguments "max-results"
-           :fallback +search-default-result-limit+
+           :fallback *search-default-result-limit*
            :minimum 1
-           :maximum +search-maximum-result-limit+)))
+           :maximum *search-maximum-result-limit*)))
     (when (find #\Newline pattern)
       (error 'tool-error
              :message "search.glob pattern must fit on one line."

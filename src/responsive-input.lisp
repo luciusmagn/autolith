@@ -2,8 +2,8 @@
 
 ;;;; -- Responsive Terminal Input --
 
-(define-constant +application-forced-interrupt-status+ 130
-  :documentation "The process status used when repeated Ctrl-C forces exit.")
+(defparameter *application-forced-interrupt-status* 130
+  "The process status used when repeated Ctrl-C forces exit.")
 
 (defvar *application-forced-exit-function*
   (lambda (status)
@@ -136,7 +136,7 @@ lock because ordinary shutdown may be blocked while either is unavailable."
             (application-input-controller-forced-exit-message controller))
            (terminal-flush terminal)))
     (funcall (application-input-controller-forced-exit-function controller)
-             +application-forced-interrupt-status+))
+             *application-forced-interrupt-status*))
   nil)
 
 (-> application-input-controller--forced-exit-message

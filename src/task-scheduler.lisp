@@ -40,23 +40,23 @@
                        (task--retained-prefix value limit)
                        (getf retained storage-field) storage
                        (getf retained characters-field) (length value))))))
-      (compact-string :assignment +task-retained-assignment-limit+
+      (compact-string :assignment *task-retained-assignment-limit*
                       :storage-field :assignment-storage
                       :characters-field :assignment-characters)
-      (compact-string :output +task-retained-output-limit+
+      (compact-string :output *task-retained-output-limit*
                       :storage-field :output-storage
                       :characters-field :output-characters)
-      (compact-string :error +task-retained-output-limit+
+      (compact-string :error *task-retained-output-limit*
                       :storage-field :error-storage
                       :characters-field :error-characters)
-      (compact-string :label +task-result-label-maximum-characters+
+      (compact-string :label *task-result-label-maximum-characters*
                       :storage-field :label-storage
                       :characters-field :label-characters))
     (when (getf retained :structured-output-present-p)
       (let* ((value (getf retained :structured-output))
              (serialized (task--write-readable-sexp value)))
         (when (> (length serialized)
-                 +task-retained-structured-output-limit+)
+                 *task-retained-structured-output-limit*)
           (setf (getf retained :structured-output) nil
                 (getf retained :structured-output-storage) storage
                 (getf retained :structured-output-characters)
@@ -64,7 +64,7 @@
     (let* ((usage (getf retained :usage))
            (serialized (and usage (task--write-readable-sexp usage))))
       (when (and serialized
-                 (> (length serialized) +task-retained-usage-limit+))
+                 (> (length serialized) *task-retained-usage-limit*))
         (setf (getf retained :usage) nil
               (getf retained :usage-storage) storage
               (getf retained :usage-characters) (length serialized))))
@@ -79,14 +79,14 @@
              (start
                (max 0
                     (- (length output)
-                       +task-retained-progress-output-limit+))))
+                       *task-retained-progress-output-limit*))))
         (setf (task-progress-status progress) state
               (task-progress-current-tool progress) nil
               (task-progress-output-tail progress) (subseq output start)
               (task-progress-usage progress)
               (task--compact-native-value
                (task-progress-usage progress)
-               +task-retained-usage-limit+)
+               *task-retained-usage-limit*)
               (task-progress-updated-at progress) (get-internal-real-time)))))
   nil)
 
@@ -98,7 +98,7 @@
           :agent (getf item :agent)
           :task (task--retained-prefix
                  (or (getf item :task) "")
-                 +task-retained-assignment-limit+)
+                 *task-retained-assignment-limit*)
           :async (getf item :async))))
 
 (-> task--compact-native-value (t integer) t)
@@ -148,7 +148,7 @@
                      (list identifier)))
         (loop while (> (length
                         (task-orchestrator-terminal-identifiers orchestrator))
-                       +task-terminal-retention-limit+)
+                       *task-terminal-retention-limit*)
               for expired =
                 (pop (task-orchestrator-terminal-identifiers orchestrator))
               do (remhash expired (task-orchestrator-jobs orchestrator))
@@ -235,7 +235,7 @@
                         (or report
                             (bounded-string
                              (princ-to-string condition)
-                             :limit +task-retained-output-limit+)))))
+                             :limit *task-retained-output-limit*)))))
               (setf final-result
                     (task-job--compact-result
                      final-result
@@ -244,7 +244,7 @@
                     report
                     (and report
                          (bounded-string
-                          report :limit +task-retained-output-limit+)))
+                          report :limit *task-retained-output-limit*)))
               (with-lock-held ((task-job-lock job))
                 (task-job--compact-progress job state)
                 (setf (task-job-state job) state
@@ -283,7 +283,7 @@
            (bounded-string
             (format nil "Task failure: ~A; publication failure: ~A"
                     execution-condition publication-condition)
-            :limit +task-retained-output-limit+))
+            :limit *task-retained-output-limit*))
          (definition-summary
            (or (task-job-definition-summary job)
                (task--agent-definition-summary (task-job-definition job))))
@@ -435,11 +435,11 @@
         (root-conversation-identifier
           (task-parent-root-conversation-identifier parent-agent))
         (owner-identifiers (task-parent-owner-identifiers parent-agent)))
-    (when (> count +task-maximum-batch-size+)
+    (when (> count *task-maximum-batch-size*)
       (error 'task-error
              :message
              (format nil "A task batch may contain at most ~D children."
-                     +task-maximum-batch-size+)
+                     *task-maximum-batch-size*)
              :tool-name "task.run"))
     (with-lock-held ((task-orchestrator-lock orchestrator))
       (when (or (task-orchestrator-shutdown-p orchestrator)
@@ -449,11 +449,11 @@
                :message "The task runtime is shutting down."
                :tool-name "task.run"))
       (when (> (+ (task-orchestrator--live-job-count orchestrator) count)
-               +task-maximum-live-jobs+)
+               *task-maximum-live-jobs*)
         (error 'task-error
                :message
                (format nil "The task runtime admits at most ~D live jobs."
-                       +task-maximum-live-jobs+)
+                       *task-maximum-live-jobs*)
                :tool-name "task.run"))
       (handler-case
           (dolist (entry entries)

@@ -206,7 +206,7 @@
                (snapshot-read pathname)
              (test-assert
               (and sole-form-p
-                   (= (third form) +agenda-version+)
+                   (= (third form) *agenda-version*)
                    (readable-state-property-present-p
                     (rest
                      (first

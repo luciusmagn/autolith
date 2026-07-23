@@ -163,7 +163,7 @@
          (usage (application--conversation-usage application)))
     (append
      (list (terminal-span :brand "autolith")
-           (terminal-span :dim (format nil " v~A~%" +autolith-version+)))
+           (terminal-span :dim (format nil " v~A~%" *autolith-version*)))
      (application--field-spans "model"
                                (format nil "~A (effort ~A)"
                                        (configuration-model configuration)
@@ -247,8 +247,8 @@
           (concatenate 'string "~/" (subseq namestring (length home)))
           namestring))))
 
-(define-constant +conversation-preview-width+ 48
-  :documentation "The cell width of the newest-message excerpt in pickers.")
+(defparameter *conversation-preview-width* 48
+  "The cell width of the newest-message excerpt in pickers.")
 
 (-> application--conversation-preview (pathname) (option string))
 (defun application--conversation-preview (pathname)
@@ -273,7 +273,7 @@
         (when preview
           (text-cell-prefix
            (sanitize-text preview :single-line-p t)
-           +conversation-preview-width+)))
+           *conversation-preview-width*)))
     (error ()
       nil)))
 
@@ -342,7 +342,7 @@
   "Return picker items for the supported reasoning efforts."
   (let ((current (configuration-reasoning-effort
                   (application-configuration application))))
-    (loop for effort in +supported-reasoning-efforts+
+    (loop for effort in *supported-reasoning-efforts*
           collect (list :name effort
                         :argument nil
                         :description (if (string= effort current)
@@ -461,7 +461,7 @@
   "Return picker items for the supported 5.6 model family."
   (let ((current (configuration-model
                   (application-configuration application))))
-    (loop for model in +supported-models+
+    (loop for model in *supported-models*
           collect (list :name model
                         :argument nil
                         :description (if (string= model current)
@@ -559,7 +559,7 @@
              (application-present application
                                   "The session goal is active again.")
              (application--run-turn application
-                                    +application-goal-continuation-prompt+
+                                    *application-goal-continuation-prompt*
                                     :continuation-p t)
              (application--run-goal-continuations application))
            (application-present application "No paused goal to resume.")))

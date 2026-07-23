@@ -2,21 +2,20 @@
 
 ;;;; -- Request-Local Memory Recall --
 
-(define-constant +memory-context-result-limit+ 6
-  :documentation "The maximum related memories offered in one provider request.")
+(defparameter *memory-context-result-limit* 6
+  "The maximum related memories offered in one provider request.")
 
-(define-constant +memory-context-evidence-limit+ 1900
-  :documentation "The maximum characters of ranked memory evidence in one request.")
+(defparameter *memory-context-evidence-limit* 1900
+  "The maximum characters of ranked memory evidence in one request.")
 
-(define-constant +memory-context-excerpt-limit+ 180
-  :documentation "The maximum memory-body characters shown in recall evidence.")
+(defparameter *memory-context-excerpt-limit* 180
+  "The maximum memory-body characters shown in recall evidence.")
 
-(define-constant +memory-context-stop-terms+
+(defparameter *memory-context-stop-terms*
     '("and" "are" "but" "can" "for" "from" "have" "into" "not" "that"
       "the" "their" "then" "this" "use" "was" "what" "when" "where"
       "which" "with" "would" "you" "your")
-  :test #'equal
-  :documentation "Common terms ignored by automatic related-memory recall.")
+  "Common terms ignored by automatic related-memory recall.")
 
 (-> memory-context--query (string) (option string))
 (defun memory-context--query (query)
@@ -25,7 +24,7 @@
           (remove-if
            (lambda (term)
              (or (< (length term) 3)
-                 (member term +memory-context-stop-terms+ :test #'string=)))
+                 (member term *memory-context-stop-terms* :test #'string=)))
            (memory--search-terms query))))
     (when terms
       (format nil "~{~A~^ ~}" terms))))
@@ -43,7 +42,7 @@
       "title" (memory-title memory)
       "tags" (coerce (memory-tags memory) 'vector)
       "excerpt" (memory--excerpt (memory-content memory)
-                                  +memory-context-excerpt-limit+)))))
+                                  *memory-context-excerpt-limit*)))))
 
 (-> memory-related-context
     (request-context)
@@ -61,7 +60,7 @@
                             :visibility ':relevant))
              (selected
                (subseq matches 0
-                       (min +memory-context-result-limit+ (length matches)))))
+                       (min *memory-context-result-limit* (length matches)))))
         (when selected
           (make-context-contribution
            :identifier "related-memories"
@@ -73,7 +72,7 @@
            (bounded-string
             (format nil "~{~A~^~%~}"
                     (mapcar #'memory-context--match-line selected))
-            :limit +memory-context-evidence-limit+)
+            :limit *memory-context-evidence-limit*)
            :priority 25
            :lifetime ':turn
            :deduplication-key "related-memories"))))))

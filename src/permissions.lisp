@@ -2,8 +2,8 @@
 
 ;;;; -- Persistent Command Permissions --
 
-(define-constant +permissions-version+ 1
-  :documentation "The readable command permission file format version.")
+(defparameter *permissions-version* 1
+  "The readable command permission file format version.")
 
 (defclass command-permission ()
   ((command
@@ -58,7 +58,7 @@
            (= (length form) 5)
            (eq (first form) ':permissions)
            (eq (second form) ':version)
-           (= (third form) +permissions-version+)
+           (= (third form) *permissions-version*)
            (eq (fourth form) ':rules)
            (listp (fifth form))
            (every #'permissions--rule-form-p (fifth form)))
@@ -120,7 +120,7 @@
 (defun permissions--state-form (state)
   "Return STATE as one portable readable form."
   (list :permissions
-        :version +permissions-version+
+        :version *permissions-version*
         :rules
         (loop for rule in (permission-state-rules state)
               collect (list :command

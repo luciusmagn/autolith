@@ -2,25 +2,12 @@
 
 ;;;; -- Conversation Identifier Format --
 
-(define-constant +conversation-identifier-alphabet+
+(defparameter *conversation-identifier-alphabet*
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-  :test #'string=
-  :documentation "The Bitcoin Base58 alphabet used by conversation identifiers.")
+  "The Bitcoin Base58 alphabet used by conversation identifiers.")
 
-(define-constant +conversation-identifier-base+ 58
-  :documentation "The radix of a conversation identifier component.")
-
-(define-constant +conversation-identifier-suffix-length+ 6
-  :documentation "The fixed Base58 width of the scrambled timestamp suffix.")
-
-(define-constant +conversation-identifier-stored-length+ 7
-  :documentation "The seed plus suffix width of a stored conversation identifier.")
-
-(define-constant +conversation-identifier-modulus+ #x100000000
-  :documentation "The modulus applied to Universal Time and its affine scramble.")
-
-(define-constant +conversation-identifier-mask+ #xffffffff
-  :documentation "The mask used by the specified unsigned 32-bit mixer.")
+(defparameter *conversation-identifier-suffix-length* 6
+  "The fixed Base58 width of the scrambled timestamp suffix.")
 
 (defvar *conversation-identifier-random-index-function*
   (lambda (limit)
@@ -34,18 +21,38 @@
 (defvar *conversation-identifier-lock* (make-lock "conversation identifiers")
   "Serialize conversation identifier allocation and migration in this process.")
 
+(-> conversation-identifier-base () integer)
+(defun conversation-identifier-base ()
+  "Return the live radix derived from the conversation identifier alphabet."
+  (length *conversation-identifier-alphabet*))
+
+(-> conversation-identifier-stored-length () integer)
+(defun conversation-identifier-stored-length ()
+  "Return the seed plus suffix width of a stored conversation identifier."
+  (1+ *conversation-identifier-suffix-length*))
+
+(-> conversation-identifier-modulus () integer)
+(defun conversation-identifier-modulus ()
+  "Return the fixed modulus used by the specified unsigned 32-bit scramble."
+  #x100000000)
+
+(-> conversation-identifier-mask () integer)
+(defun conversation-identifier-mask ()
+  "Return the fixed mask used by the specified unsigned 32-bit mixer."
+  #xffffffff)
+
 (-> conversation-identifier--base58-index (character) (option integer))
 (defun conversation-identifier--base58-index (character)
   "Return CHARACTER's zero-based Bitcoin Base58 index, or NIL."
-  (position character +conversation-identifier-alphabet+ :test #'char=))
+  (position character *conversation-identifier-alphabet* :test #'char=))
 
 (-> conversation-identifier-stored-p (t) boolean)
 (defun conversation-identifier-stored-p (value)
-  "Return true when VALUE is one canonical seven-character stored identifier."
+  "Return true when VALUE is one canonical stored conversation identifier."
   (not
    (null
     (and (stringp value)
-         (= (length value) +conversation-identifier-stored-length+)
+         (= (length value) (conversation-identifier-stored-length))
          (every #'conversation-identifier--base58-index value)))))
 
 (-> conversation-identifier-normalize (t) string)
@@ -57,7 +64,7 @@
              value)
             ((and (stringp value)
                   (= (length value)
-                     (1+ +conversation-identifier-stored-length+))
+                     (1+ (conversation-identifier-stored-length)))
                   (char= (char value 1) #\-))
              (concatenate 'string (subseq value 0 1) (subseq value 2)))
             (t
@@ -89,17 +96,17 @@
 
 The operation is the MurmurHash3 32-bit finalizer. Every intermediate product
 is reduced modulo 2^32, so its result does not depend on fixnum width."
-  (let ((mixed (logand value +conversation-identifier-mask+)))
+  (let ((mixed (logand value (conversation-identifier-mask))))
     (setf mixed (logand (logxor mixed (ash mixed -16))
-                        +conversation-identifier-mask+)
+                        (conversation-identifier-mask))
           mixed (logand (* mixed #x85ebca6b)
-                        +conversation-identifier-mask+)
+                        (conversation-identifier-mask))
           mixed (logand (logxor mixed (ash mixed -13))
-                        +conversation-identifier-mask+)
+                        (conversation-identifier-mask))
           mixed (logand (* mixed #xc2b2ae35)
-                        +conversation-identifier-mask+)
+                        (conversation-identifier-mask))
           mixed (logand (logxor mixed (ash mixed -16))
-                        +conversation-identifier-mask+))
+                        (conversation-identifier-mask)))
     mixed))
 
 (-> conversation-identifier--seed-parameters (integer) (values integer integer))
@@ -108,9 +115,14 @@ is reduced modulo 2^32, so its result does not depend on fixnum width."
 
 The independent hexadecimal domain constants and CONVERSATION-IDENTIFIER--MIX32
 fully specify the portable derivation."
-  (unless (typep seed-index '(integer 0 57))
+  (unless (and (integerp seed-index)
+               (<= 0 seed-index)
+               (< seed-index (conversation-identifier-base)))
     (error 'conversation-identifier-error
-           :message "A conversation identifier seed index must be from 0 through 57."
+           :message
+           (format nil
+                   "A conversation identifier seed index must be from 0 through ~D."
+                   (1- (conversation-identifier-base)))
            :value seed-index))
   (values
    (logior 1
@@ -122,20 +134,21 @@ fully specify the portable derivation."
 (-> conversation-identifier--encode-suffix (integer) string)
 (defun conversation-identifier--encode-suffix (value)
   "Encode unsigned 32-bit VALUE as exactly six Bitcoin Base58 characters."
-  (unless (typep value '(integer 0 4294967295))
+  (unless (and (integerp value)
+               (<= 0 value (conversation-identifier-mask)))
     (error 'conversation-identifier-error
            :message "A conversation identifier suffix value must be unsigned 32-bit."
            :value value))
   (let ((encoded
-          (make-string +conversation-identifier-suffix-length+
+          (make-string *conversation-identifier-suffix-length*
                        :initial-element
-                       (char +conversation-identifier-alphabet+ 0)))
+                       (char *conversation-identifier-alphabet* 0)))
         (remaining value))
-    (loop for position downfrom (1- +conversation-identifier-suffix-length+) to 0
+    (loop for position downfrom (1- *conversation-identifier-suffix-length*) to 0
           do (multiple-value-bind (quotient remainder)
-                 (floor remaining +conversation-identifier-base+)
+                 (floor remaining (conversation-identifier-base))
                (setf (char encoded position)
-                     (char +conversation-identifier-alphabet+ remainder)
+                     (char *conversation-identifier-alphabet* remainder)
                      remaining quotient)))
     encoded))
 
@@ -144,13 +157,13 @@ fully specify the portable derivation."
   "Return the stored identifier for Universal TIMESTAMP and SEED-INDEX."
   (multiple-value-bind (multiplier offset)
       (conversation-identifier--seed-parameters seed-index)
-    (let* ((seconds (mod timestamp +conversation-identifier-modulus+))
+    (let* ((seconds (mod timestamp (conversation-identifier-modulus)))
            (scrambled
              (mod (+ (* multiplier seconds) offset)
-                  +conversation-identifier-modulus+)))
+                  (conversation-identifier-modulus))))
       (concatenate
        'string
-       (string (char +conversation-identifier-alphabet+ seed-index))
+       (string (char *conversation-identifier-alphabet* seed-index))
        (conversation-identifier--encode-suffix scrambled)))))
 
 (-> conversation-identifier--reserved-p (pathname string) boolean)
@@ -179,14 +192,16 @@ occupied set for migration planning."
     (with-lock-held (*conversation-identifier-lock*)
       (let ((first-seed
               (funcall *conversation-identifier-random-index-function*
-                       +conversation-identifier-base+)))
-        (unless (typep first-seed '(integer 0 57))
+                       (conversation-identifier-base))))
+        (unless (and (integerp first-seed)
+                     (<= 0 first-seed)
+                     (< first-seed (conversation-identifier-base)))
           (error 'conversation-identifier-error
                  :message "The conversation identifier entropy source returned an invalid seed index."
                  :value first-seed))
-        (loop for probe below +conversation-identifier-base+
+        (loop for probe below (conversation-identifier-base)
               for seed-index = (mod (+ first-seed probe)
-                                    +conversation-identifier-base+)
+                                    (conversation-identifier-base))
               for identifier = (conversation-identifier-from-seed
                                 timestamp seed-index)
               unless (or (member identifier reserved-identifiers :test #'string=)

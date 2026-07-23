@@ -23,7 +23,7 @@
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
          (state-path (configuration-update-state-path configuration))
-         (release-tag (format nil "v~A" +autolith-version+))
+         (release-tag (format nil "v~A" *autolith-version*))
          (newer-tag "v99.0.0")
          (install-root (merge-pathnames "installation/" root))
          (release-root (merge-pathnames
@@ -74,9 +74,9 @@
                      :cache-root (configuration-cache-root configuration)
                      :codex-auth-path
                      (configuration-codex-auth-path configuration)
-                     :model +default-model+
-                     :reasoning-effort +default-reasoning-effort+
-                     :provider-endpoint +codex-responses-endpoint+))
+                     :model *default-model*
+                     :reasoning-effort *default-reasoning-effort*
+                     :provider-endpoint *codex-responses-endpoint*))
                   (release
                     (installation-provenance-detect
                      packaged-configuration
@@ -140,7 +140,7 @@
                 "successful refresh atomically caches timing and release data")))
            (let ((*update-check-fetch-function*
                    (lambda () (error "offline"))))
-             (let ((failed-at (+ 200 +update-check-interval+)))
+             (let ((failed-at (+ 200 *update-check-interval*)))
                (test-assert
                 (not (update-state-refresh configuration :now failed-at))
                           "a network failure is nonfatal")

@@ -2,20 +2,19 @@
 
 ;;;; -- Request-Local Context --
 
-(define-constant +context-contribution-identifier-limit+ 128
-  :documentation "The maximum characters in a context contribution identifier.")
+(defparameter *context-contribution-identifier-limit* 128
+  "The maximum characters in a context contribution identifier.")
 
-(define-constant +context-contribution-instruction-limit+ 4000
-  :documentation "The maximum characters in one request-local instruction.")
+(defparameter *context-contribution-instruction-limit* 4000
+  "The maximum characters in one request-local instruction.")
 
-(define-constant +context-contribution-evidence-limit+ 2000
-  :documentation "The maximum characters in one untrusted evidence value.")
+(defparameter *context-contribution-evidence-limit* 2000
+  "The maximum characters in one untrusted evidence value.")
 
-(define-constant +context-contribution-reference-limit+ 32
-  :documentation "The maximum supersession references on one contribution.")
+(defparameter *context-contribution-reference-limit* 32
+  "The maximum supersession references on one contribution.")
 
-(define-constant +context-delivery-diagnostic-limit+ 32
-  :documentation
+(defparameter *context-delivery-diagnostic-limit* 32
   "The maximum number of conversations retaining last-delivery diagnostics.")
 
 (defparameter *context-advice-token-budget* 1500
@@ -183,11 +182,11 @@
 (defun context--validate-identifier (value field)
   "Return non-empty string VALUE after validating bounded FIELD identity."
   (unless (and (non-empty-string-p value)
-               (<= (length value) +context-contribution-identifier-limit+))
+               (<= (length value) *context-contribution-identifier-limit*))
     (error 'configuration-error
            :message (format nil "~A must contain 1 to ~D characters."
                             field
-                            +context-contribution-identifier-limit+)))
+                            *context-contribution-identifier-limit*)))
   value)
 
 (-> context--validate-references (t) list)
@@ -196,11 +195,11 @@
   (unless (handler-case
               (let ((length (list-length references)))
                 (and (integerp length)
-                     (<= length +context-contribution-reference-limit+)
+                     (<= length *context-contribution-reference-limit*)
                      (every (lambda (reference)
                               (and (non-empty-string-p reference)
                                    (<= (length reference)
-                                       +context-contribution-identifier-limit+)))
+                                       *context-contribution-identifier-limit*)))
                             references)))
             (type-error ()
               nil))
@@ -224,17 +223,17 @@
   (context--validate-identifier identifier "Context contribution identifier")
   (unless (and (non-empty-string-p instruction)
                (<= (length instruction)
-                   +context-contribution-instruction-limit+))
+                   *context-contribution-instruction-limit*))
     (error 'configuration-error
            :message (format nil "Context instruction must contain 1 to ~D characters."
-                            +context-contribution-instruction-limit+)))
+                            *context-contribution-instruction-limit*)))
   (unless (or (null evidence)
               (and (stringp evidence)
                    (<= (length evidence)
-                       +context-contribution-evidence-limit+)))
+                       *context-contribution-evidence-limit*)))
     (error 'configuration-error
            :message (format nil "Context evidence must contain at most ~D characters."
-                            +context-contribution-evidence-limit+)))
+                            *context-contribution-evidence-limit*)))
   (unless (typep lifetime 'context-contribution-lifetime)
     (error 'configuration-error
            :message (format nil "Unsupported context lifetime ~S." lifetime)))
@@ -680,7 +679,7 @@ same evaluation behavior as DEFUN."
                   (remove identifier *context-last-delivery-order*
                           :test #'string=)))
       (let ((evicted
-              (nthcdr +context-delivery-diagnostic-limit+
+              (nthcdr *context-delivery-diagnostic-limit*
                       *context-last-delivery-order*)))
         (dolist (evicted-identifier evicted)
           (remhash evicted-identifier *context-last-deliveries*))
@@ -688,7 +687,7 @@ same evaluation behavior as DEFUN."
           (setf *context-last-delivery-order*
                 (subseq *context-last-delivery-order*
                         0
-                        +context-delivery-diagnostic-limit+))))))
+                        *context-delivery-diagnostic-limit*))))))
   nil)
 
 (-> context-resolve-request

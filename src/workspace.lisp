@@ -2,8 +2,8 @@
 
 ;;;; -- Workspace Identity --
 
-(define-constant +workspace-project-depth-limit+ 64
-  :documentation "The most ancestor directories inspected for a project root.")
+(defparameter *workspace-project-depth-limit* 64
+  "The most ancestor directories inspected for a project root.")
 
 (-> workspace-project-root (pathname) pathname)
 (defun workspace-project-root (working-directory)
@@ -17,7 +17,7 @@ Git marker is its own project identity."
                        (merge-pathnames ".git/" directory))
                       (uiop:file-exists-p (merge-pathnames ".git" directory)))
                   t)))
-    (loop repeat +workspace-project-depth-limit+
+    (loop repeat *workspace-project-depth-limit*
           for directory = working-directory
             then (uiop:pathname-parent-directory-pathname directory)
           for parent = (uiop:pathname-parent-directory-pathname directory)

@@ -26,6 +26,7 @@
                              (:file "types")
                              (:file "conditions")
                              (:file "json")
+                             (:file "time")
                              (:file "configuration")
                              (:file "workspace")
                              (:file "image-input")

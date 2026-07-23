@@ -108,7 +108,7 @@
                (plusp
                 (task-orchestrator-maximum-runtime-milliseconds orchestrator))
                (= (task-orchestrator-maximum-runtime-milliseconds orchestrator)
-                  +task-default-maximum-runtime-milliseconds+))
+                  *task-default-maximum-runtime-milliseconds*))
               "task children have a finite default runtime deadline"))
            (sb-posix:setenv "AUTOLITH_TASK_MAX_RUNTIME_MS" "1000" 1)
            (let* ((configuration (test-configuration))
@@ -875,7 +875,7 @@
                           :agent primary)))
     (unwind-protect
          (progn
-           (dotimes (index +task-job-page-maximum+)
+           (dotimes (index *task-job-page-maximum*)
              (declare (ignore index))
              (task-tests--register-job
               orchestrator primary definition :name requested-name))
@@ -884,18 +884,18 @@
                      tool context
                      (json-object
                       "offset" 0
-                      "limit" +task-job-page-maximum+)))
+                      "limit" *task-job-page-maximum*)))
                   (content (tool-result-content result))
                   (form (task-tests--read-exact-native-value content))
                   (properties (rest form)))
              (test-assert
               (and (eq (first form) :job-list)
                    (= (getf properties :count)
-                      +task-job-page-maximum+)
+                      *task-job-page-maximum*)
                    (= (getf properties :total)
-                      +task-job-page-maximum+)
+                      *task-job-page-maximum*)
                    (null (getf properties :next-offset))
-                   (<= (length content) +task-tool-content-limit+))
+                   (<= (length content) *task-tool-content-limit*))
               "a maximum-size job.list request returns a bounded native page"))
            (let ((offset 0)
                  (identifiers nil)
@@ -919,9 +919,9 @@
                        (= (getf properties :offset) offset)
                        (= (getf properties :count) (length jobs))
                        (= (getf properties :total)
-                          +task-job-page-maximum+)
+                          *task-job-page-maximum*)
                        (plusp (length jobs))
-                       (<= (length content) +task-tool-content-limit+))
+                       (<= (length content) *task-tool-content-limit*))
                   "each maximum-size job.list request returns one bounded native page")
                  (setf identifiers
                        (nconc identifiers
@@ -931,10 +931,10 @@
                      (return))))
              (test-assert
               (and (> page-count 1)
-                   (= (length identifiers) +task-job-page-maximum+)
+                   (= (length identifiers) *task-job-page-maximum*)
                    (= (length
                        (remove-duplicates identifiers :test #'string=))
-                      +task-job-page-maximum+))
+                      *task-job-page-maximum*))
               "job.list pagination returns every oversized summary exactly once")))
       (uiop:delete-directory-tree root :validate t
                                        :if-does-not-exist :ignore)))
@@ -1167,7 +1167,7 @@
                     (task-tests--register-job
                      orchestrator primary definition :name "live-sentinel"))
                   (identifiers nil))
-             (dotimes (index (1+ +task-terminal-retention-limit+))
+             (dotimes (index (1+ *task-terminal-retention-limit*))
                (let* ((job
                         (task-tests--register-job
                          orchestrator primary definition
@@ -1189,13 +1189,13 @@
                (test-assert
                 (and (= (length
                          (task-orchestrator-terminal-identifiers orchestrator))
-                        +task-terminal-retention-limit+)
+                        *task-terminal-retention-limit*)
                      (= (hash-table-count
                          (task-orchestrator-jobs orchestrator))
-                        (1+ +task-terminal-retention-limit+))
+                        (1+ *task-terminal-retention-limit*))
                      (= (hash-table-count
                          (task-orchestrator-names orchestrator))
-                        (1+ +task-terminal-retention-limit+))
+                        (1+ *task-terminal-retention-limit*))
                      (= (task-orchestrator-live-count orchestrator) 1)
                      (null
                       (gethash first-id
@@ -1255,7 +1255,7 @@
                    (queue-count (length (task-orchestrator-queue orchestrator)))
                    (live-count (task-orchestrator-live-count orchestrator)))
                (test-assert
-                (= live-count +task-maximum-live-jobs+)
+                (= live-count *task-maximum-live-jobs*)
                 "the scheduler admits exactly 64 simultaneous live jobs")
                (test-assert
                 (handler-case
@@ -1313,7 +1313,7 @@
                   (task-tests--terminal-result
                    parent :status :success :output "parent terminal")))
            (task-job--publish-terminal parent :completed parent-result)
-           (dotimes (index +task-terminal-retention-limit+)
+           (dotimes (index *task-terminal-retention-limit*)
              (let* ((job
                       (task-tests--register-job
                        orchestrator primary definition
@@ -1464,7 +1464,7 @@
                     (make-instance 'task-test-provider :mode :manifest))
                   (tasks
                     (coerce
-                     (loop for index from 1 to +task-maximum-batch-size+
+                     (loop for index from 1 to *task-maximum-batch-size*
                            collect
                            (json-object
                             "name" (format nil "manifest-~2,'0D" index)
@@ -1492,16 +1492,16 @@
                    (equal form (getf observation :details))
                    (eq (first form) :task-run)
                    (null (getf (rest form) :succeeded-p))
-                   (<= (length content) +task-tool-content-limit+))
+                   (<= (length content) *task-tool-content-limit*))
               "task.run returns one exact bounded native manifest on partial failure")
              (test-assert
-              (and (= (length results) +task-maximum-batch-size+)
-                   (= (length artifacts) +task-maximum-batch-size+)
+              (and (= (length results) *task-maximum-batch-size*)
+                   (= (length artifacts) *task-maximum-batch-size*)
                    (= (length
                        (remove-duplicates
                         (mapcar (lambda (result) (getf result :id)) results)
                         :test #'string=))
-                      +task-maximum-batch-size+)
+                      *task-maximum-batch-size*)
                    (every
                     (lambda (result)
                       (let ((artifact (getf (getf result :result) :artifact)))
@@ -1641,7 +1641,7 @@
            (let ((orchestrator (task-orchestrator-create)))
              (test-assert
               (= (task-orchestrator-maximum-concurrency orchestrator)
-                 +task-maximum-concurrency+)
+                 *task-maximum-concurrency*)
               "environment concurrency cannot exceed the hard pool cap")))
       (if previous-concurrency
           (sb-posix:setenv "AUTOLITH_TASK_MAX_CONCURRENCY"

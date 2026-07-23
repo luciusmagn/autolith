@@ -29,11 +29,11 @@
 
 ;;;; -- Tool Arguments --
 
-(define-constant +memory-search-default-results+ 20
-  :documentation "The default number of memory search results returned to the model.")
+(defparameter *memory-search-default-results* 20
+  "The default number of memory search results returned to the model.")
 
-(define-constant +memory-search-maximum-results+ 50
-  :documentation "The largest memory result page returned to the model.")
+(defparameter *memory-search-maximum-results* 50
+  "The largest memory result page returned to the model.")
 
 (-> memory-tool--visibility (json-object) memory-visibility)
 (defun memory-tool--visibility (arguments)
@@ -87,9 +87,9 @@
   (let ((requested (tool-argument arguments "max-results")))
     (cond
       ((null requested)
-       +memory-search-default-results+)
+       *memory-search-default-results*)
       ((and (integerp requested) (plusp requested))
-       (min requested +memory-search-maximum-results+))
+       (min requested *memory-search-maximum-results*))
       (t
        (error 'tool-error
               :message "max-results must be a positive integer."

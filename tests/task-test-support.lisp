@@ -252,7 +252,7 @@
                   (json-object "id" "saturation-leaf-2"
                                "timeout-seconds" 1))))
                ((and (eq (task-test-provider-mode provider) :manifest)
-                     (= request-number +task-maximum-batch-size+))
+                     (= request-number *task-maximum-batch-size*))
                 (agent-test-call
                  :call-id (format nil "yield-~D" request-number)
                  :namespace "yield"

@@ -2,23 +2,23 @@
 
 ;;;; -- Workspace Agendas --
 
-(define-constant +agenda-version+ 2
-  :documentation "The readable workspace-agenda state format version.")
+(defparameter *agenda-version* 2
+  "The readable workspace-agenda state format version.")
 
-(define-constant +agenda-legacy-version+ 1
-  :documentation "The agenda format version without persistent-memory links.")
+(defparameter *agenda-legacy-version* 1
+  "The agenda format version without persistent-memory links.")
 
-(define-constant +agenda-maximum-items+ 32
-  :documentation "The maximum number of items retained in one workspace agenda.")
+(defparameter *agenda-maximum-items* 32
+  "The maximum number of items retained in one workspace agenda.")
 
-(define-constant +agenda-item-text-limit+ 500
-  :documentation "The maximum character count of one agenda item.")
+(defparameter *agenda-item-text-limit* 500
+  "The maximum character count of one agenda item.")
 
-(define-constant +agenda-item-memory-limit+ 16
-  :documentation "The maximum memory identifiers linked to one agenda item.")
+(defparameter *agenda-item-memory-limit* 16
+  "The maximum memory identifiers linked to one agenda item.")
 
-(define-constant +agenda-memory-identifier-limit+ 128
-  :documentation "The maximum characters in one linked memory identifier.")
+(defparameter *agenda-memory-identifier-limit* 128
+  "The maximum characters in one linked memory identifier.")
 
 (deftype agenda-status ()
   "The lifecycle or informational role of one agenda item."
@@ -87,11 +87,11 @@
   (handler-case
       (let ((length (list-length identifiers)))
         (and (integerp length)
-             (<= length +agenda-item-memory-limit+)
+             (<= length *agenda-item-memory-limit*)
              (every (lambda (identifier)
                       (and (non-empty-string-p identifier)
                            (<= (length identifier)
-                               +agenda-memory-identifier-limit+)))
+                               *agenda-memory-identifier-limit*)))
                     identifiers)
              (= length
                 (length (remove-duplicates identifiers :test #'string=)))))
@@ -106,7 +106,7 @@
            (eq (first form) ':item)
            (let ((properties (rest form)))
              (and (= (length properties)
-                     (if (= version +agenda-legacy-version+) 10 12))
+                     (if (= version *agenda-legacy-version*) 10 12))
                   (every (lambda (property)
                            (readable-state-property-present-p properties
                                                               property))
@@ -114,11 +114,11 @@
                   (non-empty-string-p (getf properties :id))
                   (let ((text (getf properties :text)))
                     (and (non-empty-string-p text)
-                         (<= (length text) +agenda-item-text-limit+)))
+                         (<= (length text) *agenda-item-text-limit*)))
                   (typep (getf properties :status) 'agenda-status)
                   (typep (getf properties :created-at) 'timestamp)
                   (typep (getf properties :updated-at) 'timestamp)
-                  (or (= version +agenda-legacy-version+)
+                  (or (= version *agenda-legacy-version*)
                       (and (readable-state-property-present-p
                             properties :memory-ids)
                            (agenda--memory-identifiers-p
@@ -139,7 +139,7 @@
                   (readable-state-property-present-p properties :items)
                   (non-empty-string-p (getf properties :directory))
                   (listp items)
-                  (<= (length items) +agenda-maximum-items+)
+                  (<= (length items) *agenda-maximum-items*)
                   (every (lambda (item)
                            (agenda--item-form-p item version))
                          items)
@@ -160,7 +160,7 @@
         (and (= (length form) 5)
              (eq (first form) ':agendas)
              (eq (second form) ':version)
-             (member version (list +agenda-legacy-version+ +agenda-version+))
+             (member version (list *agenda-legacy-version* *agenda-version*))
              (eq (fourth form) ':records)
              (listp (fifth form))
              (every (lambda (record)
@@ -186,7 +186,7 @@
                    :created-at (getf properties :created-at)
                    :updated-at (getf properties :updated-at)
                    :memory-identifiers
-                   (if (= version +agenda-legacy-version+)
+                   (if (= version *agenda-legacy-version*)
                        nil
                        (copy-list (getf properties :memory-ids))))))
 
@@ -274,7 +274,7 @@
 (defun agenda--state-form (state)
   "Return STATE as one portable readable form."
   (list :agendas
-        :version +agenda-version+
+        :version *agenda-version*
         :records (mapcar #'agenda--record->form
                          (agenda-state-records state))))
 
@@ -394,10 +394,10 @@ when REQUIRE-EXISTING-P is false, but it must still name an absolute path."
 (defun agenda--validate-text (configuration text)
   "Return a copied valid agenda TEXT or signal a typed validation failure."
   (unless (and (non-empty-string-p text)
-               (<= (length text) +agenda-item-text-limit+))
+               (<= (length text) *agenda-item-text-limit*))
     (error 'agenda-error
            :message (format nil "Agenda text must contain 1 to ~D characters."
-                            +agenda-item-text-limit+)
+                            *agenda-item-text-limit*)
            :pathname (configuration-agenda-path configuration)
            :operation ':validate-item
            :cause nil))
@@ -410,7 +410,7 @@ when REQUIRE-EXISTING-P is false, but it must still name an absolute path."
     (error 'agenda-error
            :message (format nil
                             "Agenda memory-ids must be a unique list of at most ~D bounded strings."
-                            +agenda-item-memory-limit+)
+                            *agenda-item-memory-limit*)
            :pathname (configuration-agenda-path configuration)
            :operation ':validate-item
            :cause nil))
@@ -456,10 +456,10 @@ when REQUIRE-EXISTING-P is false, but it must still name an absolute path."
             :require-existing-p t))
          (record (agenda-find state directory))
          (items (and record (workspace-agenda-items record))))
-    (when (>= (length items) +agenda-maximum-items+)
+    (when (>= (length items) *agenda-maximum-items*)
       (error 'agenda-error
              :message (format nil "Workspace agenda already has its maximum ~D items."
-                              +agenda-maximum-items+)
+                              *agenda-maximum-items*)
              :pathname (configuration-agenda-path configuration)
              :operation ':add
              :cause nil))
@@ -602,11 +602,11 @@ when REQUIRE-EXISTING-P is false, but it must still name an absolute path."
   (let ((merged (remove-duplicates (append target source)
                                    :test #'string=
                                    :from-end t)))
-    (when (> (length merged) +agenda-item-memory-limit+)
+    (when (> (length merged) *agenda-item-memory-limit*)
       (error 'agenda-error
              :message (format nil
                               "Transport would attach more than ~D memories to one agenda item."
-                              +agenda-item-memory-limit+)
+                              *agenda-item-memory-limit*)
              :pathname (configuration-agenda-path configuration)
              :operation ':transport
              :cause nil))
@@ -651,11 +651,11 @@ when REQUIRE-EXISTING-P is false, but it must still name an absolute path."
                                  :test #'string=)
                            (make-identifier)
                            (copy-seq identifier))))))))))
-    (when (> (length result) +agenda-maximum-items+)
+    (when (> (length result) *agenda-maximum-items*)
       (error 'agenda-error
              :message (format nil
                               "Transport would exceed the ~D-item agenda limit."
-                              +agenda-maximum-items+)
+                              *agenda-maximum-items*)
              :pathname (configuration-agenda-path configuration)
              :operation ':transport
              :cause nil))

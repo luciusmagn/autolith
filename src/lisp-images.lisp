@@ -2,14 +2,15 @@
 
 ;;;; -- Saved Lisp Worker Image Adapters --
 
-(define-constant +pristine-lisp-image-identifier+
-  +pristine-sbcl-worker-image-identifier+
-  :test #'string=
-  :documentation "The immutable virtual base used for fresh Lisp workers.")
+(-> pristine-lisp-image-identifier () string)
+(defun pristine-lisp-image-identifier ()
+  "Return the immutable virtual base identifier for fresh Lisp workers."
+  +pristine-sbcl-worker-image-identifier+)
 
-(define-constant +minimum-lisp-image-core-size+
-  +minimum-sbcl-worker-core-size+
-  :documentation "The smallest plausible saved SBCL worker core in bytes.")
+(-> minimum-lisp-image-core-size () integer)
+(defun minimum-lisp-image-core-size ()
+  "Return the smallest plausible saved SBCL worker core size in bytes."
+  +minimum-sbcl-worker-core-size+)
 
 (deftype lisp-image ()
   "An immutable saved SBCL worker image managed by sbcl-workers."
@@ -181,7 +182,7 @@
       (lisp-image-scan configuration)
     (with-output-to-string (stream)
       (format stream "~A  compatible  immutable base~%"
-              +pristine-lisp-image-identifier+)
+              (pristine-lisp-image-identifier))
       (dolist (image images)
         (format stream "~A  ~A  parent ~A~%  note: ~A~%"
                 (lisp-image-identifier image)

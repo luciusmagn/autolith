@@ -410,7 +410,7 @@
                          "a disallowed role request fails through registry dispatch")
                         (tool-result-content result))))
                  (multiple-value-bind (result form)
-                     (invoke tool primary 0 +task-agent-page-maximum+)
+                     (invoke tool primary 0 *task-agent-page-maximum*)
                    (let ((allowed (entry form "allowed" :agent))
                          (denied (entry form "denied" :agent))
                          (blocked (entry form "blocked" :diagnostic)))
@@ -467,7 +467,7 @@
                     child-tool
                     "a child allowed to delegate inherits task.agents")
                    (multiple-value-bind (result form)
-                       (invoke child-tool child 0 +task-agent-page-maximum+)
+                       (invoke child-tool child 0 *task-agent-page-maximum*)
                      (let ((entries (getf (rest form) :entries)))
                        (test-assert
                         (and
@@ -548,7 +548,7 @@
                                 "~A child does not inherit task.agents"
                                 name))
                        (multiple-value-bind (result form)
-                           (invoke tool child 0 +task-agent-page-maximum+)
+                           (invoke tool child 0 *task-agent-page-maximum*)
                          (declare (ignore result))
                          (test-assert
                           (and (zerop (getf (rest form) :total))
@@ -953,7 +953,7 @@
                        "text" "done"
                        "label"
                        (make-string
-                        (1+ +task-result-label-maximum-characters+)
+                        (1+ *task-result-label-maximum-characters*)
                         :initial-element #\L))))))
              (test-assert
               (and (not (tool-result-success-p oversized-result))
@@ -966,7 +966,7 @@
                        configuration definition "yield-bounded-label"))
                     (label
                       (make-string
-                       +task-result-label-maximum-characters+
+                       *task-result-label-maximum-characters*
                        :initial-element #\L))
                     (result
                       (task-tests--execute-yield

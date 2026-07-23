@@ -2,17 +2,17 @@
 
 ;;;; -- Tool Transcript Presentation --
 
-(define-constant +application-tool-call-lines+ 8
-  :documentation "The maximum tool input lines shown in the terminal transcript.")
+(defparameter *application-tool-call-lines* 8
+  "The maximum tool input lines shown in the terminal transcript.")
 
-(define-constant +application-tool-output-lines+ 12
-  :documentation "The maximum tool output lines shown in the terminal transcript.")
+(defparameter *application-tool-output-lines* 12
+  "The maximum tool output lines shown in the terminal transcript.")
 
-(define-constant +application-tool-inspection-lines+ 24
-  :documentation "The maximum introspection lines shown in the terminal transcript.")
+(defparameter *application-tool-inspection-lines* 24
+  "The maximum introspection lines shown in the terminal transcript.")
 
-(define-constant +application-tool-diff-hunks+ 3
-  :documentation "The maximum replacement locations shown for one fs.edit call.")
+(defparameter *application-tool-diff-hunks* 3
+  "The maximum replacement locations shown for one fs.edit call.")
 
 (-> application--display-lines (string) list)
 (defun application--display-lines (text)
@@ -171,7 +171,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
                          (append sections
                                  (list (application--tool-section-row name))
                                  (application--preview-rows
-                                  text ':code +application-tool-call-lines+
+                                  text ':code *application-tool-call-lines*
                                   :gutter "│ ")))
                    (setf fields
                          (append fields
@@ -194,7 +194,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
        (when (non-empty-string-p value)
          (append (list (application--tool-section-row "restart value"))
                  (application--preview-rows
-                  value ':code +application-tool-call-lines+
+                  value ':code *application-tool-call-lines*
                   :gutter "│ ")))))))
 
 (-> application--generic-tool-call-entry (application json-object) list)
@@ -236,7 +236,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
             (application--preview-rows
              (application--presentation-value source)
              ':code
-             +application-tool-call-lines+
+             *application-tool-call-lines*
              :gutter "│ ")
             (application--restart-call-rows arguments)))))
 
@@ -267,7 +267,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
                                   (json-get arguments "line-count"))))
                   (if (integerp value)
                       (max 1 value)
-                      +fs-read-default-line-count+))))
+                      *fs-read-default-line-count*))))
     (application--tool-entry
      application
      :style ':tool
@@ -389,7 +389,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
 (defun application--edit-change-rows
     (lines kind &key start-line (width 1) highlighted-lines)
   "Return bounded numbered changed LINES of KIND."
-  (let* ((visible-count (min +application-tool-call-lines+ (length lines)))
+  (let* ((visible-count (min *application-tool-call-lines* (length lines)))
          (omitted (- (length lines) visible-count))
          (noun (ecase kind
                  (:removed "removed")
@@ -559,7 +559,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
                 :replace-all replace-all)))
     (if (null hunks)
         (application--edit-diff-rows old-text new-text :path path)
-        (let* ((visible-count (min +application-tool-diff-hunks+
+        (let* ((visible-count (min *application-tool-diff-hunks*
                                    (length hunks)))
                (omitted (- (length hunks) visible-count)))
           (append
@@ -616,7 +616,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
          (wrapped
            (loop for line in (or (application--display-lines command) (list ""))
                  append (or (wrap-text line width) (list ""))))
-         (visible-count (min +application-tool-call-lines+ (length wrapped)))
+         (visible-count (min *application-tool-call-lines* (length wrapped)))
          (omitted (- (length wrapped) visible-count)))
     (append
      (loop for line in (subseq wrapped 0 visible-count)
@@ -710,7 +710,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
              (list (list :label "symbol" :value symbol :style ':code)))
             (list (application--tool-section-row "value"))
             (application--preview-rows
-             value ':code +application-tool-call-lines+ :gutter "│ ")
+             value ':code *application-tool-call-lines* :gutter "│ ")
             (application--restart-call-rows arguments)))))
 
 (defmethod application-tool-call-entry
@@ -807,7 +807,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
     (string string terminal-style &key (:limit integer))
     list)
 (defun application--section-preview-rows
-    (label text style &key (limit +application-tool-output-lines+))
+    (label text style &key (limit *application-tool-output-lines*))
   "Return a labeled, bounded transcript section for TEXT."
   (append
    (list (application--tool-section-row label))
@@ -854,12 +854,12 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
                                             ':code))
         (application--preview-rows output
                                    ':dim
-                                   +application-tool-output-lines+
+                                   *application-tool-output-lines*
                                    :gutter "│ "))))
 
 (-> application--labeled-output-rows (string &key (:limit integer)) list)
 (defun application--labeled-output-rows
-    (output &key (limit +application-tool-inspection-lines+))
+    (output &key (limit *application-tool-inspection-lines*))
   "Return OUTPUT as aligned fields, headings, and readable continuation rows."
   (let* ((lines (or (application--display-lines output) (list "")))
          (visible-count (min limit (length lines)))
@@ -940,14 +940,14 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
         (loop for line in (subseq
                            (application--display-lines restart-text)
                            0
-                           (min +application-tool-output-lines+
+                           (min *application-tool-output-lines*
                                 (length (application--display-lines
                                          restart-text))))
               collect (application--restart-row line))))
      (when retry-text
        (append (list nil (application--tool-section-row "retry"))
                (application--preview-rows
-                retry-text ':hint +application-tool-output-lines+
+                retry-text ':hint *application-tool-output-lines*
                 :gutter "│ "))))))
 
 (-> application--failure-result-rows (string) list)
@@ -972,7 +972,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
       (t
        (application--preview-rows output
                                   ':plain
-                                  +application-tool-output-lines+
+                                  *application-tool-output-lines*
                                   :gutter "│ ")))))
 
 (-> application--generic-tool-result-entry (application list) list)
@@ -984,7 +984,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
      record
      :rows (if (application--tool-result-success-p record)
                (application--preview-rows
-                output ':dim +application-tool-output-lines+ :gutter "│ ")
+                output ':dim *application-tool-output-lines* :gutter "│ ")
                (application--failure-result-rows output)))))
 
 (defmethod application-tool-result-entry
@@ -1022,7 +1022,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
        :rows (application--preview-rows
               (or (getf (rest record) :output) "")
               ':code
-              +application-tool-output-lines+
+              *application-tool-output-lines*
               :gutter "│ "))
       (call-next-method)))
 
@@ -1044,7 +1044,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
                  (application--preview-rows
                   (format nil "~{~A~^~%~}" output-lines)
                   ':dim
-                  +application-tool-output-lines+
+                  *application-tool-output-lines*
                   :gutter "│ "))))
       (call-next-method)))
 
@@ -1117,7 +1117,7 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
        :rows (application--preview-rows
               (or (getf (rest record) :output) "")
               ':code
-              +application-tool-output-lines+
+              *application-tool-output-lines*
               :gutter "│ "))
       (call-next-method)))
 
@@ -1131,6 +1131,6 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
        :rows (application--preview-rows
               (or (getf (rest record) :output) "")
               ':code
-              +application-tool-output-lines+
+              *application-tool-output-lines*
               :gutter "│ "))
       (call-next-method)))

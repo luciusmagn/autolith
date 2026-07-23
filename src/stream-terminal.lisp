@@ -2,8 +2,8 @@
 
 ;;;; -- Terminal Methods --
 
-(define-constant +linux-terminal-window-size-request+ #x5413
-  :documentation "The Linux TIOCGWINSZ ioctl request on supported x86-64 systems.")
+(defparameter *linux-terminal-window-size-request* #x5413
+  "The Linux TIOCGWINSZ ioctl request on supported x86-64 systems.")
 
 (-> terminal-file-descriptor-size
     (integer)
@@ -13,7 +13,7 @@
   (handler-case
       (sb-alien:with-alien ((size (array sb-alien:unsigned-short 4)))
         (sb-posix:ioctl file-descriptor
-                        +linux-terminal-window-size-request+
+                        *linux-terminal-window-size-request*
                         (sb-alien:addr (sb-alien:deref size 0)))
         (let ((rows (sb-alien:deref size 0))
               (columns (sb-alien:deref size 1)))
@@ -37,14 +37,14 @@
   "Enable distinguishable modified keys and bracketed paste on TERMINAL."
   (enable-keyboard-enhancement
    :stream (stream-terminal-output-stream terminal))
-  (terminal--write terminal +terminal-bracketed-paste-enable+)
+  (terminal--write terminal (terminal-bracketed-paste-enable-sequence))
   (terminal-flush terminal)
   nil)
 
 (-> terminal--disable-input-protocols (stream-terminal) null)
 (defun terminal--disable-input-protocols (terminal)
   "Restore ordinary keyboard reporting and paste handling on TERMINAL."
-  (terminal--write terminal +terminal-bracketed-paste-disable+)
+  (terminal--write terminal (terminal-bracketed-paste-disable-sequence))
   (disable-keyboard-enhancement
    :stream (stream-terminal-output-stream terminal))
   (terminal-flush terminal)
@@ -190,8 +190,8 @@
        (input-stream *standard-input*)
        (output-stream *standard-output*)
        (input-file-descriptor 0)
-       (rows +terminal-default-rows+)
-       (columns +terminal-default-columns+))
+       (rows *terminal-default-rows*)
+       (columns *terminal-default-columns*))
   "Create a stream terminal using INPUT-STREAM, OUTPUT-STREAM, and a POSIX descriptor."
   (make-instance 'stream-terminal
                  :input-stream input-stream
@@ -199,7 +199,7 @@
                  :input-file-descriptor input-file-descriptor
                  :rows (if (plusp rows)
                            rows
-                           +terminal-default-rows+)
+                           *terminal-default-rows*)
                  :columns (if (plusp columns)
                               columns
-                              +terminal-default-columns+)))
+                              *terminal-default-columns*)))

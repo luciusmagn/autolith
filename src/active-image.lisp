@@ -2,13 +2,12 @@
 
 ;;;; -- Preloaded Active Image --
 
-(define-constant +active-image-protocol-version+ 1
-  :documentation "The installed active-image handshake version.")
+(defparameter *active-image-protocol-version* 1
+  "The installed active-image handshake version.")
 
-(define-constant +active-image-probe-argument+
+(defparameter *active-image-probe-argument*
   "--autolith-internal-active-image-probe"
-  :test #'string=
-  :documentation "The private argument requesting active-image validation.")
+  "The private argument requesting active-image validation.")
 
 (defvar *active-image-build-record* nil
   "The source and runtime identity embedded in a preloaded active image.")
@@ -77,7 +76,7 @@
                   source-root
                   (append '("status" "--porcelain" "--") paths))))
     (list :active-image-build
-          :version +active-image-protocol-version+
+          :version *active-image-protocol-version*
           :source-commit
           (active-image--git-output source-root '("rev-parse" "HEAD"))
           :source-clean-p (zerop (length status))
@@ -94,7 +93,7 @@
   (and (listp value)
        (eq (first value) :active-image-build)
        (= (or (getf (rest value) :version) 0)
-          +active-image-protocol-version+)
+          *active-image-protocol-version*)
        (non-empty-string-p (getf (rest value) :source-commit))
        (member (getf (rest value) :source-clean-p) '(t nil))
        (let ((source-files (getf (rest value) :source-files)))
@@ -145,7 +144,7 @@
 (defun active-image-probe-record (build-record)
   "Return the exact public handshake for BUILD-RECORD."
   (list :autolith-active-image
-        :version +active-image-protocol-version+
+        :version *active-image-protocol-version*
         :source-commit (getf (rest build-record) :source-commit)))
 
 (-> active-image-probe-output (list) string)
@@ -167,7 +166,7 @@
 (defun active-image-manifest-form (core-pathname build-record)
   "Return the portable manifest for CORE-PATHNAME and BUILD-RECORD."
   (list :active-image
-        :version +active-image-protocol-version+
+        :version *active-image-protocol-version*
         :core (namestring core-pathname)
         :built-at (get-universal-time)
         :source-commit (getf (rest build-record) :source-commit)
@@ -195,7 +194,7 @@
           (cond
             ((and (= (length arguments) 2)
                   (string= (second arguments)
-                           +active-image-probe-argument+))
+                           *active-image-probe-argument*))
              (unless (active-image-build-record-compatible-p
                       *active-image-build-record*
                       source-root)
@@ -261,7 +260,7 @@
                       "--core" (namestring core-pathname)
                       "--end-runtime-options"
                       (namestring source-root)
-                      +active-image-probe-argument+)
+                      *active-image-probe-argument*)
                 :input nil
                 :output :string
                 :error-output :output)

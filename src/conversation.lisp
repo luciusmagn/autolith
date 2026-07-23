@@ -314,10 +314,8 @@
   "Return ATTACHMENTS as native image content for a tool output."
   (coerce (mapcar #'image-input-content-item attachments) 'vector))
 
-(define-constant +conversation-interrupted-tool-output+
+(defparameter *conversation-interrupted-tool-output*
   "Autolith restarted before recording this tool call's result. The call may have changed external state. Inspect the relevant state before deciding whether to retry it."
-  :test #'string=
-  :documentation
   "The provider-visible result synthesized for a tool call interrupted by exit.")
 
 (-> conversation-append-tool-result
@@ -493,7 +491,7 @@ before the repaired projection can be sent to the provider."
                                    call-id
                                    :tool-name
                                    (conversation--tool-call-name call)
-                                   :output +conversation-interrupted-tool-output+
+                                   :output *conversation-interrupted-tool-output*
                                    :success-p nil)
                                   (gethash call-id outputs) output))
                           (push output repaired)))))
@@ -533,7 +531,7 @@ before the repaired projection can be sent to the provider."
        (not
         (null
          (member reasoning-effort
-                 +supported-reasoning-efforts+
+                 *supported-reasoning-efforts*
                  :test #'string=)))))
 
 (-> conversation-set-model-selection (conversation string string) null)
@@ -557,10 +555,9 @@ before the repaired projection can be sent to the provider."
           (conversation-reasoning-effort conversation) reasoning-effort))
   nil)
 
-(define-constant +conversation-summary-prefix+
+(defparameter *conversation-summary-prefix*
   "A previous segment of this conversation was compacted. The summary below replaces that segment; use it to continue seamlessly without repeating completed work."
-  :test #'string=
-  :documentation "The bridge text introducing a compaction summary to the model.")
+  "The bridge text introducing a compaction summary to the model.")
 
 (-> conversation-summary-item (string) json-object)
 (defun conversation-summary-item (content)
@@ -572,7 +569,7 @@ before the repaired projection can be sent to the provider."
               (json-object
                "type" "input_text"
                "text" (format nil "~A~2%~A"
-                              +conversation-summary-prefix+
+                              *conversation-summary-prefix*
                               content)))))
 
 (-> conversation-append-summary (conversation string) list)

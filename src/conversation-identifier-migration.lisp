@@ -2,11 +2,8 @@
 
 ;;;; -- Legacy Conversation Identifier Migration --
 
-(define-constant +conversation-identifier-migration-version+ 1
-  :documentation "The readable migration record version for conversation identifiers.")
-
-(define-constant +conversation-identifier-unix-epoch-offset+ 2208988800
-  :documentation "Universal Time at the Unix epoch, used only to preserve mtimes.")
+(defparameter *conversation-identifier-migration-version* 1
+  "The readable migration record version for conversation identifiers.")
 
 (defvar *conversation-identifier-migration-lock*
   (make-lock "conversation identifier migration")
@@ -65,7 +62,7 @@
        (= (length value) 9)
        (eq (first value) :conversation-identifier-migration)
        (= (or (getf (rest value) :version) 0)
-          +conversation-identifier-migration-version+)
+          *conversation-identifier-migration-version*)
        (member (getf (rest value) :status)
                '(:prepared :conversations :references :artifacts :complete)
                :test #'eq)
@@ -91,7 +88,7 @@
 (defun conversation-identifier-migration--record (status entries)
   "Return a complete migration record with STATUS and ENTRIES."
   (list :conversation-identifier-migration
-        :version +conversation-identifier-migration-version+
+        :version *conversation-identifier-migration-version*
         :status status
         :updated-at (get-universal-time)
         :entries entries))
@@ -298,8 +295,7 @@
 (-> conversation-identifier-migration--write-date (pathname integer) null)
 (defun conversation-identifier-migration--write-date (pathname universal-time)
   "Set PATHNAME's access and modification times from UNIVERSAL-TIME."
-  (let ((unix-time (max 0 (- universal-time
-                             +conversation-identifier-unix-epoch-offset+))))
+  (let ((unix-time (max 0 (universal-time->unix-time universal-time))))
     (sb-posix:utime (namestring pathname) unix-time unix-time))
   nil)
 

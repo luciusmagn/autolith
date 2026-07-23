@@ -3,20 +3,20 @@
 ;;;; -- Interactive Command Protocol --
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (defparameter +application-command-metadata-keys+
+  (defparameter *application-command-metadata-keys*
     '(:name :aliases :argument :description :tip
       :busy-behavior :terminal-behavior)
     "The literal metadata keys accepted by DEFINE-APPLICATION-COMMAND.")
 
-  (defparameter +application-command-required-metadata-keys+
+  (defparameter *application-command-required-metadata-keys*
     '(:name :argument :description :tip :busy-behavior :terminal-behavior)
     "The command metadata keys every defining form must state explicitly.")
 
-  (defparameter +application-command-busy-behaviors+
+  (defparameter *application-command-busy-behaviors*
     '(:hold :inspect :cancel)
     "The supported command policies while application work is active.")
 
-  (defparameter +application-command-terminal-behaviors+
+  (defparameter *application-command-terminal-behaviors*
     '(:shared :exclusive :exclusive-without-arguments)
     "The supported command policies for terminal reader ownership.")
 
@@ -69,12 +69,12 @@
     (unless (non-empty-string-p tip)
       (error "Application command ~A requires a non-empty tip." name))
     (unless (member busy-behavior
-                    +application-command-busy-behaviors+
+                    *application-command-busy-behaviors*
                     :test #'eq)
       (error "Application command ~A has invalid busy behavior ~S."
              name busy-behavior))
     (unless (member terminal-behavior
-                    +application-command-terminal-behaviors+
+                    *application-command-terminal-behaviors*
                     :test #'eq)
       (error "Application command ~A has invalid terminal behavior ~S."
              name terminal-behavior))
@@ -94,14 +94,14 @@
       (error "Application command ~S metadata is not a literal property list."
              definition-name))
     (loop for key in metadata by #'cddr
-          unless (member key +application-command-metadata-keys+ :test #'eq)
+          unless (member key *application-command-metadata-keys* :test #'eq)
             do (error "Application command ~S has unknown metadata key ~S."
                       definition-name key))
-    (dolist (key +application-command-metadata-keys+)
+    (dolist (key *application-command-metadata-keys*)
       (when (> (application-command--metadata-key-count metadata key) 1)
         (error "Application command ~S repeats metadata key ~S."
                definition-name key)))
-    (dolist (key +application-command-required-metadata-keys+)
+    (dolist (key *application-command-required-metadata-keys*)
       (unless (= (application-command--metadata-key-count metadata key) 1)
         (error "Application command ~S requires literal metadata key ~S."
                definition-name key)))
@@ -545,7 +545,7 @@ without changing the registry."
 
 ;;;; -- Invocation and Dispatch --
 
-(defparameter +application-command-whitespace+
+(defparameter *application-command-whitespace*
   '(#\Space #\Tab #\Newline #\Return #\Page)
   "Characters separating command tokens and arguments.")
 
@@ -555,7 +555,7 @@ without changing the registry."
   (when (non-empty-string-p text)
     (let ((end (position-if
                 (lambda (character)
-                  (find character +application-command-whitespace+))
+                  (find character *application-command-whitespace*))
                 text)))
       (if end
           (subseq text 0 end)
@@ -567,18 +567,18 @@ without changing the registry."
 (defun application-command-invocation-parse (input)
   "Parse INPUT and resolve its command through one registry snapshot."
   (let* ((trimmed
-           (string-left-trim +application-command-whitespace+ input))
+           (string-left-trim *application-command-whitespace* input))
          (separator
            (position-if
             (lambda (character)
-              (find character +application-command-whitespace+))
+              (find character *application-command-whitespace*))
             trimmed))
          (submitted-name
            (string-downcase
             (if separator (subseq trimmed 0 separator) trimmed)))
          (remainder
            (if separator
-               (string-trim +application-command-whitespace+
+               (string-trim *application-command-whitespace*
                             (subseq trimmed separator))
                ""))
          (argument (application-command--first-token remainder)))

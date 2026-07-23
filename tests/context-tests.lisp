@@ -320,7 +320,7 @@
                 "context-status without a selection retains newest-first behavior")))
            (clrhash *context-last-deliveries*)
            (setf *context-last-delivery-order* nil)
-           (loop for index below (+ +context-delivery-diagnostic-limit+ 2)
+           (loop for index below (+ *context-delivery-diagnostic-limit* 2)
                  for identifier = (format nil "context-diagnostic-~2,'0D" index)
                  for diagnostic-conversation =
                    (conversation-create configuration :identifier identifier)
@@ -329,11 +329,11 @@
                                              #()))
            (test-assert
             (= (hash-table-count *context-last-deliveries*)
-               +context-delivery-diagnostic-limit+)
+               *context-delivery-diagnostic-limit*)
             "per-conversation context diagnostics stay bounded")
            (test-assert
             (= (length *context-last-delivery-order*)
-               +context-delivery-diagnostic-limit+)
+               *context-delivery-diagnostic-limit*)
             "the context diagnostic recency index stays bounded")
            (test-assert
             (and (null (gethash "context-diagnostic-00"

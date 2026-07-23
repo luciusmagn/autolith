@@ -2,14 +2,12 @@
 
 ;;;; -- Release Script Tests --
 
-(define-constant +release-script-tests-version+ "0.11.0"
-  :test #'string=
-  :documentation "The semantic fixture version used by release boundary tests.")
+(defparameter *release-script-tests-version* "0.11.0"
+  "The semantic fixture version used by release boundary tests.")
 
-(define-constant +release-script-tests-commit+
+(defparameter *release-script-tests-commit*
   "0123456789abcdef0123456789abcdef01234567"
-  :test #'string=
-  :documentation "The valid Git identity used by release boundary tests.")
+  "The valid Git identity used by release boundary tests.")
 
 (-> release-script-tests--write-file (pathname string) pathname)
 (defun release-script-tests--write-file (pathname content)
@@ -53,9 +51,9 @@
   (release-script-tests--write-file
    pathname
    (format nil "version=~A~%tag=~A~%commit=~A~%"
-           +release-script-tests-version+
+           *release-script-tests-version*
            tag
-           +release-script-tests-commit+)))
+           *release-script-tests-commit*)))
 
 (-> release-script-tests--fixture-curl () string)
 (defun release-script-tests--fixture-curl ()
@@ -114,7 +112,7 @@
    "755" (merge-pathnames "libexec/cl-exec-sandbox-helper" release-root))
   (release-script-tests--record
    (merge-pathnames "RELEASE" release-root)
-   (format nil "v~A" +release-script-tests-version+))
+   (format nil "v~A" *release-script-tests-version*))
   release-root)
 
 (-> release-script-tests--syntax (pathname) null)
@@ -298,7 +296,7 @@ printf '(:ACTIVE-IMAGE :VERSION 1\\n)\\n' > \"$active/manifest.sexp\"
   "Exercise packaged launcher validation and its machine-readable probe."
   (let* ((release-root
            (merge-pathnames
-            (format nil "autolith-v~A/" +release-script-tests-version+)
+            (format nil "autolith-v~A/" *release-script-tests-version*)
             root))
          (launcher
            (merge-pathnames "bin/autolith" release-root))
@@ -310,9 +308,9 @@ printf '(:ACTIVE-IMAGE :VERSION 1\\n)\\n' > \"$active/manifest.sexp\"
              :environment environment)))
       (dolist (line
                (list
-                (format nil "version=~A" +release-script-tests-version+)
-                (format nil "tag=v~A" +release-script-tests-version+)
-                (format nil "commit=~A" +release-script-tests-commit+)
+                (format nil "version=~A" *release-script-tests-version*)
+                (format nil "tag=v~A" *release-script-tests-version*)
+                (format nil "commit=~A" *release-script-tests-commit*)
                 (format nil "source=~A"
                         (string-right-trim
                          "/"
@@ -353,13 +351,13 @@ printf '(:ACTIVE-IMAGE :VERSION 1\\n)\\n' > \"$active/manifest.sexp\"
                    "the release launcher rejects an inconsistent record"))
     (release-script-tests--record
      (merge-pathnames "RELEASE" release-root)
-     (format nil "v~A" +release-script-tests-version+)))
+     (format nil "v~A" *release-script-tests-version*)))
   nil)
 
 (-> release-script-tests--installer (pathname pathname) null)
 (defun release-script-tests--installer (source-root root)
   "Exercise versioned installer publication, repeatability, and latest lookup."
-  (let* ((version +release-script-tests-version+)
+  (let* ((version *release-script-tests-version*)
          (tag (format nil "v~A" version))
          (next-tag "v0.12.0")
          (release-name (format nil "autolith-~A-x86_64-linux" tag))
@@ -451,7 +449,7 @@ printf '(:ACTIVE-IMAGE :VERSION 1\\n)\\n' > \"$active/manifest.sexp\"
          (format nil "version=~A~%tag=~A~%commit=~A~%"
                  (subseq next-tag 1)
                  next-tag
-                 +release-script-tests-commit+))
+                 *release-script-tests-commit*))
         (release-script-tests--run
          (list (namestring installer)
                "--without-command-link" "--version" next-tag)
@@ -482,7 +480,7 @@ printf '(:ACTIVE-IMAGE :VERSION 1\\n)\\n' > \"$active/manifest.sexp\"
 (-> release-script-tests--update-handoff (pathname pathname) null)
 (defun release-script-tests--update-handoff (source-root root)
   "Exercise clean update handoff and preservation of a custom installation prefix."
-  (let* ((tag (format nil "v~A" +release-script-tests-version+))
+  (let* ((tag (format nil "v~A" *release-script-tests-version*))
          (next-tag "v0.12.0")
          (fixture-root (merge-pathnames "update-handoff/" root))
          (install-root (merge-pathnames "custom-installation/" fixture-root))

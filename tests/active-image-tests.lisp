@@ -21,7 +21,7 @@
                  "active-image identities cover every compiled source input")
     (test-assert (and (eq (first probe) :autolith-active-image)
                       (= (getf (rest probe) :version)
-                         +active-image-protocol-version+))
+                         *active-image-protocol-version*))
                  "the active-image probe exposes the current protocol")
     (test-assert (and (eq (first manifest) :active-image)
                       (equal (getf (rest manifest) :source-files)

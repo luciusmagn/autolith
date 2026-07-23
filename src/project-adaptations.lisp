@@ -2,24 +2,23 @@
 
 ;;;; -- Project Adaptation Notes --
 
-(define-constant +project-adaptation-offer-state-version+ 1
-  :documentation "The readable AUTOLITH.org offer-state format version.")
+(defparameter *project-adaptation-offer-state-version* 1
+  "The readable AUTOLITH.org offer-state format version.")
 
-(define-constant +project-adaptation-offer-deferral-seconds+ (* 5 24 60 60)
-  :documentation "The five-day delay selected by declining an offer for now.")
+(defparameter *project-adaptation-offer-deferral-seconds* (* 5 24 60 60)
+  "The five-day delay selected by declining an offer for now.")
 
-(define-constant +project-adaptation-substantial-seconds+ (* 60 60)
-  :documentation "The activity span making one conversation substantial.")
+(defparameter *project-adaptation-substantial-seconds* (* 60 60)
+  "The activity span making one conversation substantial.")
 
-(define-constant +project-adaptation-fallback-user-turns+ 12
-  :documentation
+(defparameter *project-adaptation-fallback-user-turns* 12
   "The substantial-conversation fallback when durable times are unavailable.")
 
 (defvar *project-adaptation-offer-state-lock*
   (make-lock "Autolith project adaptation offer state")
   "The in-process lock serializing project adaptation offer decisions.")
 
-(define-constant +project-adaptation-notes-template+
+(defparameter *project-adaptation-notes-template*
   "#+title: Autolith project adaptations
 
 * Purpose
@@ -45,8 +44,7 @@ a user-local init.lisp change, or a private image commit.
 Record only concrete improvements with evidence of recurring value. Remove
 discarded or obsolete candidates.
 "
-  :test #'string=
-  :documentation "The initial human-readable AUTOLITH.org contents.")
+  "The initial human-readable AUTOLITH.org contents.")
 
 (-> project-adaptation--proper-plist-with-keys-p (t list) boolean)
 (defun project-adaptation--proper-plist-with-keys-p (value expected-keys)
@@ -101,7 +99,7 @@ discarded or obsolete candidates.
                properties
                '(:version :entries))
               (= (getf properties :version -1)
-                 +project-adaptation-offer-state-version+)
+                 *project-adaptation-offer-state-version*)
               (let* ((entries (getf properties :entries))
                      (length (list-length entries)))
                 (and (integerp length)
@@ -155,7 +153,7 @@ discarded or obsolete candidates.
            (configuration-project-adaptation-offers-path configuration))
          (form
            (list :project-adaptation-offers
-                 :version +project-adaptation-offer-state-version+
+                 :version *project-adaptation-offer-state-version*
                  :entries
                  (sort (copy-tree entries)
                        #'string<
@@ -283,7 +281,7 @@ discarded or obsolete candidates.
   (project-adaptation--record-offer-choice
    configuration
    project-root
-   :deferred-until (+ now +project-adaptation-offer-deferral-seconds+)
+   :deferred-until (+ now *project-adaptation-offer-deferral-seconds*)
    :never-p nil))
 
 (-> project-adaptation-offer-refuse (configuration pathname) null)
@@ -318,7 +316,7 @@ discarded or obsolete candidates.
                                        :if-exists :error
                                        :if-does-not-exist :create
                                        :external-format :utf-8)
-                 (write-string +project-adaptation-notes-template+ stream)
+                 (write-string *project-adaptation-notes-template* stream)
                  (finish-output stream))
                (handler-case
                    (sb-posix:link (namestring temporary) (namestring pathname))
@@ -398,9 +396,9 @@ discarded or obsolete candidates.
              (typep last-activity-at 'timestamp)
              (>= last-activity-at created-at))
         (>= (- last-activity-at created-at)
-            +project-adaptation-substantial-seconds+)
+            *project-adaptation-substantial-seconds*)
         (>= (or (and metadata (getf metadata :user-turns)) 0)
-            +project-adaptation-fallback-user-turns+))))
+            *project-adaptation-fallback-user-turns*))))
 
 (-> project-adaptation--metadata-project-key ((option list)) (option string))
 (defun project-adaptation--metadata-project-key (metadata)
@@ -475,7 +473,7 @@ discarded or obsolete candidates.
          (marker (format nil "~%... [truncated]"))
          (content-limit
            (max 0
-                (- +context-contribution-evidence-limit+
+                (- *context-contribution-evidence-limit*
                    (length prefix)
                    (length marker))))
          (buffer (make-string (1+ content-limit))))

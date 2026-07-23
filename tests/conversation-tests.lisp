@@ -2,10 +2,9 @@
 
 ;;;; -- Subsystem Tests --
 
-(define-constant +test-conversation-tiny-png+
+(defparameter *test-conversation-tiny-png*
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
-  :test #'string=
-  :documentation "A one-pixel PNG used to exercise durable image input.")
+  "A one-pixel PNG used to exercise durable image input.")
 
 (-> test-conversation--write-tiny-png (pathname) pathname)
 (defun test-conversation--write-tiny-png (pathname)
@@ -16,7 +15,7 @@
                           :if-exists :supersede
                           :element-type '(unsigned-byte 8))
     (write-sequence
-     (base64-string-to-usb8-array +test-conversation-tiny-png+)
+     (base64-string-to-usb8-array *test-conversation-tiny-png*)
      stream))
   pathname)
 

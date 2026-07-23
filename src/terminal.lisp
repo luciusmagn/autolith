@@ -1,32 +1,31 @@
 (in-package #:autolith)
 
-;;;; -- Terminal Constants --
+;;;; -- Terminal Defaults --
 
-(define-constant +terminal-default-columns+ 80
-  :documentation "The fallback terminal width when no positive width is supplied.")
+(defparameter *terminal-default-columns* 80
+  "The fallback terminal width when no positive width is supplied.")
 
-(define-constant +terminal-default-rows+ 24
-  :documentation "The fallback terminal height when no positive height is supplied.")
+(defparameter *terminal-default-rows* 24
+  "The fallback terminal height when no positive height is supplied.")
 
-(define-constant +terminal-history-limit+ 100
-  :documentation "The maximum number of submitted inputs retained by a line editor.")
+(defparameter *terminal-history-limit* 100
+  "The maximum number of submitted inputs retained by a line editor.")
 
-(define-constant +terminal-ui-visible-completions+ 6
-  :documentation "The maximum number of candidate rows painted at once.")
+(defparameter *terminal-ui-visible-completions* 6
+  "The maximum number of candidate rows painted at once.")
 
-(define-constant +terminal-escape-character+ (code-char 27)
-  :test #'char=
-  :documentation "The ASCII escape character used by trusted terminal controls.")
+(defparameter *terminal-escape-character* (code-char 27)
+  "The ASCII escape character used by trusted terminal controls.")
 
-(define-constant +terminal-bracketed-paste-enable+
-  (format nil "~C[?2004h" +terminal-escape-character+)
-  :test #'string=
-  :documentation "The trusted control that enables bracketed paste mode.")
+(-> terminal-bracketed-paste-enable-sequence () string)
+(defun terminal-bracketed-paste-enable-sequence ()
+  "Return the trusted control that enables bracketed paste mode."
+  (format nil "~C[?2004h" *terminal-escape-character*))
 
-(define-constant +terminal-bracketed-paste-disable+
-  (format nil "~C[?2004l" +terminal-escape-character+)
-  :test #'string=
-  :documentation "The trusted control that disables bracketed paste mode.")
+(-> terminal-bracketed-paste-disable-sequence () string)
+(defun terminal-bracketed-paste-disable-sequence ()
+  "Return the trusted control that disables bracketed paste mode."
+  (format nil "~C[?2004l" *terminal-escape-character*))
 
 
 ;;;; -- Terminal Objects --
@@ -34,13 +33,13 @@
 (defclass terminal ()
   ((rows
     :initarg :rows
-    :initform +terminal-default-rows+
+    :initform *terminal-default-rows*
     :accessor terminal-rows
     :type (integer 1)
     :documentation "The current terminal height in character cells.")
    (columns
     :initarg :columns
-    :initform +terminal-default-columns+
+    :initform *terminal-default-columns*
     :accessor terminal-columns
     :type (integer 1)
     :documentation "The current terminal width in character cells.")

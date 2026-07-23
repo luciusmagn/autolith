@@ -156,11 +156,11 @@
      (or terminal-rows
          (terminal--query-dimension "lines")
          (terminal--positive-integer-or-nil (uiop:getenv "LINES"))
-         +terminal-default-rows+)
+         *terminal-default-rows*)
      (or terminal-columns
          (terminal--query-dimension "cols")
          (terminal--positive-integer-or-nil (uiop:getenv "COLUMNS"))
-         +terminal-default-columns+))))
+         *terminal-default-columns*))))
 
 (-> application-pending-terminal-size
     ()
@@ -173,14 +173,12 @@
         (terminal-current-size)
       (cons rows columns))))
 
-(define-constant +application-prompt+ "❯ "
-  :test #'string=
-  :documentation "The styled input prompt shown on the live editor row.")
+(defparameter *application-prompt* "❯ "
+  "The styled input prompt shown on the live editor row.")
 
-(define-constant +application-placeholder+
+(defparameter *application-placeholder*
   "Ask Autolith anything. Type /help for commands."
-  :test #'string=
-  :documentation "The dim hint shown on the prompt row while input is empty.")
+  "The dim hint shown on the prompt row while input is empty.")
 
 (-> application-terminal-ui-create () terminal-ui)
 (defun application-terminal-ui-create ()
@@ -189,8 +187,8 @@
       (terminal-current-size)
     (terminal-ui-create
      :terminal (stream-terminal-create :rows rows :columns columns)
-     :prompt +application-prompt+
-     :placeholder +application-placeholder+
+     :prompt *application-prompt*
+     :placeholder *application-placeholder*
      :completion-function #'application-command-completion-entries)))
 
 (-> application--configuration-for-conversation
@@ -671,8 +669,8 @@
       (t
        ""))))
 
-(define-constant +application-reasoning-preview-row-limit+ 5
-  :documentation "The maximum rows shown for one unfinished reasoning summary.")
+(defparameter *application-reasoning-preview-row-limit* 5
+  "The maximum rows shown for one unfinished reasoning summary.")
 
 (-> application--reasoning-summary-rows (application string) list)
 (defun application--reasoning-summary-rows (application summary)
@@ -694,11 +692,11 @@
 (defun application--reasoning-preview-rows (application summary)
   "Return a tail-biased bounded live preview of reasoning SUMMARY."
   (let ((rows (application--reasoning-summary-rows application summary)))
-    (if (<= (length rows) +application-reasoning-preview-row-limit+)
+    (if (<= (length rows) *application-reasoning-preview-row-limit*)
         rows
         (append (list (first rows)
                       (list (terminal-span ':dim "  │ …")))
-                (last rows (- +application-reasoning-preview-row-limit+ 2))))))
+                (last rows (- *application-reasoning-preview-row-limit* 2))))))
 
 (-> application--reasoning-summary-entry (application string) list)
 (defun application--reasoning-summary-entry (application summary)
@@ -868,17 +866,15 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
 
 ;;;; -- Session Goal --
 
-(define-constant +application-goal-continuation-limit+ 8
-  :documentation "The automatic goal continuation turns allowed per user message.")
+(defparameter *application-goal-continuation-limit* 8
+  "The automatic goal continuation turns allowed per user message.")
 
-(define-constant +application-goal-continuation-prompt+
+(defparameter *application-goal-continuation-prompt*
   "Continue working toward the session goal."
-  :test #'string=
-  :documentation "The synthetic user message driving one goal continuation turn.")
+  "The synthetic user message driving one goal continuation turn.")
 
-(define-constant +application-goal-complete-marker+ "[GOAL-COMPLETE]"
-  :test #'string=
-  :documentation "The literal marker the model includes once the goal is met.")
+(defparameter *application-goal-complete-marker* "[GOAL-COMPLETE]"
+  "The literal marker the model includes once the goal is met.")
 
 (-> application--record-goal (application) null)
 (defun application--record-goal (application)
@@ -939,12 +935,12 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
                message. If you cannot continue without the user, state ~
                plainly what you need and stop.~%</goal_context>"
               (getf goal :objective)
-              +application-goal-complete-marker+))))
+              *application-goal-complete-marker*))))
 
 (-> application--goal-continuation-message-p (string) boolean)
 (defun application--goal-continuation-message-p (content)
   "Return true when CONTENT is the synthetic goal continuation prompt."
-  (string= content +application-goal-continuation-prompt+))
+  (string= content *application-goal-continuation-prompt*))
 
 
 ;;;; -- Agent Presentation --
@@ -1180,7 +1176,7 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
     (when (and goal
                (eq (getf goal :status) ':active)
                text
-               (search +application-goal-complete-marker+ text))
+               (search *application-goal-complete-marker* text))
       (setf (getf (application-goal application) :status) ':complete)
       (application--record-goal application)
       (application-present
@@ -1250,7 +1246,7 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
       (unless (and goal (eq (getf goal :status) ':active))
         (return))
       (when (>= (getf goal :continuations)
-                +application-goal-continuation-limit+)
+                *application-goal-continuation-limit*)
         (setf (getf (application-goal application) :status) ':paused)
         (application--record-goal application)
         (application-present
@@ -1258,11 +1254,11 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
          (format nil
                  "The goal paused after ~D automatic continuations. ~
                   Use /goal resume or send a message to keep going."
-                 +application-goal-continuation-limit+))
+                 *application-goal-continuation-limit*))
         (return))
       (incf (getf (application-goal application) :continuations))
       (application--run-turn application
-                             +application-goal-continuation-prompt+
+                             *application-goal-continuation-prompt*
                              :continuation-p t
                              :steering-function steering-function)))
   nil)

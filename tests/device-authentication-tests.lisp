@@ -196,7 +196,7 @@
         (test-assert
          (string=
           (json-get (json-decode (getf code-request :content)) "client_id")
-          +openai-oauth-client-id+)
+          *openai-oauth-client-id*)
          "the current public OAuth client identifier is sent")
         (test-assert
          (string-equal

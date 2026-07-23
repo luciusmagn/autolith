@@ -32,7 +32,7 @@
          (decoded (json-decode encoded))
          (oversized
            (concatenate 'string
-                        (make-string +system-prompt-context-value-limit+
+                        (make-string *system-prompt-context-value-limit*
                                      :initial-element #\x)
                         malicious))
          (bounded-decoded
@@ -153,13 +153,13 @@
     (test-assert (string= decoded malicious)
                  "JSON quoting preserves the dynamic value as data")
     (test-assert (= (length bounded-decoded)
-                    +system-prompt-context-value-limit+)
+                    *system-prompt-context-value-limit*)
                  "dynamic prompt values have an exact decoded size bound")
     (test-assert
-     (string= +system-prompt-context-truncation-marker+
+     (string= *system-prompt-context-truncation-marker*
               (subseq bounded-decoded
                       (- (length bounded-decoded)
-                         (length +system-prompt-context-truncation-marker+))))
+                         (length *system-prompt-context-truncation-marker*))))
      "bounded dynamic values identify their truncation")
     (test-assert
      (string= (json-decode (system-prompt--context-value nil)) "unknown")

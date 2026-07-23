@@ -17,7 +17,7 @@
        "seed parameter derivation has stable portable vectors")))
   (test-assert
    (string= (conversation-identifier-from-seed
-             (+ 3994000000 +conversation-identifier-modulus+)
+             (+ 3994000000 (conversation-identifier-modulus))
              10)
             "B4JFq84")
    "Universal Time is reduced modulo 2^32")
@@ -68,7 +68,7 @@
                      (conversation-identifier-from-seed timestamp 11))
             "allocation probes the next seed after a collision")
            (let ((reserved
-                   (loop for seed below +conversation-identifier-base+
+                   (loop for seed below (conversation-identifier-base)
                          collect (conversation-identifier-from-seed
                                   timestamp seed))))
              (test-assert

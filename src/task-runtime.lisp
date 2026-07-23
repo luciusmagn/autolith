@@ -23,18 +23,18 @@
   "Create an orchestrator from the current task environment settings."
   (make-instance 'task-orchestrator :maximum-concurrency
                  (task--environment-integer "AUTOLITH_TASK_MAX_CONCURRENCY"
-                                            +task-default-maximum-concurrency+
+                                            *task-default-maximum-concurrency*
                                             :minimum 1
                                             :maximum
-                                            +task-maximum-concurrency+)
+                                            *task-maximum-concurrency*)
                  :maximum-depth
                  (task--environment-integer "AUTOLITH_TASK_MAX_DEPTH"
-                                            +task-default-maximum-depth+
+                                            *task-default-maximum-depth*
                                             :minimum 1)
                  :maximum-runtime-milliseconds
                  (task--environment-integer
                   "AUTOLITH_TASK_MAX_RUNTIME_MS"
-                  +task-default-maximum-runtime-milliseconds+
+                  *task-default-maximum-runtime-milliseconds*
                   :minimum 0)))
 
 (-> task-orchestrator--reap-dead-threads-locked
@@ -74,16 +74,16 @@
       (setf (task-orchestrator-lifecycle-state orchestrator) :open))
     (setf (task-orchestrator-maximum-concurrency orchestrator)
           (task--environment-integer "AUTOLITH_TASK_MAX_CONCURRENCY"
-                                     +task-default-maximum-concurrency+
+                                     *task-default-maximum-concurrency*
                                      :minimum 1
-                                     :maximum +task-maximum-concurrency+)
+                                     :maximum *task-maximum-concurrency*)
           (task-orchestrator-maximum-depth orchestrator)
           (task--environment-integer "AUTOLITH_TASK_MAX_DEPTH"
-                                     +task-default-maximum-depth+ :minimum 1)
+                                     *task-default-maximum-depth* :minimum 1)
           (task-orchestrator-maximum-runtime-milliseconds orchestrator)
           (task--environment-integer
            "AUTOLITH_TASK_MAX_RUNTIME_MS"
-           +task-default-maximum-runtime-milliseconds+
+           *task-default-maximum-runtime-milliseconds*
            :minimum 0)
           (task-orchestrator-shutdown-p orchestrator) nil)
     (task--condition-broadcast
@@ -125,7 +125,7 @@
          (text (subseq unbounded
                        0
                        (min (length unbounded)
-                            +task-identifier-maximum-characters+)))
+                            *task-identifier-maximum-characters*)))
          (mapped
           (map 'string
                (lambda (character)
@@ -162,7 +162,7 @@
          (suffix-text (format nil "-~D" index))
          (base-limit
            (max 0
-                (- +task-identifier-maximum-characters+
+                (- *task-identifier-maximum-characters*
                    (length suffix-text))))
          (candidate
            (concatenate 'string
@@ -175,7 +175,7 @@
               (subseq requested-name
                       0
                       (min (length requested-name)
-                           +task-identifier-maximum-characters+))
+                           *task-identifier-maximum-characters*))
               candidate)
           :agent-type agent-type
           :index index)))
@@ -306,7 +306,7 @@
         (jobs nil)
         (threads nil)
         (deadline (+ (get-internal-real-time)
-                     (* +task-shutdown-timeout-seconds+
+                     (* *task-shutdown-timeout-seconds*
                         internal-time-units-per-second))))
     (with-lock-held ((task-orchestrator-lock orchestrator))
       (task-orchestrator--reap-dead-threads-locked orchestrator)
@@ -458,7 +458,7 @@
   (with-lock-held ((task-progress-lock progress))
     (let* ((combined
             (concatenate 'string (task-progress-output-tail progress) text))
-           (start (max 0 (- (length combined) +task-progress-output-limit+))))
+           (start (max 0 (- (length combined) *task-progress-output-limit*))))
       (setf (task-progress-output-tail progress) (subseq combined start)
             (task-progress-updated-at progress) (get-internal-real-time))))
   nil)
@@ -585,7 +585,7 @@
           :agent (task-job-agent-name job)
           :assignment
           (bounded-string (getf (task-job-item job) :task)
-                          :limit +task-retained-assignment-limit+)
+                          :limit *task-retained-assignment-limit*)
           :progress
           (task-progress--snapshot job
                                    :parent (task-job-parent-agent job)

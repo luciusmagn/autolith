@@ -32,7 +32,7 @@
     (conversation-append-user-message conversation "begin project work")
     (project-adaptation-tests--append-late-turn
      conversation
-     +project-adaptation-substantial-seconds+)
+     *project-adaptation-substantial-seconds*)
     conversation))
 
 (-> project-adaptation-tests--run-offer (configuration conversation list) string)
@@ -81,13 +81,13 @@
                (project-adaptation-offer-due-p
                 configuration
                 project-root
-                (1- (+ now +project-adaptation-offer-deferral-seconds+))))
+                (1- (+ now *project-adaptation-offer-deferral-seconds*))))
               "not-now suppresses offers throughout five complete days")
              (test-assert
               (project-adaptation-offer-due-p
                configuration
                project-root
-               (+ now +project-adaptation-offer-deferral-seconds+))
+               (+ now *project-adaptation-offer-deferral-seconds*))
               "the offer becomes eligible at the exact five-day boundary")
              (project-adaptation-offer-refuse configuration project-root)
              (test-assert
@@ -179,7 +179,7 @@
                     (pathname (conversation-pathname malformed)))
                (conversation-append-user-message malformed "begin")
                (project-adaptation-tests--append-late-turn
-                malformed +project-adaptation-substantial-seconds+)
+                malformed *project-adaptation-substantial-seconds*)
                (with-open-file (stream pathname
                                        :direction :output
                                        :if-exists :append
@@ -195,8 +195,8 @@
                (conversation-append-user-message touched "still short")
                (let ((unix-time
                        (- (+ (conversation-created-at touched)
-                             +project-adaptation-substantial-seconds+)
-                          +unix-epoch-universal-time+)))
+                             *project-adaptation-substantial-seconds*)
+                          *unix-epoch-universal-time*)))
                  (sb-posix:utime
                   (namestring (conversation-pathname touched))
                   unix-time
@@ -224,7 +224,7 @@
                         :stream stream
                         :readably t)
                  (terpri stream)
-                 (dotimes (index +project-adaptation-fallback-user-turns+)
+                 (dotimes (index *project-adaptation-fallback-user-turns*)
                    (write (list :message
                                 :seq (1+ index)
                                 :role :user
@@ -271,7 +271,7 @@
                (list :created-at nil
                      :last-activity-at nil
                      :user-turns
-                     +project-adaptation-fallback-user-turns+))
+                     *project-adaptation-fallback-user-turns*))
               "twelve user turns qualify records without usable times")
              (let* ((resumed
                       (project-adaptation-tests--substantial-conversation

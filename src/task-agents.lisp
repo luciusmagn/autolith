@@ -72,7 +72,7 @@
   "Return true when VALUE is a bounded portable child-role name."
   (and (stringp value)
        (plusp (length value))
-       (<= (length value) +task-agent-name-maximum-characters+)
+       (<= (length value) *task-agent-name-maximum-characters*)
        (let ((name (string-downcase value)))
          (and (or (and (char>= (char name 0) #\a)
                        (char<= (char name 0) #\z)))
@@ -136,7 +136,7 @@
               (task-agent--tool-specification-namespace specification)))
         (and namespace
              (not (member namespace
-                          +task-forbidden-child-tool-namespaces+
+                          *task-forbidden-child-tool-namespaces*
                           :test #'string=))))))
 
 (-> task-agent--normalize-tools
@@ -206,8 +206,8 @@
 (-> task-agent--model-p (string) boolean)
 (defun task-agent--model-p (model)
   "Return true when MODEL is a supported identifier or child alias."
-  (and (or (member model +supported-models+ :test #'string=)
-           (member model +task-model-aliases+ :test #'string=))
+  (and (or (member model *supported-models* :test #'string=)
+           (member model *task-model-aliases* :test #'string=))
        t))
 
 (-> task-agent--normalize-models
@@ -245,7 +245,7 @@
               (eq value :auto)
               (and (keywordp value)
                    (member (string-downcase (symbol-name value))
-                           +supported-reasoning-efforts+
+                           *supported-reasoning-efforts*
                            :test #'string=)))
     (task-agent-definition--error
      :pathname pathname :source source :field :reasoning-effort
@@ -275,14 +275,14 @@
        :definition-name normalized-name))
     (unless (and (non-empty-string-p normalized-description)
                  (<= (length normalized-description)
-                     +task-agent-description-maximum-characters+))
+                     *task-agent-description-maximum-characters*))
       (task-agent-definition--error
        :pathname pathname :source source :field :description
        :cause "The description must be non-empty and within its character bound."
        :definition-name normalized-name))
     (unless (and (non-empty-string-p normalized-instructions)
                  (<= (length normalized-instructions)
-                     +task-agent-instructions-maximum-characters+))
+                     *task-agent-instructions-maximum-characters*))
       (task-agent-definition--error
        :pathname pathname :source source :field :instructions
        :cause "The instructions must be non-empty and within their character bound."
@@ -407,7 +407,7 @@
   (with-open-file (stream pathname
                           :direction :input
                           :element-type '(unsigned-byte 8))
-    (let* ((limit +task-agent-file-maximum-bytes+)
+    (let* ((limit *task-agent-file-maximum-bytes*)
            (octets (make-array (1+ limit)
                                :element-type '(unsigned-byte 8)))
            (count (read-sequence octets stream))
@@ -514,9 +514,7 @@
                       (source-error
                        index
                        "Package-qualified symbols are not allowed in native role files."))
-                    (unless (member token
-                                    +task-agent-native-keyword-names+
-                                    :test #'string-equal)
+                    (unless (task-agent-native-keyword-name-p token)
                       (let ((existing-keyword
                               (find-symbol (string-upcase token)
                                            '#:keyword)))
@@ -533,7 +531,7 @@
                    "Only lists, strings, keywords, numbers, booleans, and block comments are allowed in native role files."))
                  ((char= character #\()
                   (incf depth)
-                  (when (> depth +task-agent-form-maximum-depth+)
+                  (when (> depth *task-agent-form-maximum-depth*)
                     (source-error
                      index
                      "The native role form exceeds its nesting-depth bound.")))
@@ -566,7 +564,7 @@
           for value = (pop pending)
           do
              (incf nodes)
-             (when (> nodes +task-agent-form-maximum-nodes+)
+             (when (> nodes *task-agent-form-maximum-nodes*)
                (task-agent-definition--error
                 :pathname pathname :source source
                 :cause "The native role form exceeds its node bound."
@@ -590,7 +588,7 @@
                    :definition-name definition-name))
                 (setf (gethash value seen) t)
                 (when (> (length value)
-                         +task-agent-string-maximum-characters+)
+                         *task-agent-string-maximum-characters*)
                   (task-agent-definition--error
                    :pathname pathname :source source
                    :cause "A native role string exceeds its character bound."
@@ -630,7 +628,7 @@
   (handler-case
       (progn
         (when (> (task-agent--file-byte-length pathname)
-                 +task-agent-file-maximum-bytes+)
+                 *task-agent-file-maximum-bytes*)
           (task-agent-definition--error
            :pathname pathname :source source
            :cause "The native role file exceeds its byte bound."
@@ -714,7 +712,7 @@
          (form (task-agent--read-native-form pathname source basename))
          (pairs
            (task--plist-alist
-            form +task-agent-definition-fields+
+            form *task-agent-definition-fields*
             :pathname pathname
             :source source
             :line 1

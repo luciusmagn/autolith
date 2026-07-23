@@ -2,29 +2,25 @@
 
 ;;;; -- Application Lifecycle --
 
-(define-constant +application-banner-logo-lines+
+(defparameter *application-banner-logo-lines*
   '((:brand-gradient-1 . "  :::.      :::")
     (:brand-gradient-2 . "  ;;`;;     ;;;")
     (:brand-gradient-3 . " ,[[ '[[,   [[[")
     (:brand-gradient-4 . "c$$$cc$$$c  $$'")
     (:brand-gradient-5 . " 888   888,o88oo,.__")
     (:brand-gradient-6 . " YMM   \"\"` \"\"\"\"YUMMM"))
-  :test #'equal
-  :documentation
   "The AL mark generated with FIGlet's Cosmic font, paired with row styles.")
 
-(define-constant +application-recovery-gradient-styles+
+(defparameter *application-recovery-gradient-styles*
   '(:recovery-gradient-1 :recovery-gradient-2 :recovery-gradient-3
     :recovery-gradient-4 :recovery-gradient-5 :recovery-gradient-6)
-  :test #'equal
-  :documentation "The distinct row styles used after recovery starts Autolith.")
+  "The distinct row styles used after recovery starts Autolith.")
 
-(define-constant +application-banner-gap+ "   "
-  :test #'string=
-  :documentation "Horizontal space between the startup mark and session data.")
+(defparameter *application-banner-gap* "   "
+  "Horizontal space between the startup mark and session data.")
 
-(define-constant +application-banner-minimum-metadata-width+ 32
-  :documentation "The minimum useful width for metadata beside the startup mark.")
+(defparameter *application-banner-minimum-metadata-width* 32
+  "The minimum useful width for metadata beside the startup mark.")
 
 (-> application--banner-logo-lines () list)
 (defun application--banner-logo-lines ()
@@ -32,9 +28,9 @@
   (if (non-empty-string-p (uiop:getenv "AUTOLITH_RECOVERED"))
       (mapcar (lambda (entry style)
                 (cons style (rest entry)))
-              +application-banner-logo-lines+
-              +application-recovery-gradient-styles+)
-      +application-banner-logo-lines+))
+              *application-banner-logo-lines*
+              *application-recovery-gradient-styles*)
+      *application-banner-logo-lines*))
 
 (-> application--banner-logo-width () (integer 1))
 (defun application--banner-logo-width ()
@@ -49,7 +45,7 @@
                  (application-ui application))))
     (if ui
         (terminal-columns (terminal-ui-terminal ui))
-        +terminal-default-columns+)))
+        *terminal-default-columns*)))
 
 (-> application--banner-metadata-field (string string) list)
 (defun application--banner-metadata-field (label value)
@@ -63,7 +59,7 @@
   (let* ((configuration (application-configuration application))
          (title
            (list (terminal-span :strong "AUTOLITH")
-                 (terminal-span :dim (format nil " v~A" +autolith-version+))))
+                 (terminal-span :dim (format nil " v~A" *autolith-version*))))
          (model
            (application--banner-metadata-field
             "model"
@@ -103,7 +99,7 @@
   (let* ((logo-width (application--banner-logo-width))
          (metadata-width (- columns
                             logo-width
-                            (text-cell-width +application-banner-gap+))))
+                            (text-cell-width *application-banner-gap*))))
     (loop for logo-entry in (application--banner-logo-lines)
           for index from 0
           for metadata-row = (nth index metadata-rows)
@@ -118,7 +114,7 @@
                          logo-text)))
               (when metadata-row
                 (append
-                 (list (terminal-span :plain +application-banner-gap+))
+                 (list (terminal-span :plain *application-banner-gap*))
                  (terminal--clip-spans metadata-row metadata-width)))))))))
 
 (-> application--banner-stacked-spans (list integer) list)
@@ -159,11 +155,11 @@
          (metadata-width
            (- columns
               (application--banner-logo-width)
-              (text-cell-width +application-banner-gap+)))
+              (text-cell-width *application-banner-gap*)))
          (side-by-side-minimum
            (+ (application--banner-logo-width)
-              (text-cell-width +application-banner-gap+)
-              +application-banner-minimum-metadata-width+))
+              (text-cell-width *application-banner-gap*)
+              *application-banner-minimum-metadata-width*))
          (header
            (if (>= columns side-by-side-minimum)
                (application--banner-side-by-side-spans
@@ -188,7 +184,7 @@
   "Return the cached update notice appropriate to APPLICATION's installation."
   (let ((availability (application-update-availability application)))
     (when availability
-      (let ((current-version +autolith-version+)
+      (let ((current-version *autolith-version*)
             (latest-version (subseq (update-availability-tag availability) 1)))
         (list
          (terminal-span
@@ -428,13 +424,13 @@
 
 ;;;; -- Command-Line Entry --
 
-(defconstant +main-fatal-recovery-status+ 70
+(defparameter *main-fatal-recovery-status* 70
   "The process status asking the stable launcher to recover after a fatal error.")
 
-(defconstant +main-rollback-recovery-status+ 75
+(defparameter *main-rollback-recovery-status* 75
   "The process status asking the stable launcher to start a selected rollback.")
 
-(defconstant +main-update-request-status+ 76
+(defparameter *main-update-request-status* 76
   "The process status asking a packaged outer launcher to perform an update.")
 
 (-> main-usage () string)
@@ -525,13 +521,13 @@
   (cond
     ((and (= (length arguments) 3)
           (string= (first arguments)
-                   +image-commit-replay-probe-argument+))
+                   *image-commit-replay-probe-argument*))
      (image-commit-replay-probe-main (second arguments)
                                      (third arguments)))
     ((member "--worker" arguments :test #'string=)
      (worker-main))
     ((member "--version" arguments :test #'string=)
-     (format t "autolith ~A~%" +autolith-version+))
+     (format t "autolith ~A~%" *autolith-version*))
     ((or (member "--help" arguments :test #'string=)
          (member "-h" arguments :test #'string=))
      (format t "~A~%" (main-usage)))
@@ -562,7 +558,7 @@
                                      :format-control "Intentional recovery test."
                                      :format-arguments nil))))
               (format *error-output* "Intentional crash capsule: ~A~%" capsule)
-              (uiop:quit +main-fatal-recovery-status+)))
+              (uiop:quit *main-fatal-recovery-status*)))
           (handler-case
               (application-run
                *active-application*
@@ -575,17 +571,17 @@
               (format *error-output*
                       "Autolith is rolling back to retained generation ~A.~%"
                       (rollback-requested-generation-id condition))
-              (uiop:quit +main-rollback-recovery-status+))
+              (uiop:quit *main-rollback-recovery-status*))
             (update-requested (condition)
               (format *error-output*
                       "Autolith will update to ~A after restoring the terminal.~%"
                       (subseq (update-requested-tag condition) 1))
-              (uiop:quit +main-update-request-status+))
+              (uiop:quit *main-update-request-status*))
             (fatal-control-path-error (condition)
               (format *error-output*
                       "Autolith entered recovery after a fatal error. Capsule: ~A~%"
                       (fatal-control-path-error-capsule-pathname condition))
-              (uiop:quit +main-fatal-recovery-status+))))))))
+              (uiop:quit *main-fatal-recovery-status*))))))))
   nil)
 
 (-> main (list) null)

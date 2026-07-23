@@ -2,18 +2,16 @@
 
 ;;;; -- Release Builder Configuration --
 
-(define-constant +release-builder-default-poll-seconds+ 300
-  :documentation "The default delay between remote release-tag checks.")
+(defparameter *release-builder-default-poll-seconds* 300
+  "The default delay between remote release-tag checks.")
 
-(define-constant +release-builder-default-repository+
+(defparameter *release-builder-default-repository*
   "https://github.com/luciusmagn/autolith.git"
-  :test #'string=
-  :documentation "The public source repository inspected for release tags.")
+  "The public source repository inspected for release tags.")
 
-(define-constant +release-builder-container-image+
+(defparameter *release-builder-container-image*
   "autolith-release-builder:ubuntu-22.04"
-  :test #'string=
-  :documentation "The local container image used for portable release builds.")
+  "The local container image used for portable release builds.")
 
 (defclass release-builder-configuration ()
   ((source-root
@@ -136,12 +134,12 @@
         #p"/srv/autolith-release-server/"))
    :repository (or repository
                    (uiop:getenv "AUTOLITH_RELEASE_REPOSITORY")
-                   +release-builder-default-repository+)
+                   *release-builder-default-repository*)
    :poll-seconds
    (or poll-seconds
        (release-builder--positive-integer
         (uiop:getenv "AUTOLITH_RELEASE_POLL_SECONDS")
-        +release-builder-default-poll-seconds+
+        *release-builder-default-poll-seconds*
         "release poll interval"))
    :container-command (or container-command
                           (uiop:getenv "AUTOLITH_RELEASE_CONTAINER_COMMAND")
@@ -337,7 +335,7 @@ semantic order so a temporary builder outage cannot skip a version."
         (uiop:run-program
          (list (release-builder-configuration-container-command configuration)
                "build"
-               "--tag" +release-builder-container-image+
+               "--tag" *release-builder-container-image*
                "--file" (namestring containerfile)
                (namestring server-root))
          :output :interactive
@@ -383,7 +381,7 @@ semantic order so a temporary builder outage cannot skip a version."
                "--volume" (release-builder--container-volume checkout "/source")
                "--volume" (release-builder--container-volume state "/state")
                "--volume" (release-builder--container-volume staging "/output")
-               +release-builder-container-image+)
+               *release-builder-container-image*)
          :output :interactive
          :error-output :interactive)
       (error (cause)

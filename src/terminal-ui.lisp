@@ -7,14 +7,14 @@
   "Return the viewport row budget reserved for TERMINAL's unfinished content."
   (max 1 (1- (terminal-rows terminal))))
 
-(define-constant +terminal-ui-stale-status-seconds+ 30
-  :documentation "The idle duration after which live activity is labelled as stale.")
+(defparameter *terminal-ui-stale-status-seconds* 30
+  "The idle duration after which live activity is labelled as stale.")
 
-(define-constant +terminal-ui-status-spinner-frames-per-second+ 4
-  :documentation "The number of REPL status spinner frames painted each second.")
+(defparameter *terminal-ui-status-spinner-frames-per-second* 4
+  "The number of REPL status spinner frames painted each second.")
 
-(define-constant +terminal-ui-pending-preview-limit+ 3
-  :documentation "The maximum pending inputs previewed for each delivery class.")
+(defparameter *terminal-ui-pending-preview-limit* 3
+  "The maximum pending inputs previewed for each delivery class.")
 
 (-> terminal-ui--monotonic-seconds () real)
 (defun terminal-ui--monotonic-seconds ()
@@ -68,7 +68,7 @@
                    :terminal terminal
                    :editor (or editor
                                (line-editor-create
-                                :history-limit +terminal-history-limit+))
+                                :history-limit *terminal-history-limit*))
                    :live-region live-region
                    :clock-function clock-function
                    :prompt prompt
@@ -77,7 +77,7 @@
                    :completion-function completion-function
                    :completion-selector
                    (make-selector
-                    :visible-count +terminal-ui-visible-completions+
+                    :visible-count *terminal-ui-visible-completions*
                     :arrangement ':vertical))))
 
 (defmacro with-terminal-ui-locked ((ui) &body body)
@@ -155,10 +155,10 @@
                 (terminal-ui--copy-image-attachments attachments))
           (terminal-ui-image-history ui))
     (when (> (length (terminal-ui-image-history ui))
-             +terminal-history-limit+)
+             *terminal-history-limit*)
       (setf (terminal-ui-image-history ui)
             (subseq (terminal-ui-image-history ui)
-                    0 +terminal-history-limit+))))
+                    0 *terminal-history-limit*))))
   nil)
 
 (-> terminal-ui--restore-history-images (terminal-ui) null)
@@ -269,7 +269,7 @@
           (write-string sequence stream))
         (write-string text stream)
         (when sequence
-          (write-string +terminal-style-reset+ stream))))))
+          (write-string *terminal-style-reset* stream))))))
 
 (-> terminal--write-row (terminal list) null)
 (defun terminal--write-row (terminal spans)
@@ -517,7 +517,7 @@
 (defun terminal-ui--pending-input-rows
     (label inputs &key count row-width)
   "Return bounded live rows previewing pending INPUTS under LABEL."
-  (let* ((visible-count (min +terminal-ui-pending-preview-limit+
+  (let* ((visible-count (min *terminal-ui-pending-preview-limit*
                              (length inputs)))
          (omitted (- count visible-count)))
     (append
@@ -575,7 +575,7 @@
 (defun terminal-ui--status-spinner-phase-at (ui now)
   "Return UI's quarter-second REPL status spinner phase at NOW."
   (let ((started-at (or (terminal-ui-status-started-at ui) now)))
-    (mod (floor (* +terminal-ui-status-spinner-frames-per-second+
+    (mod (floor (* *terminal-ui-status-spinner-frames-per-second*
                    (max 0 (- now started-at))))
          4)))
 
@@ -605,7 +605,7 @@
   (multiple-value-bind (elapsed idle)
       (terminal-ui--status-times-at ui now)
     (list elapsed
-          (and (>= idle +terminal-ui-stale-status-seconds+) idle)
+          (and (>= idle *terminal-ui-stale-status-seconds*) idle)
           (terminal-ui--status-spinner-phase-at ui now))))
 
 (-> terminal-ui--status-text-at (terminal-ui real) string)
@@ -613,7 +613,7 @@
   "Return UI's activity timing at monotonic NOW."
   (multiple-value-bind (elapsed idle)
       (terminal-ui--status-times-at ui now)
-    (if (>= idle +terminal-ui-stale-status-seconds+)
+    (if (>= idle *terminal-ui-stale-status-seconds*)
         (format nil "~A · no update ~A"
                 (terminal-ui--duration-text elapsed)
                 (terminal-ui--duration-text idle))
@@ -924,7 +924,7 @@ when no resize needs to be applied."
       (setf (terminal-ui-selector ui)
             (make-selector
              :items items
-             :visible-count +terminal-ui-visible-completions+
+             :visible-count *terminal-ui-visible-completions*
              :arrangement ':vertical)
             (terminal-ui-selector-title ui) title))
     (unwind-protect

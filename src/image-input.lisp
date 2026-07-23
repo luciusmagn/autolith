@@ -50,17 +50,17 @@
 
 ;;;; -- Prepared Attachments --
 
-(define-constant +image-input-maximum-source-bytes+ (* 1024 1024 1024)
-  :documentation "The Codex-compatible sanity limit for one source image.")
+(defparameter *image-input-maximum-source-bytes* (* 1024 1024 1024)
+  "The Codex-compatible sanity limit for one source image.")
 
-(define-constant +image-input-maximum-dimension+ 2048
-  :documentation "The maximum high-detail prompt-image width or height.")
+(defparameter *image-input-maximum-dimension* 2048
+  "The maximum high-detail prompt-image width or height.")
 
-(define-constant +image-input-patch-size+ 32
-  :documentation "The provider image-token patch width and height.")
+(defparameter *image-input-patch-size* 32
+  "The provider image-token patch width and height.")
 
-(define-constant +image-input-maximum-patches+ 2500
-  :documentation "The maximum high-detail prompt-image patch count.")
+(defparameter *image-input-maximum-patches* 2500
+  "The maximum high-detail prompt-image patch count.")
 
 (defclass image-attachment ()
   ((identifier
@@ -271,13 +271,13 @@
                           :direction :input
                           :element-type '(unsigned-byte 8))
     (let ((length (file-length stream)))
-      (when (> length +image-input-maximum-source-bytes+)
+      (when (> length *image-input-maximum-source-bytes*)
         (image-input--error
          pathname
          ':recognition
          (format nil "Image ~A is larger than the ~:D-byte input limit."
                  pathname
-                 +image-input-maximum-source-bytes+)))
+                 *image-input-maximum-source-bytes*)))
       (let ((bytes (make-array length :element-type '(unsigned-byte 8))))
         (unless (= (read-sequence bytes stream) length)
           (image-input--error pathname ':recognition
@@ -318,11 +318,11 @@
 (-> image-input--dimensions-fit-p (integer integer) boolean)
 (defun image-input--dimensions-fit-p (width height)
   "Return true when WIDTH and HEIGHT satisfy Codex high-detail limits."
-  (and (<= width +image-input-maximum-dimension+)
-       (<= height +image-input-maximum-dimension+)
-       (<= (* (ceiling width +image-input-patch-size+)
-              (ceiling height +image-input-patch-size+))
-           +image-input-maximum-patches+)))
+  (and (<= width *image-input-maximum-dimension*)
+       (<= height *image-input-maximum-dimension*)
+       (<= (* (ceiling width *image-input-patch-size*)
+              (ceiling height *image-input-patch-size*))
+           *image-input-maximum-patches*)))
 
 (-> image-input--target-dimensions (integer integer) (values integer integer))
 (defun image-input--target-dimensions (width height)
@@ -331,16 +331,16 @@
       (values width height)
       (let* ((maximum (max width height))
              (dimension-scale
-               (min 1.0d0 (/ +image-input-maximum-dimension+
+               (min 1.0d0 (/ *image-input-maximum-dimension*
                              (coerce maximum 'double-float))))
              (scaled-width (max 1 (round (* width dimension-scale))))
              (scaled-height (max 1 (round (* height dimension-scale)))))
         (if (image-input--dimensions-fit-p scaled-width scaled-height)
             (values scaled-width scaled-height)
-            (let* ((patch-size (coerce +image-input-patch-size+ 'double-float))
+            (let* ((patch-size (coerce *image-input-patch-size* 'double-float))
                    (scale
                      (sqrt (/ (* patch-size patch-size
-                                 +image-input-maximum-patches+)
+                                 *image-input-maximum-patches*)
                               (* (coerce scaled-width 'double-float)
                                  scaled-height))))
                    (patches-wide (/ (* scaled-width scale) patch-size))

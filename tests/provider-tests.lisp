@@ -18,7 +18,7 @@
                     285)
                  "decimal used percents parse without the Lisp reader")
     (test-assert (= (getf (getf snapshot :primary) :resets-at)
-                    (+ 1783000000 +unix-epoch-universal-time+))
+                    (unix-time->universal-time 1783000000))
                  "reset times convert from the POSIX epoch")
     (test-assert (= (getf (getf snapshot :secondary) :used-percent) 45)
                  "secondary rate limit windows parse")
@@ -140,8 +140,8 @@
            (test-assert
             (string= (json-get (json-get request "reasoning") "effort") "max")
             "the provider request maps Ultra reasoning to Max")
-           (dolist (model +supported-models+)
-             (dolist (effort +supported-reasoning-efforts+)
+           (dolist (model *supported-models*)
+             (dolist (effort *supported-reasoning-efforts*)
                (let* ((selected
                         (configuration-with-reasoning-effort
                          (configuration-with-model configuration model)
@@ -663,7 +663,7 @@
                   (and retry-event
                        (= (provider-retry-event-attempt retry-event) 1)
                        (= (provider-retry-event-maximum-attempts retry-event)
-                          (length +provider-stream-retry-delays+))
+                          (length *provider-stream-retry-delays*))
                        (= (provider-retry-event-delay retry-event) 1))
                   "provider retries expose their attempt and delay to the observer"))
                (test-assert
@@ -675,7 +675,7 @@
                    (test-codex-provider-create
                     configuration
                     (make-list
-                     (1+ (length +provider-stream-retry-delays+))
+                     (1+ (length *provider-stream-retry-delays*))
                      :initial-element :server-error))))
              (test-assert
               (handler-case

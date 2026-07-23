@@ -58,14 +58,14 @@
 
 ;;;; -- Workspace Constants --
 
-(define-constant +fs-read-default-line-count+ 400
-  :documentation "The file lines returned by fs.read when no window is given.")
+(defparameter *fs-read-default-line-count* 400
+  "The file lines returned by fs.read when no window is given.")
 
-(define-constant +shell-default-timeout-seconds+ 60
-  :documentation "The seconds one shell.run command may take by default.")
+(defparameter *shell-default-timeout-seconds* 60
+  "The seconds one shell.run command may take by default.")
 
-(define-constant +shell-maximum-timeout-seconds+ 600
-  :documentation "The largest timeout one shell.run command may request.")
+(defparameter *shell-maximum-timeout-seconds* 600
+  "The largest timeout one shell.run command may request.")
 
 
 ;;;; -- Path Resolution --
@@ -175,7 +175,7 @@ through private image commits instead."
                                 1)))
          (line-count (max 1 (or (workspace-tool-integer-argument
                                  arguments "line-count")
-                                +fs-read-default-line-count+))))
+                                *fs-read-default-line-count*))))
     (cond
       ((uiop:directory-exists-p path)
        (tool-failure
@@ -350,10 +350,10 @@ through private image commits instead."
          (directory (workspace-tool-path
                      context
                      (tool-argument arguments "directory")))
-         (timeout (min +shell-maximum-timeout-seconds+
+         (timeout (min *shell-maximum-timeout-seconds*
                        (max 1 (or (workspace-tool-integer-argument
                                    arguments "timeout-seconds")
-                                  +shell-default-timeout-seconds+)))))
+                                  *shell-default-timeout-seconds*)))))
     (unless (non-empty-string-p command)
       (error 'tool-error
              :message "shell.run requires a non-empty command."

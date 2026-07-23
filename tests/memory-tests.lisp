@@ -123,7 +123,7 @@
                     (memory-remember
                      configuration
                      :title "Oversized"
-                     :content (make-string (1+ +memory-content-limit+)
+                     :content (make-string (1+ *memory-content-limit*)
                                            :initial-element #\x)
                      :tags nil)
                     nil)

@@ -343,11 +343,11 @@
                                    for style = (terminal-span-style span)
                                    when (member
                                          style
-                                         +application-recovery-gradient-styles+)
+                                         *application-recovery-gradient-styles*)
                                      collect style)))
                       (test-assert
                        (equal recovered-styles
-                              +application-recovery-gradient-styles+)
+                              *application-recovery-gradient-styles*)
                        "a recovered process renders every AL row in red")))
                (if previous-recovered
                    (sb-posix:setenv "AUTOLITH_RECOVERED"
@@ -357,7 +357,7 @@
                         "the banner begins with one empty row")
            (test-assert (and (search "  :::.      :::" (second lines))
                              (search (format nil "AUTOLITH v~A"
-                                             +autolith-version+)
+                                             *autolith-version*)
                                      (second lines))
                              (search "────" (third lines))
                              (search "model" (fourth lines))
@@ -369,7 +369,7 @@
              (test-assert
               (not (search "conversation" text :end2 header-end))
               "the startup header omits the internal conversation identifier"))
-           (test-assert (search (format nil "v~A" +autolith-version+) text)
+           (test-assert (search (format nil "v~A" *autolith-version*) text)
                         "the startup banner uses the configured version")
            (test-assert (not (search "v6.6.6" text))
                         "the startup banner contains no stale display version")
@@ -452,7 +452,7 @@
          (release-provenance
            (make-instance 'installation-provenance
                           :method ':release
-                          :current-tag (format nil "v~A" +autolith-version+)))
+                          :current-tag (format nil "v~A" *autolith-version*)))
          (release-availability
            (make-instance 'update-availability :tag tag :method ':release)))
     (labels ((make-application (events)
@@ -893,7 +893,7 @@
                         "the interrupt-only reader survives into runtime cleanup")
            (test-assert (not cleanup-timed-out-p)
                         "repeated Ctrl-C escapes blocked shutdown cleanup")
-           (test-assert (= forced-status +application-forced-interrupt-status+)
+           (test-assert (= forced-status *application-forced-interrupt-status*)
                         "a repeated Ctrl-C forces process status 130")
            (test-assert terminal-restored-before-exit-p
                         "forced interruption restores the terminal before exit")
@@ -941,7 +941,7 @@
                (lambda ()
                  (with-lock-held (status-lock)
                    (= (or forced-status -1)
-                      +application-forced-interrupt-status+)))
+                      *application-forced-interrupt-status*)))
                2)
               "Ctrl-C forces exit while non-interrupt shutdown is pending")
              (application-input-controller-stop controller)
@@ -1000,7 +1000,7 @@
                          "type" "summary_text"
                          "text" (format nil
                                         "**<thought>** Checked the safe path.~%Compared fallback behavior.~C[31m"
-                                        +terminal-escape-character+)))
+                                        *terminal-escape-character*)))
              "content" (json-array
                         (json-object "type" "reasoning_text"
                                      "text" "raw private reasoning")))))
@@ -1027,7 +1027,7 @@
                   (<= (text-cell-width line) 39))
                 (uiop:split-string text :separator '(#\Newline)))
          "reasoning summary rails stay within the transcript width")
-        (test-assert (not (find +terminal-escape-character+ text))
+        (test-assert (not (find *terminal-escape-character* text))
                      "reasoning summaries neutralize terminal controls")
         (test-assert (not (search "raw private reasoning" text))
                      "trace mode never shows raw reasoning content"))
@@ -1399,7 +1399,7 @@
            (let ((preview (terminal-ui-preview-rows (application-ui application))))
              (test-assert
               (and (<= (length preview)
-                       +application-reasoning-preview-row-limit+)
+                       *application-reasoning-preview-row-limit*)
                    (find (terminal-span :dim "  │ …")
                          (apply #'append preview)
                          :test #'equal))
@@ -1654,9 +1654,9 @@
               "the input cursor is restored after the model turn")
              (let* ((output (recording-terminal-output terminal))
                     (hide (format nil "~C[?25l"
-                                  +terminal-escape-character+))
+                                  *terminal-escape-character*))
                     (show (format nil "~C[?25h"
-                                  +terminal-escape-character+))
+                                  *terminal-escape-character*))
                     (hide-count
                       (terminal-tests--substring-count hide output))
                     (show-count
@@ -2046,7 +2046,7 @@
            (conversation-append-user-message other-newer
                                              "newer other conversation")
            (let ((now (- (get-universal-time)
-                         +unix-epoch-universal-time+)))
+                         *unix-epoch-universal-time*)))
              (flet ((set-activity (conversation seconds-ago)
                       (let ((time (- now seconds-ago)))
                         (sb-posix:utime
@@ -2381,7 +2381,7 @@
            (setf (provider-rate-limits provider) '(:primary (:used-percent 25)))
            (let ((items (application--effort-items application)))
              (test-assert (= (length items)
-                             (length +supported-reasoning-efforts+))
+                             (length *supported-reasoning-efforts*))
                           "every supported effort is offered")
              (test-assert (find "current" items
                                 :key (lambda (item)
@@ -2426,7 +2426,7 @@
            (test-assert (typep (application-agent application) 'agent)
                         "switching effort reconnects the agent")
            (let ((items (application--model-items application)))
-             (test-assert (= (length items) (length +supported-models+))
+             (test-assert (= (length items) (length *supported-models*))
                           "every 5.6 family model is offered")
              (test-assert (string= (getf (find "current" items
                                                :key (lambda (item)
@@ -2681,7 +2681,7 @@
            (setf (application-goal application)
                  (list :objective "endless"
                        :status ':active
-                       :continuations +application-goal-continuation-limit+
+                       :continuations *application-goal-continuation-limit*
                        :created-at (get-universal-time)))
            (recording-terminal-reset terminal)
            (application--run-goal-continuations application)
@@ -2695,7 +2695,7 @@
                                 application
                                 (list :message :seq 99 :time 0 :role :user
                                       :content
-                                      +application-goal-continuation-prompt+))
+                                      *application-goal-continuation-prompt*))
                                (list (terminal-span :hint "∙ goal continues")))
                         "continuation prompts render as dim notices")
            (application-goal-command application "clear")

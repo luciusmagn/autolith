@@ -2,23 +2,23 @@
 
 ;;;; -- Persistent Memories --
 
-(define-constant +memory-format-version+ 1
-  :documentation "The readable persistent memory format version.")
+(defparameter *memory-format-version* 1
+  "The readable persistent memory format version.")
 
-(define-constant +memory-title-limit+ 200
-  :documentation "The maximum characters in one memory title.")
+(defparameter *memory-title-limit* 200
+  "The maximum characters in one memory title.")
 
-(define-constant +memory-content-limit+ 5000
-  :documentation "The maximum characters in one memory body.")
+(defparameter *memory-content-limit* 5000
+  "The maximum characters in one memory body.")
 
-(define-constant +memory-tag-count-limit+ 16
-  :documentation "The maximum tags attached to one memory.")
+(defparameter *memory-tag-count-limit* 16
+  "The maximum tags attached to one memory.")
 
-(define-constant +memory-tag-limit+ 80
-  :documentation "The maximum characters in one memory tag.")
+(defparameter *memory-tag-limit* 80
+  "The maximum characters in one memory tag.")
 
-(define-constant +memory-search-term-limit+ 24
-  :documentation "The maximum distinct terms considered by one memory query.")
+(defparameter *memory-search-term-limit* 24
+  "The maximum distinct terms considered by one memory query.")
 
 (defvar *memory-lock* (make-lock "Autolith persistent memories")
   "The process-local lock serializing memory reads and appends.")
@@ -121,21 +121,21 @@
            :message "Memory tags must be a proper, non-circular list of strings."
            :pathname #P"memories.sexp"
            :identifier nil))
-  (when (> (length tags) +memory-tag-count-limit+)
+  (when (> (length tags) *memory-tag-count-limit*)
     (error 'memory-error
            :message (format nil "A memory may have at most ~:D tags."
-                            +memory-tag-count-limit+)
+                            *memory-tag-count-limit*)
            :pathname #P"memories.sexp"
            :identifier nil))
   (dolist (tag tags)
-    (memory--validate-text tag "tag" +memory-tag-limit+))
+    (memory--validate-text tag "tag" *memory-tag-limit*))
   (remove-duplicates (copy-list tags) :test #'string-equal :from-end t))
 
 (-> memory--record (memory) list)
 (defun memory--record (memory)
   "Return the complete portable replacement record for MEMORY."
   (list :memory
-        :version +memory-format-version+
+        :version *memory-format-version*
         :id (memory-identifier memory)
         :created-at (memory-created-at memory)
         :updated-at (memory-updated-at memory)
@@ -159,7 +159,7 @@
         (content (getf (rest record) :content))
         (tags (getf (rest record) :tags))
         (source-conversation (getf (rest record) :source-conversation)))
-    (unless (and (eql version +memory-format-version+)
+    (unless (and (eql version *memory-format-version*)
                  (non-empty-string-p identifier)
                  (typep created-at 'timestamp)
                  (typep updated-at 'timestamp)
@@ -182,9 +182,9 @@
                        :scope scope
                        :workspace workspace
                        :title (memory--validate-text
-                               title "title" +memory-title-limit+)
+                               title "title" *memory-title-limit*)
                        :content (memory--validate-text
-                                 content "content" +memory-content-limit+)
+                                 content "content" *memory-content-limit*)
                        :tags (memory--validate-tags tags)
                        :source-conversation source-conversation)
       (memory-error (condition)
@@ -205,7 +205,7 @@
          pathname
          record
          :initial-forms
-         (list (list :memories :version +memory-format-version+)))
+         (list (list :memories :version *memory-format-version*)))
       (error (cause)
         (error 'memory-error
                :message (format nil "Could not append persistent memory: ~A"
@@ -243,7 +243,7 @@
           (unless (and (listp header)
                        (eq (first header) :memories)
                        (eql (getf (rest header) :version)
-                            +memory-format-version+))
+                            *memory-format-version*))
             (error 'memory-error
                    :message "The persistent memory header is missing or unsupported."
                    :pathname pathname
@@ -262,7 +262,7 @@
             (:memory-forgotten
              (let ((identifier (getf (rest record) :id)))
                (unless (and (eql (getf (rest record) :version)
-                                 +memory-format-version+)
+                                 *memory-format-version*)
                             (non-empty-string-p identifier)
                             (typep (getf (rest record) :time) 'timestamp))
                  (error 'memory-error
@@ -351,9 +351,9 @@
     (configuration &key identifier title content scope tags source-conversation)
   "Create or completely replace one durable memory and return its active value."
   (let ((validated-title
-          (memory--validate-text title "title" +memory-title-limit+))
+          (memory--validate-text title "title" *memory-title-limit*))
         (validated-content
-          (memory--validate-text content "content" +memory-content-limit+))
+          (memory--validate-text content "content" *memory-content-limit*))
         (validated-tags (memory--validate-tags tags)))
     (unless (or (null identifier) (non-empty-string-p identifier))
       (error 'memory-error
@@ -427,7 +427,7 @@
       (memory--append-record
        configuration
        (list :memory-forgotten
-             :version +memory-format-version+
+             :version *memory-format-version*
              :id identifier
              :time (get-universal-time)))
       memory)))
@@ -450,7 +450,7 @@
                      :separator '(#\Space #\Tab #\Newline #\Return))))
            :test #'string=
            :from-end t)))
-    (subseq terms 0 (min +memory-search-term-limit+ (length terms)))))
+    (subseq terms 0 (min *memory-search-term-limit* (length terms)))))
 
 (-> memory--term-score (string memory) integer)
 (defun memory--term-score (term memory)

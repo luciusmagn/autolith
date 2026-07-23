@@ -2,22 +2,21 @@
 
 ;;;; -- Search Tool Configuration --
 
-(define-constant +fff-source-commit+
+(defparameter *fff-source-commit*
   "44a5b259570730a4236ecbf06673d43ef7b2263e"
-  :test #'string=
-  :documentation "The reviewed fff source revision built by Autolith bootstrap.")
+  "The reviewed fff source revision built by Autolith bootstrap.")
 
-(define-constant +search-default-result-limit+ 20
-  :documentation "The default number of fff results returned to the model.")
+(defparameter *search-default-result-limit* 20
+  "The default number of fff results returned to the model.")
 
-(define-constant +search-maximum-result-limit+ 100
-  :documentation "The largest fff result page returned to the model.")
+(defparameter *search-maximum-result-limit* 100
+  "The largest fff result page returned to the model.")
 
-(define-constant +search-default-time-budget-milliseconds+ 3000
-  :documentation "The default fff content-search wall-clock budget.")
+(defparameter *search-default-time-budget-milliseconds* 3000
+  "The default fff content-search wall-clock budget.")
 
-(define-constant +search-maximum-time-budget-milliseconds+ 10000
-  :documentation "The largest fff content-search wall-clock budget.")
+(defparameter *search-maximum-time-budget-milliseconds* 10000
+  "The largest fff content-search wall-clock budget.")
 
 (defclass search-tool (workspace-tool)
   ((engine
@@ -71,7 +70,7 @@
                (let ((*read-eval* nil)
                      (expected (list :fff-library
                                      :version 1
-                                     :commit +fff-source-commit+)))
+                                     :commit *fff-source-commit*)))
                  (equal (read stream nil nil) expected)))
            (error ()
              nil)))))
@@ -99,7 +98,7 @@
                (format nil
                        "The private fff library at ~A does not match revision ~A; run ~A."
                        library
-                       +fff-source-commit+
+                       *fff-source-commit*
                        (merge-pathnames "script/bootstrap"
                                         (configuration-source-root
                                          configuration)))
@@ -152,9 +151,9 @@
         (search-tool--bounded-integer
          arguments
          "max-results"
-         :fallback +search-default-result-limit+
+         :fallback *search-default-result-limit*
          :minimum 1
-         :maximum +search-maximum-result-limit+)
+         :maximum *search-maximum-result-limit*)
         :maximum-matches-per-file
         (search-tool--bounded-integer arguments "max-matches-per-file"
                                       :fallback 20
@@ -164,8 +163,8 @@
         (search-tool--bounded-integer
          arguments
          "time-budget-ms"
-         :fallback +search-default-time-budget-milliseconds+
+         :fallback *search-default-time-budget-milliseconds*
          :minimum 1
-         :maximum +search-maximum-time-budget-milliseconds+)
+         :maximum *search-maximum-time-budget-milliseconds*)
         :context-lines
         (search-tool--bounded-integer arguments "context" :maximum 10)))
