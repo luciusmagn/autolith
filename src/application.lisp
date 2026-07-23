@@ -98,11 +98,41 @@
     :accessor application-overlay-failures
     :type list
     :documentation "Overlay files that failed to load at startup, with reasons.")
+   (render-lock
+    :initform (make-recursive-lock "Autolith transcript rendering")
+    :reader application-render-lock
+    :type t
+    :documentation "The lock serializing transcript cursors and history boundaries.")
    (rendered-sequence
     :initform 0
     :accessor application-rendered-sequence
     :type integer
     :documentation "The last durable conversation sequence printed to scrollback.")
+   (render-position
+    :initform 0
+    :accessor application-render-position
+    :type (integer 0)
+    :documentation "The next append-log file position to inspect for transcript output.")
+   (render-generation
+    :initform 0
+    :accessor application-render-generation
+    :type (integer 0)
+    :documentation "The conversation log generation matching RENDER-POSITION.")
+   (transcript-synchronized-p
+    :initform nil
+    :accessor application-transcript-synchronized-p
+    :type boolean
+    :documentation "Whether bounded startup replay has reached the durable log tail.")
+   (history-floor-sequence
+    :initform nil
+    :accessor application-history-floor-sequence
+    :type (option (integer 0))
+    :documentation "The oldest transcript candidate explicitly shown in this process.")
+   (recovery-session-publication
+    :initform nil
+    :accessor application-recovery-session-publication
+    :type t
+    :documentation "The last recovery-session record published by this process.")
    (presentation-counter
     :initform 0
     :accessor application-presentation-counter
@@ -124,6 +154,61 @@
 
 
 ;;;; -- Construction and Reconnection --
+
+(-> application--recovery-session-pointer
+    (configuration)
+    (option pathname))
+(defun application--recovery-session-pointer (configuration)
+  "Return this launcher's contained recovery-session pointer, when configured."
+  (let ((value (uiop:getenv "AUTOLITH_RECOVERY_SESSION_POINTER")))
+    (when (non-empty-string-p value)
+      (let* ((pathname (pathname value))
+             (root
+               (merge-pathnames
+                "recovery-session-pointers/"
+                (configuration-state-root configuration))))
+        (and (uiop:absolute-pathname-p pathname)
+             (uiop:subpathp pathname root)
+             pathname)))))
+
+(-> application-publish-recovery-session (application) null)
+(defun application-publish-recovery-session (application)
+  "Best-effort publish the active durable conversation for hard-crash recovery."
+  (handler-case
+      (with-recursive-lock-held ((application-render-lock application))
+        (let* ((configuration (application-configuration application))
+               (pathname
+                 (application--recovery-session-pointer configuration))
+               (conversation (application-conversation application)))
+          (when pathname
+            (let* ((record
+                     (and
+                      (conversation-persisted-p conversation)
+                      (list :recovery-session
+                            :version 1
+                            :conversation-id
+                            (conversation-identifier conversation)
+                            :rendered-sequence
+                            (max
+                             0
+                             (application-rendered-sequence application))
+                            :history-floor-sequence
+                            (application-history-floor-sequence application))))
+                   (publication
+                     (list (namestring pathname) record)))
+              (unless
+                  (equal publication
+                         (application-recovery-session-publication
+                          application))
+                (if record
+                    (snapshot-write pathname record)
+                    (when (probe-file pathname)
+                      (delete-file pathname)))
+                (setf (application-recovery-session-publication application)
+                      publication))))))
+    (error ()
+      nil))
+  nil)
 
 (-> terminal--positive-integer-or-nil ((option string)) (option integer))
 (defun terminal--positive-integer-or-nil (value)
@@ -263,7 +348,28 @@
       (declare (ignore user-init-pathname))
       (setf (application-overlay-failures application) overlay-failures)
       (application--load-goal application)
+      (application-publish-recovery-session application)
       application)))
+
+(-> application--normalize-recovery-cursors
+    (conversation boolean (option integer) (option integer))
+    (values (integer 0) (option (integer 1))))
+(defun application--normalize-recovery-cursors
+    (conversation recovering-p rendered-sequence history-floor-sequence)
+  "Clamp recovered transcript cursors to CONVERSATION's durable sequence range."
+  (let* ((latest-sequence
+           (max 0 (1- (conversation-next-sequence conversation))))
+         (rendered
+           (if (and recovering-p
+                    (typep rendered-sequence '(integer 0)))
+               (min rendered-sequence latest-sequence)
+               0))
+         (history-floor
+           (and recovering-p
+                (typep history-floor-sequence '(integer 1))
+                (<= history-floor-sequence (1+ rendered))
+                history-floor-sequence)))
+    (values rendered history-floor)))
 
 (-> application-reconnect
     (application &key (:conversation-id (option string))
@@ -306,11 +412,11 @@
          (overlay-failures nil)
          (conversation
            (cond
-             (conversation-id
-              (conversation-load-by-id prepared-configuration conversation-id))
              (recovery-conversation-id
               (conversation-load-by-id prepared-configuration
                                        recovery-conversation-id))
+             (conversation-id
+              (conversation-load-by-id prepared-configuration conversation-id))
              ((conversation-persisted-p retained-conversation)
               (conversation-load-by-id
                prepared-configuration
@@ -342,37 +448,61 @@
            (handler-case
                (let ((value (uiop:getenv "AUTOLITH_RECOVERY_RENDERED_SEQUENCE")))
                  (and (non-empty-string-p value)
-                      (parse-integer value :junk-allowed nil)))
+                      (let ((parsed (parse-integer value :junk-allowed nil)))
+                        (and (not (minusp parsed)) parsed))))
              (error ()
-               nil))))
-    (setf (application-configuration application) configuration
-          (application-conversation application) conversation
-          (application-provider application) provider
-          (application-tool-registry application) registry
-          (application-worker application) worker
-          (application-agent application) agent
-          (application-ui application) ui
-          (application-permission-state application) permission-state
-          (application-permission-mode application) :ask
-          (application-input-controller application) nil
-          (application-reasoning-traces-p application) reasoning-traces-p
-          (application-compact-view-p application) compact-view-p
-          (application-installation-provenance application)
-          installation-provenance
-          (application-update-availability application) update-availability
-          (application-update-check-thread application) nil
-          (application-rendered-sequence application)
-          (if (and recovery-rendered-sequence
-                   (string= (conversation-identifier conversation)
-                            (if recovery-conversation-id
-                                (conversation-identifier-migration-resolve
-                                 prepared-configuration
-                                 recovery-conversation-id)
-                                "")))
-              recovery-rendered-sequence
-              0)
-          (application-overlay-failures application) overlay-failures)
+               nil)))
+         (recovery-history-floor-sequence
+           (handler-case
+               (let ((value
+                       (uiop:getenv
+                        "AUTOLITH_RECOVERY_HISTORY_FLOOR_SEQUENCE")))
+                 (and (non-empty-string-p value)
+                      (let ((parsed (parse-integer value :junk-allowed nil)))
+                        (and (not (minusp parsed)) parsed))))
+             (error ()
+               nil)))
+         (recovering-conversation-p
+           (and recovery-conversation-id
+                (string=
+                 (conversation-identifier conversation)
+                 (conversation-identifier-migration-resolve
+                  prepared-configuration
+                  recovery-conversation-id)))))
+    (multiple-value-bind
+        (restored-rendered-sequence restored-history-floor-sequence)
+        (application--normalize-recovery-cursors
+         conversation
+         (not (null recovering-conversation-p))
+         recovery-rendered-sequence
+         recovery-history-floor-sequence)
+      (setf (application-configuration application) configuration
+            (application-conversation application) conversation
+            (application-provider application) provider
+            (application-tool-registry application) registry
+            (application-worker application) worker
+            (application-agent application) agent
+            (application-ui application) ui
+            (application-permission-state application) permission-state
+            (application-permission-mode application) :ask
+            (application-input-controller application) nil
+            (application-reasoning-traces-p application) reasoning-traces-p
+            (application-compact-view-p application) compact-view-p
+            (application-installation-provenance application)
+            installation-provenance
+            (application-update-availability application) update-availability
+            (application-update-check-thread application) nil
+            (application-rendered-sequence application)
+            restored-rendered-sequence
+            (application-render-position application) 0
+            (application-render-generation application)
+            (conversation-log-generation conversation)
+            (application-transcript-synchronized-p application) nil
+            (application-history-floor-sequence application)
+            restored-history-floor-sequence
+            (application-overlay-failures application) overlay-failures))
     (application--load-goal application)
+    (application-publish-recovery-session application)
     application))
 
 (-> application--quiesce-update-check (application) null)
@@ -529,8 +659,14 @@
     (application-configuration application)
     conversation)
    :conversation conversation)
-  (setf (application-rendered-sequence application) 0)
+  (setf (application-rendered-sequence application) 0
+        (application-render-position application) 0
+        (application-render-generation application)
+        (conversation-log-generation conversation)
+        (application-transcript-synchronized-p application) nil
+        (application-history-floor-sequence application) nil)
   (application--load-goal application)
+  (application-publish-recovery-session application)
   application)
 
 
@@ -805,6 +941,328 @@
           (and (json-object-p item)
                (response-item-reasoning-summary item)))))))
 
+(defparameter *application-history-page-size* 500
+  "The maximum transcript candidates replayed automatically or per history page.")
+
+(-> application--history-page-size () (integer 1))
+(defun application--history-page-size ()
+  "Return the validated positive transcript history page size."
+  (unless (typep *application-history-page-size* '(integer 1))
+    (error 'configuration-error
+           :message "The transcript history page size must be a positive integer."))
+  *application-history-page-size*)
+
+(-> application--record-sequence (list) (option integer))
+(defun application--record-sequence (record)
+  "Return RECORD's durable sequence when it is a nonnegative integer."
+  (let ((sequence (getf (rest record) :seq)))
+    (and (typep sequence '(integer 0)) sequence)))
+
+(-> application--response-item-visible-p
+    (application json-object)
+    boolean)
+(defun application--response-item-visible-p (application item)
+  "Return true when completed provider ITEM has a visible transcript entry."
+  (let ((type (json-get item "type")))
+    (cond
+      ((and (string= (or type "") "message")
+            (string= (or (json-get item "role") "") "assistant"))
+       (not (null (response-item-assistant-text item))))
+      ((string= (or type "") "reasoning")
+       (and (application-reasoning-traces-p application)
+            (not (null (response-item-reasoning-summary item)))))
+      ((and (stringp type)
+            (member type '("function_call" "web_search_call")
+                    :test #'string=))
+       t)
+      (t
+       nil))))
+
+(-> application--record-visible-p (application list) boolean)
+(defun application--record-visible-p (application record)
+  "Return true when RECORD produces a visible transcript entry."
+  (case (first record)
+    (:message
+     (eq (getf (rest record) :role) ':user))
+    (:provider-item
+     (let ((wire-json (getf (rest record) :wire-json)))
+       (and (stringp wire-json)
+            (let ((item (json-decode wire-json)))
+              (and (json-object-p item)
+                   (application--response-item-visible-p
+                    application item))))))
+    (:tool-result
+     (let ((canonical-name (getf (rest record) :tool)))
+       (or (not (application-compact-view-p application))
+           (not (eq (getf (rest record) :status) ':ok))
+           (not
+            (null
+             (and (stringp canonical-name)
+                  (member canonical-name
+                          '("fs.write" "fs.edit" "shell.run"
+                            "lisp.eval" "self.eval")
+                          :test #'string=)))))))
+    (:summary
+     t)
+    (otherwise
+     nil)))
+
+(-> application--ring-records (vector integer integer) list)
+(defun application--ring-records (ring total limit)
+  "Return the newest records in circular RING in chronological order."
+  (let* ((count (min total limit))
+         (start (if (> total limit)
+                    (mod total limit)
+                    0)))
+    (loop for offset below count
+          collect (aref ring (mod (+ start offset) limit)))))
+
+(-> application--present-conversation-record
+    (application list
+     &key (:suppress-assistant-p boolean)
+          (:suppress-reasoning-p boolean))
+    boolean)
+(defun application--present-conversation-record
+    (application record
+     &key (suppress-assistant-p nil) (suppress-reasoning-p nil))
+  "Present one sequenced RECORD unless its streamed form is already visible."
+  (let ((sequence (application--record-sequence record)))
+    (when sequence
+      (let* ((ui (application-ui application))
+             (identifier
+               (list :conversation
+                     (conversation-identifier
+                      (application-conversation application))
+                     sequence))
+             (assistant-text
+               (application--assistant-message-record-text record))
+             (reasoning-text
+               (application--reasoning-record-text record)))
+        (if (or (and suppress-assistant-p assistant-text)
+                (and suppress-reasoning-p reasoning-text))
+            (terminal-ui-mark-finalized ui identifier)
+            (let ((entry (conversation-record-entry application record)))
+              (and entry
+                   (terminal-ui-append-finalized ui identifier entry))))))))
+
+(-> application--present-conversation-records
+    (application list)
+    (integer 0))
+(defun application--present-conversation-records (application records)
+  "Present ordered RECORDS with one terminal-region update."
+  (let ((conversation-id
+          (conversation-identifier
+           (application-conversation application))))
+    (terminal-ui-append-finalized-batch
+     (application-ui application)
+     (loop for record in records
+           for sequence = (application--record-sequence record)
+           for entry = (and sequence
+                            (conversation-record-entry application record))
+           when entry
+             collect (list (list :conversation
+                                 conversation-id
+                                 sequence)
+                           entry)))))
+
+(-> application--render-position-invalidate (application) null)
+(defun application--render-position-invalidate (application)
+  "Invalidate APPLICATION's append-log position after whole-log replacement."
+  (setf (application-render-position application) 0
+        (application-render-generation application)
+        (conversation-log-generation
+         (application-conversation application))
+        (application-transcript-synchronized-p application) nil)
+  nil)
+
+(-> application--render-position-reset-if-needed (application) null)
+(defun application--render-position-reset-if-needed (application)
+  "Reset APPLICATION's file cursor after its conversation log was replaced."
+  (let ((generation
+          (conversation-log-generation
+           (application-conversation application))))
+    (unless (= generation (application-render-generation application))
+      (application--render-position-invalidate application)))
+  nil)
+
+(-> application--finish-render-scan
+    (application integer integer)
+    boolean)
+(defun application--finish-render-scan (application position generation)
+  "Commit POSITION only when its scanned log GENERATION is still current."
+  (let ((conversation (application-conversation application)))
+    (if (= generation (conversation-log-generation conversation))
+        (progn
+          (setf (application-render-position application) position
+                (application-render-generation application) generation
+                (application-transcript-synchronized-p application) t)
+          (if (= generation (conversation-log-generation conversation))
+              t
+              (progn
+                (application--render-position-invalidate application)
+                nil)))
+        (progn
+          (application--render-position-invalidate application)
+          nil))))
+
+(-> application--render-startup-history
+    (application (integer 0))
+    null)
+(defun application--render-startup-history (application after-sequence)
+  "Replay a bounded newest page after durable sequence AFTER-SEQUENCE."
+  (let* ((conversation (application-conversation application))
+         (pathname (conversation-pathname conversation))
+         (limit (application--history-page-size)))
+    (loop
+      (let ((generation (conversation-log-generation conversation))
+            (ring (make-array limit))
+            (candidate-count 0)
+            (latest-sequence 0))
+        (multiple-value-bind (position incomplete-tail-p record-count)
+            (conversation--map-records
+             pathname
+             (lambda (record)
+               (let ((sequence (application--record-sequence record)))
+                 (when sequence
+                   (setf latest-sequence (max latest-sequence sequence))
+                   (when (and (> sequence after-sequence)
+                              (application--record-visible-p
+                               application record))
+                     (setf (aref ring (mod candidate-count limit)) record)
+                     (incf candidate-count))))))
+          (declare (ignore incomplete-tail-p record-count))
+          (if (/= generation (conversation-log-generation conversation))
+              (application--render-position-invalidate application)
+              (let ((records
+                      (application--ring-records
+                       ring candidate-count limit)))
+                (when (> candidate-count limit)
+                  (application-present
+                   application
+                   (list
+                    (terminal-span
+                     :hint
+                     (format nil
+                             "∙ showing the newest ~D of ~D ~:[transcript entries~;entries added after recovery~]; /history loads ~D earlier entries"
+                             limit
+                             candidate-count
+                             (plusp after-sequence)
+                             limit)))))
+                (application--present-conversation-records application records)
+                (setf (application-history-floor-sequence application)
+                      (cond
+                        ((or (zerop after-sequence)
+                             (> candidate-count limit)
+                             (null
+                              (application-history-floor-sequence
+                               application)))
+                         (or
+                          (and records
+                               (application--record-sequence (first records)))
+                          (1+ latest-sequence)))
+                        (t
+                         (application-history-floor-sequence application)))
+                      (application-rendered-sequence application)
+                      latest-sequence)
+                (when (application--finish-render-scan
+                       application position generation)
+                  (return))))))))
+  nil)
+
+(-> application--render-unread-records (application) null)
+(defun application--render-unread-records (application)
+  "Stream and present only records after APPLICATION's durable render cursor."
+  (let ((conversation (application-conversation application)))
+    (loop
+      (application--render-position-reset-if-needed application)
+      (let ((generation (application-render-generation application))
+            (records nil))
+        (multiple-value-bind (position incomplete-tail-p record-count)
+            (conversation--map-records
+             (conversation-pathname conversation)
+             (lambda (record)
+               (let ((sequence (application--record-sequence record)))
+                 (when (and sequence
+                            (> sequence
+                               (application-rendered-sequence application)))
+                   (push record records))))
+             :start-position (application-render-position application))
+          (declare (ignore incomplete-tail-p record-count))
+          (if (/= generation (conversation-log-generation conversation))
+              (application--render-position-invalidate application)
+              (progn
+                (dolist (record (nreverse records))
+                  (application--present-conversation-record application record)
+                  (setf (application-rendered-sequence application)
+                        (application--record-sequence record)))
+                (when (application--finish-render-scan
+                       application position generation)
+                  (return))))))))
+  nil)
+
+(-> application--render-streamed-records
+    (application (option string) (option string))
+    null)
+(defun application--render-streamed-records
+    (application streamed-assistant-text streamed-reasoning-text)
+  "Reconcile and present APPLICATION's unread records after streamed output."
+  (let ((conversation (application-conversation application)))
+    (loop
+      (application--render-position-reset-if-needed application)
+      (let ((generation (application-render-generation application))
+            (records nil))
+        (multiple-value-bind (position incomplete-tail-p record-count)
+            (conversation--map-records
+             (conversation-pathname conversation)
+             (lambda (record)
+               (let ((sequence (application--record-sequence record)))
+                 (when (and sequence
+                            (> sequence
+                               (application-rendered-sequence application)))
+                   (push record records))))
+             :start-position (application-render-position application))
+          (declare (ignore incomplete-tail-p record-count))
+          (if (/= generation (conversation-log-generation conversation))
+              (application--render-position-invalidate application)
+              (let* ((records (nreverse records))
+                     (assistant-texts
+                       (loop for record in records
+                             for text =
+                               (application--assistant-message-record-text
+                                record)
+                             when text
+                               collect text))
+                     (reasoning-texts
+                       (loop for record in records
+                             for text =
+                               (application--reasoning-record-text record)
+                             when text
+                               collect text))
+                     (assistant-stream-match-p
+                       (and streamed-assistant-text
+                            assistant-texts
+                            (string=
+                             streamed-assistant-text
+                             (format nil "~{~A~^~%~}" assistant-texts))))
+                     (reasoning-stream-match-p
+                       (and streamed-reasoning-text
+                            reasoning-texts
+                            (string=
+                             streamed-reasoning-text
+                             (format nil "~{~A~^~2%~}" reasoning-texts)))))
+                (dolist (record records)
+                  (application--present-conversation-record
+                   application
+                   record
+                   :suppress-assistant-p assistant-stream-match-p
+                   :suppress-reasoning-p reasoning-stream-match-p)
+                  (setf (application-rendered-sequence application)
+                        (application--record-sequence record)))
+                (when (application--finish-render-scan
+                       application position generation)
+                  (return))))))))
+  nil)
+
 (-> application-render-records
     (application &key (:streamed-assistant-text (option string))
                       (:streamed-reasoning-text (option string)))
@@ -816,51 +1274,114 @@
 Assistant and reasoning records are suppressed only when their joined durable
 text exactly matches the corresponding streamed text. Suppressed identifiers
 remain finalized so later conversation replay cannot duplicate streamed rows."
-  (let* ((ui (application-ui application))
-         (conversation (application-conversation application))
-         (conversation-id (conversation-identifier conversation))
-         (records
-           (loop for record in (rest (conversation--read-records
-                                      (conversation-pathname conversation)))
-                 for sequence = (getf (rest record) :seq)
-                 when (and (integerp sequence)
-                           (> sequence
-                              (application-rendered-sequence application)))
-                   collect record))
-         (assistant-texts
-           (loop for record in records
-                 for text = (application--assistant-message-record-text record)
-                 when text
-                   collect text))
-         (reasoning-texts
-           (loop for record in records
-                 for text = (application--reasoning-record-text record)
-                 when text
-                   collect text))
-         (assistant-stream-match-p
-           (and streamed-assistant-text
-                assistant-texts
-                (string= streamed-assistant-text
-                         (format nil "~{~A~^~%~}" assistant-texts))))
-         (reasoning-stream-match-p
-           (and streamed-reasoning-text
-                reasoning-texts
-                (string= streamed-reasoning-text
-                         (format nil "~{~A~^~2%~}" reasoning-texts)))))
-    (dolist (record records)
-      (let* ((sequence (getf (rest record) :seq))
-             (identifier (list :conversation conversation-id sequence))
-             (assistant-text
-               (application--assistant-message-record-text record))
-             (reasoning-text
-               (application--reasoning-record-text record)))
-        (if (or (and assistant-stream-match-p assistant-text)
-                (and reasoning-stream-match-p reasoning-text))
-            (terminal-ui-mark-finalized ui identifier)
-            (let ((entry (conversation-record-entry application record)))
-              (when entry
-                (terminal-ui-append-finalized ui identifier entry))))
-        (setf (application-rendered-sequence application) sequence))))
+  (with-recursive-lock-held ((application-render-lock application))
+    (cond
+      ((and (not (application-transcript-synchronized-p application))
+            (null streamed-assistant-text)
+            (null streamed-reasoning-text))
+       (application--render-startup-history
+        application
+        (application-rendered-sequence application)))
+      ((and (application-transcript-synchronized-p application)
+            (= (application-render-generation application)
+               (conversation-log-generation
+                (application-conversation application)))
+            (>= (application-rendered-sequence application)
+                (1- (conversation-next-sequence
+                     (application-conversation application)))))
+       nil)
+      ((or streamed-assistant-text streamed-reasoning-text)
+       (application--render-streamed-records
+        application streamed-assistant-text streamed-reasoning-text))
+      (t
+       (application--render-unread-records application))))
+  (application-publish-recovery-session application)
+  nil)
+
+(-> application--history-page-records
+    (application integer integer)
+    (values list integer))
+(defun application--history-page-records (application floor limit)
+  "Return the newest LIMIT replay candidates before sequence FLOOR."
+  (let ((ring (make-array limit))
+        (candidate-count 0))
+    (conversation--map-records
+     (conversation-pathname (application-conversation application))
+     (lambda (record)
+       (let ((sequence (application--record-sequence record)))
+         (when (and sequence
+                    (< sequence floor)
+                    (application--record-visible-p
+                     application record))
+           (setf (aref ring (mod candidate-count limit)) record)
+           (incf candidate-count)))))
+    (values (application--ring-records ring candidate-count limit)
+            candidate-count)))
+
+(-> application--history-floor-ensure
+    (application (integer 1))
+    integer)
+(defun application--history-floor-ensure (application limit)
+  "Return a paging floor, deriving the newest visible page when necessary."
+  (or (application-history-floor-sequence application)
+      (multiple-value-bind (records candidate-count)
+          (application--history-page-records
+           application
+           (1+ (application-rendered-sequence application))
+           limit)
+        (declare (ignore candidate-count))
+        (setf (application-history-floor-sequence application)
+              (or (and records
+                       (application--record-sequence (first records)))
+                  (1+ (application-rendered-sequence application)))))))
+
+(-> application-reset-history-pagination (application) null)
+(defun application-reset-history-pagination (application)
+  "Restart explicit history paging above the newest durable record."
+  (with-recursive-lock-held ((application-render-lock application))
+    (setf (application-history-floor-sequence application)
+          (1+ (application-rendered-sequence application))))
+  nil)
+
+(-> application-render-history (application) null)
+(defun application-render-history (application)
+  "Append one bounded page of explicitly requested older transcript history."
+  (with-recursive-lock-held ((application-render-lock application))
+    (let* ((limit (application--history-page-size))
+           (floor (application--history-floor-ensure application limit)))
+      (multiple-value-bind (records candidate-count)
+          (application--history-page-records
+           application floor limit)
+        (if records
+            (let ((presented-count
+                    (application--present-conversation-records
+                     application records)))
+              (setf (application-history-floor-sequence application)
+                    (application--record-sequence (first records)))
+              (when (plusp presented-count)
+                (application-present
+                 application
+                 (list
+                  (terminal-span
+                   :hint
+                   (format nil
+                           "∙ loaded ~D earlier transcript entr~:@P"
+                           presented-count)))))
+              (when (> candidate-count limit)
+                (application-present
+                 application
+                 (list
+                  (terminal-span
+                   :hint
+                   "∙ more earlier history remains; run /history again"))))
+              (when (and (zerop presented-count)
+                         (<= candidate-count limit))
+                (application-present
+                 application
+                 "No earlier transcript history remains.")))
+            (application-present application
+                                 "No earlier transcript history remains.")))))
+  (application-publish-recovery-session application)
   nil)
 
 
@@ -898,29 +1419,24 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
 (-> application--load-goal (application) null)
 (defun application--load-goal (application)
   "Restore APPLICATION's goal from the newest durable goal record."
-  (let ((goal nil))
-    (dolist (record (rest (conversation--read-records
-                           (conversation-pathname
-                            (application-conversation application)))))
-      (when (eq (first record) :goal)
-        (let ((objective (getf (rest record) :objective))
-              (status (getf (rest record) :status)))
-          (setf goal
-                (and (non-empty-string-p objective)
-                     (member status '(:active :paused :complete))
-                     (list :objective objective
-                           :status status
-                           :continuations
-                           (let ((count (getf (rest record) :continuations)))
-                             (if (integerp count)
-                                 count
-                                 0))
-                           :created-at
-                           (let ((time (getf (rest record) :created-at)))
-                             (if (integerp time)
-                                 time
-                                 (getf (rest record) :time)))))))))
-    (setf (application-goal application) goal))
+  (let* ((record
+           (conversation-latest-goal-record
+            (application-conversation application)))
+         (objective (and record (getf (rest record) :objective)))
+         (status (and record (getf (rest record) :status))))
+    (setf (application-goal application)
+          (and (non-empty-string-p objective)
+               (member status '(:active :paused :complete))
+               (list :objective objective
+                     :status status
+                     :continuations
+                     (let ((count (getf (rest record) :continuations)))
+                       (if (integerp count) count 0))
+                     :created-at
+                     (let ((time (getf (rest record) :created-at)))
+                       (if (integerp time)
+                           time
+                           (getf (rest record) :time)))))))
   nil)
 
 (-> application-goal-context (application) (option string))
@@ -1002,9 +1518,14 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
       "pondering"))
 
 (-> application-agent-observer
-    (application &key (:steering-function (option function)))
+    (application
+     &key (:steering-function (option function))
+          (:user-message-input (option user-message-input))
+          (:continuation-p boolean))
     agent-observer)
-(defun application-agent-observer (application &key steering-function)
+(defun application-agent-observer
+    (application
+     &key steering-function user-message-input (continuation-p nil))
   "Return a terminal observer streaming one APPLICATION turn as stable lines."
   (let ((ui (application-ui application))
         (activity-label (application-thinking-label))
@@ -1088,6 +1609,34 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
        :status-callback
        (lambda (status details)
          (case status
+           (:user-message-persisted
+            (let ((sequence (getf details :sequence)))
+              (unless (typep sequence '(integer 0))
+                (error 'conversation-invariant-error
+                       :message
+                       "The persisted user message has no valid sequence."
+                       :pathname
+                       (conversation-pathname
+                        (application-conversation application))
+                       :sequence sequence))
+              (with-recursive-lock-held
+                  ((application-render-lock application))
+                (terminal-ui-append-finalized
+                 ui
+                 (list :conversation
+                       (conversation-identifier
+                        (application-conversation application))
+                       sequence)
+                 (if continuation-p
+                     (list (terminal-span ':hint "∙ goal continues"))
+                     (application--transcript-entry
+                      application
+                      :style ':user
+                      :header "❯ you"
+                      :body
+                      (user-message-input-preview user-message-input))))
+                (setf (application-rendered-sequence application) sequence)))
+            (application-publish-recovery-session application))
            (:provider-progress
             (terminal-ui-note-status-progress ui))
            (:provider-request-started
@@ -1096,6 +1645,7 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
                   presented-reasoning-text nil
                   stream-text ""
                   activity-label (application-thinking-label))
+            (application-publish-recovery-session application)
             (application-set-activity application activity-label))
            (:provider-retrying
             (let ((partial-output-p
@@ -1200,25 +1750,9 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
              (string (user-message-input-create :text content))
              (user-message-input content)))
          (conversation (application-conversation application))
-         (ui (application-ui application))
-         (sequence (conversation-next-sequence conversation))
-         (identifier (list :conversation
-                           (conversation-identifier conversation)
-                           sequence)))
+         (ui (application-ui application)))
     (unwind-protect
          (progn
-           (terminal-ui-append-finalized
-            ui
-            identifier
-            (if continuation-p
-                (list (terminal-span ':hint "∙ goal continues"))
-                (application--transcript-entry application
-                                               :style ':user
-                                               :header "❯ you"
-                                               :body
-                                               (user-message-input-preview
-                                                submission))))
-           (setf (application-rendered-sequence application) sequence)
            (application-set-activity application (application-thinking-label))
            (application--note-goal-turn
             application
@@ -1227,7 +1761,9 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
              submission
              :observer (application-agent-observer
                         application
-                        :steering-function steering-function)
+                        :steering-function steering-function
+                        :user-message-input submission
+                        :continuation-p continuation-p)
              :goal-context (application-goal-context application))))
       (terminal-ui-set-preview-rows ui nil)
       (application-set-activity application nil)

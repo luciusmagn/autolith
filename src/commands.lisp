@@ -82,15 +82,15 @@
                  (if (integerp value)
                      value
                      0))))
-      (dolist (record (rest (conversation--read-records
-                             (conversation-pathname
-                              (application-conversation application)))))
-        (when (eq (first record) :provider)
-          (let ((usage (getf (getf (rest record) :metadata) :usage)))
-            (when (listp usage)
-              (incf input (usage-count usage "input_tokens"))
-              (incf output (usage-count usage "output_tokens"))
-              (incf total (usage-count usage "total_tokens")))))))
+      (conversation--map-records
+       (conversation-pathname (application-conversation application))
+       (lambda (record)
+         (when (eq (first record) :provider)
+           (let ((usage (getf (getf (rest record) :metadata) :usage)))
+             (when (listp usage)
+               (incf input (usage-count usage "input_tokens"))
+               (incf output (usage-count usage "output_tokens"))
+               (incf total (usage-count usage "total_tokens"))))))))
     (list :input input :output output :total total)))
 
 (-> application--token-count-description (integer) string)
@@ -255,21 +255,23 @@
   "Return a one-line excerpt of PATHNAME's newest user or assistant message."
   (handler-case
       (let ((preview nil))
-        (dolist (record (rest (conversation--read-records pathname)))
-          (case (first record)
-            (:message
-             (let ((content (getf (rest record) :content)))
-               (when (and (eq (getf (rest record) :role) :user)
-                          (stringp content))
-                 (setf preview content))))
-            (:provider-item
-             (let ((wire-json (getf (rest record) :wire-json)))
-               (when (stringp wire-json)
-                 (let ((item (json-decode wire-json)))
-                   (when (json-object-p item)
-                     (let ((text (response-item-assistant-text item)))
-                       (when text
-                         (setf preview text))))))))))
+        (conversation--map-records
+         pathname
+         (lambda (record)
+           (case (first record)
+             (:message
+              (let ((content (getf (rest record) :content)))
+                (when (and (eq (getf (rest record) :role) :user)
+                           (stringp content))
+                  (setf preview content))))
+             (:provider-item
+              (let ((wire-json (getf (rest record) :wire-json)))
+                (when (stringp wire-json)
+                  (let ((item (json-decode wire-json)))
+                    (when (json-object-p item)
+                      (let ((text (response-item-assistant-text item)))
+                        (when text
+                          (setf preview text)))))))))))
         (when preview
           (text-cell-prefix
            (sanitize-text preview :single-line-p t)
@@ -400,9 +402,16 @@
   (let ((provider (application-provider application)))
     (when provider
       (provider-set-reasoning-summaries provider enabled-p)))
-  (setf (application-reasoning-traces-p application) enabled-p)
+  (unless (eq (application-reasoning-traces-p application) enabled-p)
+    (let ((expanding-visibility-p
+            (and enabled-p
+                 (not (application-reasoning-traces-p application)))))
+      (setf (application-reasoning-traces-p application) enabled-p)
+      (when expanding-visibility-p
+        (application-reset-history-pagination application))))
   (unless enabled-p
     (terminal-ui-set-preview-rows (application-ui application) nil))
+  (application-publish-recovery-session application)
   nil)
 
 (-> application-trace-command (application (option string)) null)
@@ -439,7 +448,9 @@
        (preferences-set-compact-view
         (application-configuration application)
         t)
-       (setf (application-compact-view-p application) t)
+       (unless (application-compact-view-p application)
+         (setf (application-compact-view-p application) t))
+       (application-publish-recovery-session application)
        (application-present
         application
         "Compact tool-result presentation is enabled and saved."))
@@ -447,7 +458,10 @@
        (preferences-set-compact-view
         (application-configuration application)
         nil)
-       (setf (application-compact-view-p application) nil)
+       (when (application-compact-view-p application)
+         (setf (application-compact-view-p application) nil)
+         (application-reset-history-pagination application))
+       (application-publish-recovery-session application)
        (application-present
         application
         "Compact tool-result presentation is disabled and saved."))
@@ -1002,6 +1016,18 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
   (declare (ignore invocation))
   (application-present application
                        (application-list-conversations application))
+  ':continue)
+
+(define-application-command application--builtin-history-command
+    (:name "/history"
+     :argument nil
+     :description "load earlier transcript history"
+     :tip "loads the previous 500 transcript entries on demand."
+     :busy-behavior :hold
+     :terminal-behavior :shared)
+    (application invocation)
+  (declare (ignore invocation))
+  (application-render-history application)
   ':continue)
 
 (define-application-command application--builtin-working-directory-command

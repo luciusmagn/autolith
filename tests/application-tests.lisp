@@ -1343,6 +1343,252 @@
                  "help lists command descriptions"))
   nil)
 
+(-> test-recovery-cursor-normalization () null)
+(defun test-recovery-cursor-normalization ()
+  "Test recovered transcript cursors cannot exceed durable conversation state."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration :identifier "cursor-recovery")))
+    (unwind-protect
+         (progn
+           (dotimes (index 3)
+             (conversation-append-user-message
+              conversation
+              (format nil "message-~D" index)))
+           (multiple-value-bind (rendered floor)
+               (application--normalize-recovery-cursors
+                conversation t 999 999)
+             (test-assert
+              (and (= rendered 3) (null floor))
+              "oversized recovered cursors clamp or reset at the durable tail"))
+           (multiple-value-bind (rendered floor)
+               (application--normalize-recovery-cursors
+                conversation t 2 3)
+             (test-assert
+              (and (= rendered 2) (= floor 3))
+              "a valid recovered history boundary remains intact"))
+           (multiple-value-bind (rendered floor)
+               (application--normalize-recovery-cursors
+                conversation nil 2 1)
+             (test-assert
+              (and (zerop rendered) (null floor))
+              "cursor metadata is ignored outside its recovered conversation")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-bounded-transcript-replay () null)
+(defun test-bounded-transcript-replay ()
+  "Test startup replays exactly the newest five hundred visible entries."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration :identifier "bounded-replay"))
+         (terminal (make-instance 'recording-terminal :columns 80))
+         (application
+           (make-instance 'application
+                          :configuration configuration
+                          :conversation conversation
+                          :ui (terminal-ui-create :terminal terminal))))
+    (unwind-protect
+         (progn
+           (loop for index below 501
+                 do (conversation-append-user-message
+                     conversation
+                     (format nil "visible-entry-~3,'0D" index)))
+           (application-render-records application)
+           (let ((output (recording-terminal-output terminal)))
+             (test-assert
+              (= (terminal-tests--substring-count "❯ you" output) 500)
+              "startup emits no more than five hundred visible entries")
+             (test-assert
+              (and (not (search "visible-entry-000" output))
+                   (search "visible-entry-001" output)
+                   (search "visible-entry-500" output))
+              "startup retains exactly the newest five hundred visible entries")
+             (test-assert
+              (search
+               "showing the newest 500 of 501 transcript entries"
+               output)
+              "bounded startup replay explains its omitted older entry"))
+           (test-assert
+            (= (application-rendered-sequence application) 501)
+            "bounded startup replay advances the live cursor through omitted entries")
+           (recording-terminal-reset terminal)
+           (conversation-append-user-message conversation "one-live-append")
+           (application-render-records application)
+           (application-render-records application)
+           (let ((output (recording-terminal-output terminal)))
+             (test-assert
+              (= (terminal-tests--substring-count "one-live-append" output) 1)
+              "a newly appended live record renders exactly once")
+             (test-assert
+              (= (terminal-tests--substring-count "❯ you" output) 1)
+              "incremental rendering does not replay the bounded startup page"))
+           (let* ((recovery-terminal
+                    (make-instance 'recording-terminal :columns 80))
+                  (recovery-application
+                    (make-instance
+                     'application
+                     :configuration configuration
+                     :conversation conversation
+                     :ui
+                     (terminal-ui-create :terminal recovery-terminal))))
+             (setf (application-rendered-sequence recovery-application) 1
+                   (application-history-floor-sequence recovery-application) 1)
+             (application-render-records recovery-application)
+             (let ((output
+                     (recording-terminal-output recovery-terminal)))
+               (test-assert
+                (= (terminal-tests--substring-count "❯ you" output) 500)
+                "recovery also bounds output after a stale durable cursor")
+               (test-assert
+                (and (not (search "visible-entry-001" output))
+                     (search "visible-entry-002" output)
+                     (search "one-live-append" output)
+                     (search "entries added after recovery" output))
+                "recovery retains only the newest unread transcript page"))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-hidden-reasoning-does-not-crowd-replay () null)
+(defun test-hidden-reasoning-does-not-crowd-replay ()
+  "Test hidden reasoning records do not consume visible replay capacity."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration :identifier "visible-replay"))
+         (terminal (make-instance 'recording-terminal :columns 80))
+         (application
+           (make-instance 'application
+                          :configuration configuration
+                          :conversation conversation
+                          :provider nil
+                          :reasoning-traces-p nil
+                          :ui (terminal-ui-create :terminal terminal))))
+    (unwind-protect
+         (let ((*application-history-page-size* 3))
+           (loop for index from 1 to 4
+                 do (conversation-append-user-message
+                     conversation
+                     (format nil "visible-message-~D" index)))
+           (loop for index from 1 to 8
+                 do (conversation-append-provider-item
+                     conversation
+                     (json-object
+                      "type" "reasoning"
+                      "summary"
+                      (json-array
+                       (json-object
+                        "type" "summary_text"
+                        "text" (format nil "hidden-reasoning-~D" index)))
+                      "encrypted_content" "opaque")))
+           (application-render-records application)
+           (let ((output (recording-terminal-output terminal)))
+             (test-assert
+              (= (terminal-tests--substring-count "❯ you" output) 3)
+              "the replay page is filled with visible entries")
+             (test-assert
+              (and (not (search "visible-message-1" output))
+                   (search "visible-message-2" output)
+                   (search "visible-message-3" output)
+                   (search "visible-message-4" output))
+              "hidden records cannot crowd older visible messages from the page")
+             (test-assert
+              (not (search "hidden-reasoning-" output))
+              "disabled reasoning summaries remain absent from replay"))
+           (test-assert
+            (= (application-rendered-sequence application) 12)
+            "hidden trailing records still advance the live render cursor")
+           (recording-terminal-reset terminal)
+           (application-set-reasoning-traces application t)
+           (application-render-history application)
+           (let ((output (recording-terminal-output terminal)))
+             (test-assert
+              (and (search "hidden-reasoning-6" output)
+                   (search "hidden-reasoning-7" output)
+                   (search "hidden-reasoning-8" output))
+              "changing visibility makes the newest newly visible page replayable")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-paged-transcript-history () null)
+(defun test-paged-transcript-history ()
+  "Test /history appends bounded older pages without replaying live output."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration :identifier "paged-history"))
+         (terminal (make-instance 'recording-terminal :columns 80))
+         (application
+           (make-instance 'application
+                          :configuration configuration
+                          :conversation conversation
+                          :ui (terminal-ui-create :terminal terminal))))
+    (unwind-protect
+         (let ((*application-history-page-size* 2))
+           (loop for index from 1 to 5
+                 do (conversation-append-user-message
+                     conversation
+                     (format nil "history-message-~D" index)))
+           (application-render-records application)
+           (let ((output (recording-terminal-output terminal)))
+             (test-assert
+              (and (not (search "history-message-3" output))
+                   (search "history-message-4" output)
+                   (search "history-message-5" output))
+              "bounded startup replay begins with the newest history page"))
+           (recording-terminal-reset terminal)
+           (conversation-append-user-message conversation "history-live-message")
+           (application-render-records application)
+           (application-render-records application)
+           (test-assert
+            (= (terminal-tests--substring-count
+                "history-live-message"
+                (recording-terminal-output terminal))
+               1)
+            "live output remains singular before older history is loaded")
+           (recording-terminal-reset terminal)
+           (test-assert
+            (eq (application-command application "/history") ':continue)
+            "/history keeps the interactive application running")
+           (let* ((output (recording-terminal-output terminal))
+                  (second-position (search "history-message-2" output))
+                  (third-position (search "history-message-3" output)))
+             (test-assert
+              (and (search "2 earlier transcript entries" output)
+                   second-position
+                   third-position
+                   (< second-position third-position))
+              "the first older page is labeled and internally chronological")
+             (test-assert
+              (and (not (search "history-message-4" output))
+                   (not (search "history-message-5" output))
+                   (not (search "history-live-message" output)))
+              "older history does not duplicate the startup or live page")
+             (test-assert
+              (search "more earlier history remains" output)
+              "a full older page advertises the remaining history"))
+           (recording-terminal-reset terminal)
+           (application-command application "/history")
+           (let ((output (recording-terminal-output terminal)))
+             (test-assert
+              (and (search "1 earlier transcript entry" output)
+                   (search "history-message-1" output)
+                   (not (search "history-message-2" output)))
+              "the final partial page contains only the oldest remaining entry")
+             (test-assert
+              (not (search "more earlier history remains" output))
+              "the final partial page does not claim more history"))
+           (recording-terminal-reset terminal)
+           (application-command application "/history")
+           (test-assert
+            (search "No earlier transcript history remains."
+                    (recording-terminal-output terminal))
+            "history reports exhaustion after the final page"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-streaming-presentation () null)
 (defun test-streaming-presentation ()
   "Test safe streaming, exact record reconciliation, and live tool entries."
@@ -1459,7 +1705,10 @@
                           "streamed message records do not render again")
              (test-assert (not (search "◇ reasoning summary" completion))
                           "streamed reasoning records do not render below the answer"))
-           (setf (application-rendered-sequence application) 0)
+           (setf (application-rendered-sequence application) 0
+                 (application-render-position application) 0
+                 (application-transcript-synchronized-p application) nil
+                 (application-history-floor-sequence application) nil)
            (recording-terminal-reset terminal)
            (application-render-records application)
            (test-assert
@@ -1667,7 +1916,14 @@
                (test-assert
                 (< (or (search "finished" output) most-positive-fixnum)
                    (or (search show output :from-end t) -1))
-                "the final cursor reveal follows the completed answer"))))
+                "the final cursor reveal follows the completed answer")
+               (test-assert
+                (= (terminal-tests--substring-count "hello" output) 1)
+                "durable user input reaches scrollback exactly once")
+               (test-assert
+                (= (application-rendered-sequence application)
+                   (1- (conversation-next-sequence conversation)))
+                "the transcript cursor follows the actual durable tail"))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -2784,6 +3040,10 @@
   (test-repeated-interrupt-forces-exit)
   (test-graceful-shutdown-retains-interrupt-escape)
   (test-transcript-entries)
+  (test-recovery-cursor-normalization)
+  (test-bounded-transcript-replay)
+  (test-hidden-reasoning-does-not-crowd-replay)
+  (test-paged-transcript-history)
   (test-streaming-presentation)
   (test-provider-retry-presentation)
   (test-turn-cursor-visibility)

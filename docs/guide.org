@@ -236,6 +236,14 @@ A fresh conversation stays in memory until its first durable record. Starting
 Autolith and leaving without a message or other saved state creates no
 conversation file and adds nothing to =/resume= or =/conversations=.
 
+Startup and resume print at most the newest 500 transcript entries visible under
+the current presentation settings. =/history= appends the preceding page of at
+most 500 entries in chronological order. Repeated calls continue paging
+backward. Older pages are labeled because terminal scrollback is append-only
+and they therefore appear below the newer transcript. This display bound does
+not remove anything from durable conversation storage, provider context, or
+compaction input.
+
 =Ctrl-C= clears a nonempty input draft. At an empty prompt it exits Autolith;
 when the conversation is durable, shutdown prints the exact
 =autolith resume ID= command that reopens it. Empty conversations produce no
@@ -265,6 +273,7 @@ prefix from before selection. The commands are:
 /new            start a new conversation
 /resume         pick a saved conversation to resume
 /conversations  list saved conversations
+/history        load the preceding 500 transcript entries
 /cwd PATH       change the active workspace
 /auth           authenticate Autolith with ChatGPT
 /model          pick the 5.6 model and reasoning effort

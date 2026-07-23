@@ -59,6 +59,25 @@
     :documentation "The optional callback invoked immediately before returning an event."))
   (:documentation "A recording terminal replaying scripted input events."))
 
+(defclass failing-recording-terminal (recording-terminal)
+  ((fail-next-write-p
+    :initform nil
+    :accessor failing-recording-terminal-fail-next-write-p
+    :type boolean
+    :documentation "Whether the next trusted write should signal a terminal failure."))
+  (:documentation "A recording terminal with one explicitly injected write failure."))
+
+(defmethod terminal--write ((terminal failing-recording-terminal) (text string))
+  "Fail or capture trusted TEXT according to TERMINAL's injection state."
+  (if (failing-recording-terminal-fail-next-write-p terminal)
+      (progn
+        (setf (failing-recording-terminal-fail-next-write-p terminal) nil)
+        (error 'terminal-error
+               :message "Injected terminal write failure."
+               :operation ':write
+               :cause nil))
+      (call-next-method)))
+
 (defmethod terminal-read-event ((terminal scripted-terminal))
   "Serve the next scripted event, or end of input when exhausted."
   (let ((callback (scripted-terminal-read-callback terminal)))
@@ -190,6 +209,82 @@
        (not (terminal-tests--forbidden-control-p output))
        "terminal output never clears a display or enters an alternate screen")))
   nil)
+
+(-> test-terminal-finalized-batch () null)
+(defun test-terminal-finalized-batch ()
+  "Test finalized batches deduplicate entries and use one transcript payload."
+  (let* ((terminal (make-instance 'recording-terminal :columns 40))
+         (ui (terminal-ui-create :terminal terminal)))
+    (with-terminal-ui (active-ui ui)
+      (recording-terminal-reset terminal)
+      (test-assert
+       (= (terminal-ui-append-finalized-batch
+           active-ui
+           (list (list ':first "BATCH-FIRST")
+                 (list ':second "BATCH-SECOND")
+                 (list ':first "BATCH-DUPLICATE")))
+          2)
+       "a finalized batch reports only its distinct new identifiers")
+      (let* ((chunks (reverse (recording-terminal-chunks terminal)))
+             (payload-chunks
+               (remove-if-not
+                (lambda (chunk)
+                  (or (search "BATCH-FIRST" chunk)
+                      (search "BATCH-SECOND" chunk)
+                      (search "BATCH-DUPLICATE" chunk)))
+                chunks))
+             (output (recording-terminal-output terminal)))
+        (test-assert
+         (and (= (length payload-chunks) 1)
+              (search "BATCH-FIRST" (first payload-chunks))
+              (search "BATCH-SECOND" (first payload-chunks)))
+         "one batch reaches the live region as one combined transcript payload")
+        (test-assert
+         (and (< (search "BATCH-FIRST" output)
+                 (search "BATCH-SECOND" output))
+              (not (search "BATCH-DUPLICATE" output)))
+         "batch output preserves order and suppresses duplicate identifiers"))
+      (recording-terminal-reset terminal)
+      (test-assert
+       (= (terminal-ui-append-finalized-batch
+           active-ui
+           (list (list ':first "BATCH-OLD")
+                 (list ':third "BATCH-THIRD")))
+          1)
+       "later batches omit identifiers finalized by an earlier batch")
+      (let ((output (recording-terminal-output terminal)))
+       (test-assert
+         (and (search "BATCH-THIRD" output)
+              (not (search "BATCH-OLD" output)))
+         "a later batch emits only its newly finalized entry"))))
+  (let* ((terminal (make-instance 'failing-recording-terminal :columns 40))
+         (ui (terminal-ui-create :terminal terminal)))
+    (with-terminal-ui (active-ui ui)
+      (recording-terminal-reset terminal)
+      (setf (failing-recording-terminal-fail-next-write-p terminal) t)
+      (test-assert
+       (handler-case
+           (progn
+             (terminal-ui-append-finalized-batch
+              active-ui
+              (list (list ':retry "BATCH-RETRY")))
+             nil)
+         (terminal-error ()
+           t))
+       "a failed terminal write remains visible to the caller")
+      (test-assert
+       (= (terminal-ui-append-finalized-batch
+           active-ui
+           (list (list ':retry "BATCH-RETRY")))
+          1)
+       "a failed batch leaves its identifier available for retry")
+      (test-assert
+       (= (terminal-tests--substring-count
+           "BATCH-RETRY"
+           (recording-terminal-output terminal))
+          1)
+       "retry emits the batch exactly once after a pre-write failure"))
+  nil))
 
 (-> test-terminal-untrusted-text () null)
 (defun test-terminal-untrusted-text ()
@@ -1294,6 +1389,7 @@
 (defun run-terminal-tests ()
   "Run focused terminal seam tests and return true when every assertion succeeds."
   (test-terminal-primary-screen-controls)
+  (test-terminal-finalized-batch)
   (test-terminal-untrusted-text)
   (test-terminal-finalized-scrollback)
   (test-terminal-resize-frame)

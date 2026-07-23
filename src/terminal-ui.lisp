@@ -1000,18 +1000,72 @@ when no resize needs to be applied."
   "Append finalized transcript ENTRY once for IDENTIFIER and return true when emitted."
   (with-terminal-ui-locked (ui)
     (block nil
-      (unless (terminal-ui-mark-finalized ui identifier)
+      (when (gethash identifier (terminal-ui-finalized-identifiers ui))
         (return nil))
-      (multiple-value-bind (text display)
-          (terminal-ui--finalized-content ui entry)
-        (if (terminal-interactive-p (terminal-ui-terminal ui))
-            (live-region-append (terminal-ui-live-region ui)
-                                text
-                                :display display)
-            (progn
-              (terminal--write-safe-text (terminal-ui-terminal ui) display)
-              (terminal-flush (terminal-ui-terminal ui)))))
+      (handler-case
+          (multiple-value-bind (text display)
+              (terminal-ui--finalized-content ui entry)
+            (if (terminal-interactive-p (terminal-ui-terminal ui))
+                (live-region-append (terminal-ui-live-region ui)
+                                    text
+                                    :display display)
+                (progn
+                  (terminal--write-safe-text (terminal-ui-terminal ui) display)
+                  (terminal-flush (terminal-ui-terminal ui))))
+            (setf (gethash identifier
+                           (terminal-ui-finalized-identifiers ui))
+                  t))
+        (error (condition)
+          (remhash identifier (terminal-ui-finalized-identifiers ui))
+          (error condition)))
       t)))
+
+(-> terminal-ui-append-finalized-batch (terminal-ui list) (integer 0))
+(defun terminal-ui-append-finalized-batch (ui entries)
+  "Append ordered (IDENTIFIER ENTRY) pairs with one terminal-region update."
+  (with-terminal-ui-locked (ui)
+    (let ((pending nil)
+          (seen (make-hash-table :test #'equal)))
+      (dolist (pair entries)
+        (destructuring-bind (identifier entry) pair
+          (unless (or (gethash identifier
+                               (terminal-ui-finalized-identifiers ui))
+                      (gethash identifier seen))
+            (multiple-value-bind (text display)
+                (terminal-ui--finalized-content ui entry)
+              (push (list identifier text display) pending)
+              (setf (gethash identifier seen) t)))))
+      (setf pending (nreverse pending))
+      (when pending
+        (let ((text-stream (make-string-output-stream))
+              (display-stream (make-string-output-stream)))
+          (dolist (entry pending)
+            (write-string (second entry) text-stream)
+            (write-string (third entry) display-stream))
+          (let ((text (get-output-stream-string text-stream))
+                (display (get-output-stream-string display-stream)))
+            (handler-case
+                (progn
+                  (if (terminal-interactive-p (terminal-ui-terminal ui))
+                      (live-region-append (terminal-ui-live-region ui)
+                                          text
+                                          :display display)
+                      (progn
+                        (terminal--write-safe-text
+                         (terminal-ui-terminal ui)
+                         display)
+                        (terminal-flush (terminal-ui-terminal ui))))
+                  (dolist (entry pending)
+                    (setf (gethash
+                           (first entry)
+                           (terminal-ui-finalized-identifiers ui))
+                          t)))
+              (error (condition)
+                (dolist (entry pending)
+                  (remhash (first entry)
+                           (terminal-ui-finalized-identifiers ui)))
+                (error condition))))))
+      (length pending))))
 
 (-> terminal-ui-set-preview-rows (terminal-ui list) terminal-ui)
 (defun terminal-ui-set-preview-rows (ui rows)

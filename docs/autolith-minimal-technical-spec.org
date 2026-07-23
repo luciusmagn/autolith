@@ -712,6 +712,15 @@ Failures, file writes and edits, and arbitrary execution through =shell.run=,
 =lisp.eval=, or =self.eval= remain visible. Presentation filtering never removes
 records from conversation storage, request projection, or compaction input.
 
+Initial startup and conversation resume replay at most the newest 500 transcript
+entries visible under the current presentation settings. This is only a
+terminal presentation bound. =/history= appends the immediately preceding page
+of at most 500 visible entries in chronological order, and repeated calls page
+backward without duplicating entries already printed. Primary-screen terminal
+scrollback cannot be prepended portably, so each older page is labeled and
+appears below the newer transcript. Bounded replay never truncates the durable
+conversation file, provider request projection, or compaction input.
+
 ** 8.2 User Configuration
 
 The optional =${XDG_CONFIG_HOME:-~/.config}/autolith/init.lisp= file is the
