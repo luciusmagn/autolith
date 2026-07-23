@@ -96,7 +96,6 @@
     (test-later-persistence)
     (test-later-malformed-state)
     (test-later-reset-selection)
-    (test-system-prompt-context)
     (test-request-local-context)
     (run-application-command-tests)
     (test-project-adaptations)

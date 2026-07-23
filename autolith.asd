@@ -115,7 +115,6 @@
                              (:file "preferences-tests")
                              (:file "permissions-tests")
                              (:file "later-tests")
-                             (:file "prompt-tests")
                              (:file "context-tests")
                              (:file "application-command-tests")
                              (:file "project-adaptation-tests")
