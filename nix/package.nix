@@ -28,6 +28,23 @@ let
     lispLibs = [ clColorist ];
   };
 
+  mcparen = pkgs.sbcl.buildASDFSystem {
+    pname = "mcparen";
+    version = "0.1.0";
+    src = pkgs.fetchFromGitHub {
+      owner = "luciusmagn";
+      repo = "mcparen";
+      rev = "a2199d70960f1fd8f24015b553f9b921c4a0b8aa";
+      hash = "sha256-LqetxgsDgNZJU3oTl3Kh7LT0x+cFgSg9utdBfd9y3v0=";
+    };
+    lispLibs = with pkgs.sbclPackages; [
+      bordeaux-threads
+      dexador
+      serapeum
+      yason
+    ];
+  };
+
   colorlispSource = pkgs.fetchFromGitHub {
     owner = "luciusmagn";
     repo = "colorlisp";
@@ -188,6 +205,7 @@ let
       clinedi
       clExecSandbox
       clifff
+      mcparen
       sbclWorkers
       sexpStore
     ];
@@ -356,6 +374,6 @@ pkgs.writeShellApplication {
   passthru = {
     inherit autolithSystem clColorist clExecSandbox clifff clinedi colorlisp
       colorlispNativeLibrary fffLibrary runtime sandboxHelper sbclSource
-      sbclWorkers sexpStore;
+      mcparen sbclWorkers sexpStore;
   };
 }
