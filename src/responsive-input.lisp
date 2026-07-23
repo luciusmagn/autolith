@@ -240,6 +240,28 @@ Return true when a model or command turn still needs cancellation."
                ""))))
     (string= command "/quit")))
 
+(-> application--responsive-goal-inspection-p (string) boolean)
+(defun application--responsive-goal-inspection-p (input)
+  "Return true when INPUT is an argument-free /goal inspection."
+  (let ((command
+          (application-command-canonical-name
+           (or (first (uiop:split-string
+                       input
+                       :separator '(#\Space #\Tab)))
+               ""))))
+    (and (string= command "/goal")
+         (zerop (length (application--command-remainder input))))))
+
+(-> application-input-controller--present-goal
+    (application-input-controller)
+    null)
+(defun application-input-controller--present-goal (controller)
+  "Present CONTROLLER's goal without waiting for active application work."
+  (let ((application (application-input-controller-application controller)))
+    (application-present application
+                         (application--goal-description application)))
+  nil)
+
 (-> application--command-needs-terminal-owner-p (string) boolean)
 (defun application--command-needs-terminal-owner-p (input)
   "Return true when command INPUT must read from or reconfigure the terminal."
@@ -432,9 +454,13 @@ Return true when a model or command turn still needs cancellation."
       ((not (non-empty-string-p text))
        nil)
       ((application-input-controller-busy-p controller)
-       (if (application--quit-command-p text)
-           (application-input-controller--request-exit controller ':quit)
-           (application-input-controller--hold-command controller text)))
+       (cond
+         ((application--quit-command-p text)
+          (application-input-controller--request-exit controller ':quit))
+         ((application--responsive-goal-inspection-p text)
+          (application-input-controller--present-goal controller))
+         (t
+          (application-input-controller--hold-command controller text))))
       (t
        (application-input-controller--enqueue controller ':command text))))
   nil)
