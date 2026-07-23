@@ -146,6 +146,67 @@
   (let* ((root
            (uiop:ensure-directory-pathname
             (merge-pathnames
+             (format nil "autolith-release-identity-tests-~A/"
+                     (make-identifier))
+             (uiop:temporary-directory))))
+         (source-a (merge-pathnames "source-a/" root))
+         (source-b (merge-pathnames "source-b/" root))
+         (archive-a (merge-pathnames "identity-a.tar" root))
+         (archive-b (merge-pathnames "identity-b.tar" root)))
+    (unwind-protect
+         (progn
+           (release-server-tests--write-file
+            (merge-pathnames "fixture.txt" source-a)
+            "deterministic release identity")
+           (release-server-tests--write-file
+            (merge-pathnames "fixture.txt" source-b)
+            "deterministic release identity")
+           (release-archive--run
+            (list "touch" "-d" "@1"
+                  (namestring (merge-pathnames "fixture.txt" source-a))))
+           (release-archive--run
+            (list "touch" "-d" "@2"
+                  (namestring (merge-pathnames "fixture.txt" source-b))))
+           (release-archive--create-source-identity
+            source-a "v0.16.0" "1700000000")
+           (release-archive--create-source-identity
+            source-b "v0.16.0" "1700000000")
+           (dolist (entry (list (list source-a archive-a)
+                                (list source-b archive-b)))
+             (release-archive--run
+              (list "tar" "--sort=name" "--mtime=@0"
+                    "--owner=0" "--group=0" "--numeric-owner"
+                    "-cf" (namestring (second entry)) ".git")
+              :directory (first entry)))
+           (let ((checksum-a
+                   (first
+                    (uiop:split-string
+                     (release-archive--run
+                      (list "sha256sum" (namestring archive-a))
+                      :output ':string
+                      :error-output ':output)
+                     :separator '(#\Space #\Tab))))
+                 (checksum-b
+                   (first
+                    (uiop:split-string
+                     (release-archive--run
+                      (list "sha256sum" (namestring archive-b))
+                      :output ':string
+                      :error-output ':output)
+                     :separator '(#\Space #\Tab)))))
+             (test-assert
+              (string= checksum-a checksum-b)
+              "packaged source identities ignore source stat metadata"))
+           (test-assert
+            (and (not (probe-file (merge-pathnames ".git/hooks/" source-a)))
+                 (not (probe-file (merge-pathnames ".git/logs/" source-a))))
+            "packaged source identities omit template and reflog state"))
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  (let* ((root
+           (uiop:ensure-directory-pathname
+            (merge-pathnames
              (format nil "autolith-release-archive-tests-~A/" (make-identifier))
              (uiop:temporary-directory))))
          (dependency-root (merge-pathnames "dependencies/" root))

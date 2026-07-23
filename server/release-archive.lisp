@@ -209,6 +209,76 @@
                                 :if-does-not-exist :ignore))
   nil)
 
+(-> release-archive--identity-git-command (pathname list) list)
+(defun release-archive--identity-git-command (source-root arguments)
+  "Return an isolated Git command for the packaged SOURCE-ROOT."
+  (append
+   (list "env"
+         "GIT_CONFIG_NOSYSTEM=1"
+         "GIT_CONFIG_GLOBAL=/dev/null"
+         "git" "-C" (namestring source-root))
+   arguments))
+
+(-> release-archive--create-source-identity (pathname string string) null)
+(defun release-archive--create-source-identity
+    (source-root tag commit-time)
+  "Create a minimal deterministic Git identity for packaged SOURCE-ROOT."
+  (release-archive--run
+   (release-archive--identity-git-command
+    source-root
+    '("init" "--quiet" "--initial-branch=master" "--template=")))
+  (dolist (setting
+           '(("user.name" "Autolith release build")
+             ("user.email" "release-build@localhost")
+             ("gc.auto" "0")
+             ("maintenance.auto" "false")
+             ("core.logAllRefUpdates" "false")
+             ("core.autocrlf" "false")
+             ("core.fileMode" "true")))
+    (release-archive--run
+     (release-archive--identity-git-command
+      source-root
+      (list "config" (first setting) (second setting)))))
+  (release-archive--run
+   (release-archive--identity-git-command
+    source-root '("add" "--force" "--all")))
+  (let* ((tree
+           (string-trim
+            '(#\Space #\Tab #\Newline #\Return)
+            (release-archive--run
+             (release-archive--identity-git-command source-root '("write-tree"))
+             :output ':string
+             :error-output ':output)))
+         (commit
+           (string-trim
+            '(#\Space #\Tab #\Newline #\Return)
+            (release-archive--run
+             (append
+              (list "env"
+                    "GIT_CONFIG_NOSYSTEM=1"
+                    "GIT_CONFIG_GLOBAL=/dev/null"
+                    "LC_ALL=C"
+                    "TZ=UTC"
+                    (format nil "GIT_AUTHOR_DATE=@~A +0000" commit-time)
+                    (format nil "GIT_COMMITTER_DATE=@~A +0000" commit-time)
+                    "git" "-C" (namestring source-root)
+                    "commit-tree" tree
+                    "-m" (format nil "Autolith ~A source" tag)))
+             :output ':string
+             :error-output ':output))))
+    (unless (release-archive--commit-p commit)
+      (error 'release-archive-error
+             :stage ':source-identity
+             :cause "Git did not create a valid packaged source commit."))
+    (release-archive--run
+     (release-archive--identity-git-command
+      source-root
+      (list "update-ref" "refs/heads/master" commit))))
+  (delete-file (merge-pathnames ".git/index" source-root))
+  (release-archive--run
+   (release-archive--identity-git-command source-root '("read-tree" "HEAD")))
+  nil)
+
 (-> release-archive--validate-platform () null)
 (defun release-archive--validate-platform ()
   "Require the supported Linux x86-64 release target."
@@ -400,25 +470,8 @@ the managed runtime, matching SBCL source, native libraries, and sandbox helper.
                   :version version :tag tag :commit commit)
                  (format t "~&Creating the internal source identity.~%")
                  (finish-output)
-                 (release-archive--run
-                  (list "git" "-C" (namestring packaged-source)
-                        "init" "--quiet" "--initial-branch=master"))
-                 (release-archive--run
-                  (list "git" "-C" (namestring packaged-source)
-                        "config" "user.name" "Autolith release build"))
-                 (release-archive--run
-                  (list "git" "-C" (namestring packaged-source)
-                        "config" "user.email" "release-build@localhost"))
-                 (release-archive--run
-                  (list "git" "-C" (namestring packaged-source)
-                        "add" "--force" "--all"))
-                 (release-archive--run
-                  (list "env"
-                        (format nil "GIT_AUTHOR_DATE=@~A" commit-time)
-                        (format nil "GIT_COMMITTER_DATE=@~A" commit-time)
-                        "git" "-C" (namestring packaged-source)
-                        "commit" "--quiet" "--message"
-                        (format nil "Autolith ~A source" tag)))
+                 (release-archive--create-source-identity
+                  packaged-source tag commit-time)
                  (let ((actual-runtime-version
                          (string-trim
                           '(#\Space #\Tab #\Newline #\Return)
