@@ -11,6 +11,9 @@
 (defparameter *release-updater-service-command-function* #'uiop:run-program
   "The effect used for s6 service control and status commands.")
 
+(defparameter *release-updater-host-command-function* #'uiop:run-program
+  "The effect used for attended host setup commands.")
+
 (defclass release-updater-configuration ()
   ((selection-path
     :initarg :selection-path
@@ -514,11 +517,12 @@ checked-out commit are rejected."
     null)
 (defun release-updater--run-host-command (command &key directory)
   "Run one attended host setup COMMAND, preserving output and failure status."
-  (uiop:run-program command
-                    :directory directory
-                    :input ':interactive
-                    :output ':interactive
-                    :error-output ':interactive)
+  (funcall *release-updater-host-command-function*
+           command
+           :directory directory
+           :input ':interactive
+           :output ':interactive
+           :error-output ':interactive)
   nil)
 
 (-> release-updater--run-as-service
@@ -637,18 +641,31 @@ checked-out commit are rejected."
          configuration ':check tag command :directory deployment))))
   nil)
 
+(-> release-updater--grant-service-write-access
+    (release-updater-configuration pathname)
+    null)
+(defun release-updater--grant-service-write-access
+    (configuration deployment)
+  "Give the service account ownership of DEPLOYMENT and its private home."
+  (let* ((account
+           (release-updater-configuration-service-account configuration))
+         (ownership (format nil "~A:~A" account account)))
+    (release-updater--run-host-command
+     (list "chown" "-R" ownership
+           (namestring
+            (release-updater-configuration-service-home configuration))))
+    (release-updater--run-host-command
+     (list "chown" "-R" ownership (namestring deployment))))
+  nil)
+
 (-> release-updater--setup-deployment
     (release-updater-configuration pathname release-source-tag)
     null)
 (defun release-updater--setup-deployment
     (configuration deployment source-tag)
   "Bootstrap, check, probe, and lock down DEPLOYMENT at its final pathname."
-  (let ((tag (release-source-tag-name source-tag))
-        (account
-          (release-updater-configuration-service-account configuration)))
-    (release-updater--run-host-command
-     (list "chown" "-R" (format nil "~A:~A" account account)
-           (namestring deployment)))
+  (let ((tag (release-source-tag-name source-tag)))
+    (release-updater--grant-service-write-access configuration deployment)
     (release-updater--run-as-service
      configuration ':bootstrap tag
      (list (namestring (merge-pathnames "script/bootstrap" deployment)))

@@ -583,6 +583,33 @@
                  (final
                    (release-updater--deployment-path
                     configuration source-tag)))
+             (let* ((commands nil)
+                    (*release-updater-host-command-function*
+                      (lambda (command
+                               &key directory input output error-output)
+                        (declare
+                         (ignore directory input output error-output))
+                        (push command commands)
+                        nil)))
+               (release-updater--grant-service-write-access
+                configuration final)
+               (test-assert
+                (and
+                 (= (length commands) 2)
+                 (some
+                  (lambda (command)
+                    (member
+                     (namestring
+                      (release-updater-configuration-service-home
+                       configuration))
+                     command
+                     :test #'string=))
+                  commands)
+                 (some
+                  (lambda (command)
+                    (member (namestring final) command :test #'string=))
+                  commands))
+                "candidate setup makes both private runtime and source writable"))
              (release-updater-prepare-deployment
               configuration source-tag
               :setup-function

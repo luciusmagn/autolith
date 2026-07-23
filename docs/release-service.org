@@ -116,9 +116,12 @@ curl --fail --location --show-error --retry 3 \
 sbcl --noinform --non-interactive --load /tmp/quicklisp.lisp \
   --eval '(quicklisp-quickstart:install)'
 deployment="/srv/autolith-release-server/deployments/$tag"
+chown -R autolith-release:autolith-release "$HOME"
 chown -R autolith-release:autolith-release "$deployment"
-s6-setuidgid autolith-release "$deployment/script/bootstrap"
-s6-setuidgid autolith-release "$deployment/script/check"
+(cd "$deployment" &&
+  s6-setuidgid autolith-release "$deployment/script/bootstrap")
+(cd "$deployment" &&
+  s6-setuidgid autolith-release "$deployment/script/check")
 chown -R root:root "$deployment"
 chmod -R go-w "$deployment"
 #+END_SRC
@@ -154,9 +157,11 @@ test -z "$(git -C "$source" status --porcelain)"
 git -C "$source" fetch origin
 commit=REPLACE_WITH_FINAL_PUSHED_0_16_1_COMMIT
 git -C "$source" checkout --detach "$commit"
+chown -R autolith-release:autolith-release \
+  /var/lib/autolith-release-server/home
 chown -R autolith-release:autolith-release "$source"
-s6-setuidgid autolith-release "$source/script/bootstrap"
-s6-setuidgid autolith-release "$source/script/check"
+(cd "$source" && s6-setuidgid autolith-release "$source/script/bootstrap")
+(cd "$source" && s6-setuidgid autolith-release "$source/script/check")
 chown -R root:root "$source"
 chmod -R go-w "$source"
 #+END_SRC
