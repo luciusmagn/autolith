@@ -29,7 +29,8 @@
     :initform t
     :reader preference-state-compact-view-p
     :type boolean
-    :documentation "Whether successful routine tool results are hidden."))
+    :documentation
+    "Whether verbose tool calls are condensed and successful routine results hidden."))
   (:documentation "Validated global choices restored across Autolith processes."))
 
 (-> preferences--form-p (t) boolean)
@@ -156,7 +157,7 @@
 
 (-> preferences-compact-view-p (configuration) boolean)
 (defun preferences-compact-view-p (configuration)
-  "Return the persisted compact-view setting, defaulting safely to true."
+  "Return the persisted compact tool-presentation setting, defaulting to true."
   (preference-state-compact-view-p (preferences-load configuration)))
 
 (-> preferences-apply-model-selection (configuration) configuration)

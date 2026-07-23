@@ -441,7 +441,7 @@
 
 (-> application-compact-view-command (application string) null)
 (defun application-compact-view-command (application argument)
-  "Persist and apply APPLICATION's compact tool-result presentation mode."
+  "Persist and apply APPLICATION's compact tool presentation mode."
   (let ((mode (string-downcase argument)))
     (cond
       ((string= mode "on")
@@ -453,7 +453,7 @@
        (application-publish-recovery-session application)
        (application-present
         application
-        "Compact tool-result presentation is enabled and saved."))
+        "Compact tool presentation is enabled and saved."))
       ((string= mode "off")
        (preferences-set-compact-view
         (application-configuration application)
@@ -464,7 +464,7 @@
        (application-publish-recovery-session application)
        (application-present
         application
-        "Compact tool-result presentation is disabled and saved."))
+        "Compact tool presentation is disabled and saved."))
       (t
        (error 'configuration-error
               :message "Usage: /compact on or /compact off."))))
@@ -1247,8 +1247,8 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
 (define-application-command application--builtin-compact-command
     (:name "/compact"
      :argument "on|off"
-     :description "hide routine results, or summarize with no argument"
-     :tip "toggles routine result visibility; with no argument it compacts context."
+     :description "condense tool details, or summarize context with no argument"
+     :tip "toggles compact tool presentation; with no argument it compacts context."
      :busy-behavior :hold
      :terminal-behavior :shared)
     (application invocation)

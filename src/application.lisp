@@ -54,7 +54,8 @@
     :initform t
     :accessor application-compact-view-p
     :type boolean
-    :documentation "Whether successful routine tool results are hidden.")
+    :documentation
+    "Whether verbose tool calls are condensed and successful routine results hidden.")
    (installation-provenance
     :initarg :installation-provenance
     :initform nil

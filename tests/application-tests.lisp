@@ -1343,6 +1343,194 @@
                  "help lists command descriptions"))
   nil)
 
+(-> test-task-run-call-presentation () null)
+(defun test-task-run-call-presentation ()
+  "Test compact, expanded, malformed, and narrow task.run call rendering."
+  (let* ((registry
+           (task-augment-tool-registry
+            (make-default-tool-registry)))
+         (compact
+           (make-instance
+            'application
+            :compact-view-p t
+            :tool-registry registry
+            :ui (terminal-ui-create
+                 :terminal (make-instance 'recording-terminal
+                                          :columns 80))))
+         (expanded
+           (make-instance
+            'application
+            :compact-view-p nil
+            :tool-registry registry
+            :ui (terminal-ui-create
+                 :terminal (make-instance 'recording-terminal
+                                          :columns 80))))
+         (narrow
+           (make-instance
+            'application
+            :compact-view-p t
+            :tool-registry registry
+            :ui (terminal-ui-create
+                 :terminal (make-instance 'recording-terminal
+                                          :columns 24)))))
+    (labels ((call (arguments &key source)
+               (response-item-entry
+                compact
+                (json-object
+                 "type" "function_call"
+                 "namespace" "task"
+                 "name" "run"
+                 "arguments" (or source (json-encode arguments)))))
+
+             (call-for (application arguments &key source)
+               (response-item-entry
+                application
+                (json-object
+                 "type" "function_call"
+                 "namespace" "task"
+                 "name" "run"
+                 "arguments" (or source (json-encode arguments))))))
+      (unwind-protect
+           (let* ((long-assignment
+                    "Inspect alpha carefully, record concrete evidence, verify every observation, and report the final sentinel EXPANDED-TAIL.")
+                  (batch
+                    (json-object
+                     "context"
+                     "Shared read-only background remains visible and wraps as ordinary prose."
+                     "async" t
+                     "tasks"
+                     (json-array
+                      (json-object
+                       "name" "alpha"
+                       "agent" "librarian"
+                       "task" long-assignment
+                       "context" "Alpha has one item-specific constraint.")
+                      (json-object
+                       "name" "beta"
+                       "agent" "scout"
+                       "async" false
+                       "task" "Inspect beta and report briefly."))))
+                  (compact-entry (call batch))
+                  (expanded-entry (call-for expanded batch))
+                  (compact-text
+                    (markdown-tests--row-text compact-entry))
+                  (expanded-text
+                    (markdown-tests--row-text expanded-entry)))
+             (test-assert
+              (and (equal (first compact-entry)
+                          (terminal-span :tool "▸ task.run"))
+                   (search "Shared read-only background" compact-text)
+                   (search "alpha" compact-text)
+                   (search "beta" compact-text)
+                   (search "librarian" compact-text)
+                   (search "scout" compact-text)
+                   (search "detached" compact-text)
+                   (search "Alpha has one item-specific" compact-text))
+              "compact task.run calls retain shared context and child identity")
+             (test-assert
+              (and (not (search "EXPANDED-TAIL" compact-text))
+                   (< (count #\Newline compact-text)
+                      (count #\Newline expanded-text)))
+              "compact task.run calls use concise ellipsized child summaries")
+             (test-assert
+              (and (search "Shared read-only background" expanded-text)
+                   (search "task 1" expanded-text)
+                   (search "task 2" expanded-text)
+                   (search "alpha" expanded-text)
+                   (search "beta" expanded-text)
+                   (search "librarian" expanded-text)
+                   (search "scout" expanded-text)
+                   (search "detached" expanded-text)
+                   (search "synchronous" expanded-text)
+                   (search "task context" expanded-text)
+                   (search "Alpha has one item-specific" expanded-text)
+                   (search "EXPANDED-TAIL" expanded-text))
+              "expanded task.run calls show full child sections and modes")
+             (test-assert
+              (and (not (search "\"tasks\"" compact-text))
+                   (not (search "{\"name\"" compact-text))
+                   (not (search "\"tasks\"" expanded-text))
+                   (not (search "{\"name\"" expanded-text)))
+              "task.run calls never expose raw task JSON in either view")
+             (let* ((flat
+                      (json-object
+                       "task" "Handle one unnamed child assignment."
+                       "context" "One-child context."
+                       "async" false))
+                    (flat-entry (call-for expanded flat))
+                    (flat-text
+                      (markdown-tests--row-text flat-entry)))
+               (test-assert
+                (and (search "task 1" flat-text)
+                     (search "One-child context." flat-text)
+                     (search "Handle one unnamed child assignment." flat-text)
+                     (search "synchronous" flat-text)
+                     (find (terminal-span :agent-role "task")
+                           flat-entry
+                           :test #'equal))
+                "flat task.run calls show default role, context, and false async"))
+             (let* ((malformed-json-entry
+                      (call nil :source "{not-json"))
+                    (malformed-json-text
+                      (markdown-tests--row-text malformed-json-entry))
+                    (malformed-batch-entry
+                      (call
+                       (json-object
+                        "context" "Still readable."
+                        "tasks" "not-an-array")))
+                    (malformed-batch-text
+                      (markdown-tests--row-text malformed-batch-entry))
+                    (malformed-item-entry
+                      (call-for
+                       expanded
+                       (json-object
+                        "context" "Batch context."
+                        "tasks" (json-array
+                                 "not-an-object"
+                                 (json-object
+                                  "name" "valid"
+                                  "task" "Continue rendering.")))))
+                    (malformed-item-text
+                      (markdown-tests--row-text malformed-item-entry)))
+               (test-assert
+                (and (search "arguments unavailable" malformed-json-text)
+                     (search "invalid task batch" malformed-batch-text)
+                     (search "Still readable." malformed-batch-text)
+                     (search "invalid task definition" malformed-item-text)
+                     (search "valid" malformed-item-text)
+                     (not (search "\"tasks\"" malformed-batch-text)))
+                "malformed task.run calls remain structured and render safely"))
+             (let* ((narrow-entry
+                      (call-for narrow batch))
+                    (narrow-text
+                      (markdown-tests--row-text narrow-entry)))
+               (test-assert
+                (and
+                 (every
+                  (lambda (line)
+                    (<= (text-cell-width line) 23))
+                  (uiop:split-string narrow-text
+                                     :separator '(#\Newline)))
+                 (not (find *terminal-escape-character* narrow-text)))
+                "task.run rows stay safe inside a narrow terminal"))
+             (let* ((many-lines
+                      (format nil
+                              "start-marker~%~{middle-~D~%~}end-marker"
+                              (loop for index from 1 to 20 collect index)))
+                    (bounded-entry
+                      (call-for
+                       expanded
+                       (json-object "task" many-lines)))
+                    (bounded-text
+                      (markdown-tests--row-text bounded-entry)))
+               (test-assert
+                (and (search "start-marker" bounded-text)
+                     (search "more row" bounded-text)
+                     (not (search "end-marker" bounded-text)))
+                "expanded task instructions remain explicitly bounded")))
+        (tool-registry-close-runtime-state registry))))
+  nil)
+
 (-> test-recovery-cursor-normalization () null)
 (defun test-recovery-cursor-normalization ()
   "Test recovered transcript cursors cannot exceed durable conversation state."
@@ -3144,6 +3332,7 @@
   (test-repeated-interrupt-forces-exit)
   (test-graceful-shutdown-retains-interrupt-escape)
   (test-transcript-entries)
+  (test-task-run-call-presentation)
   (test-recovery-cursor-normalization)
   (test-bounded-transcript-replay)
   (test-hidden-reasoning-does-not-crowd-replay)

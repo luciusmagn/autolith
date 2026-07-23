@@ -287,7 +287,7 @@ prefix from before selection. The commands are:
 /generations    list retained generations
 /rollback       start a retained generation through recovery
 /status         show usage and rate limits
-/compact on|off hide routine tool results; no argument summarizes context
+/compact on|off condense tool details and hide routine results
 /quit           leave Autolith
 #+END_EXAMPLE
 
@@ -436,12 +436,15 @@ never its parent, siblings, unrelated task trees, or another conversation's
 jobs. Child transcripts and complete result artifacts remain in private task
 storage outside the normal conversation picker.
 
-=/compact on=, the default, hides successful routine tool results while retaining
+=/compact on=, the default, renders a concise aligned summary for each
+=task.run= assignment and hides successful routine tool results while retaining
 failures, file-write and file-edit results, and arbitrary execution results from
-=shell.run=, =lisp.eval=, and =self.eval=. =/compact off= shows every tool result.
-The choice shares the private global preferences file with =/trace=. This changes
-terminal presentation only; every result remains in durable conversation history
-and provider context. With no argument, =/compact= still forces context compaction.
+=shell.run=, =lisp.eval=, and =self.eval=. =/compact off= shows complete
+=task.run= assignment sections and every tool result. Shared and task-specific
+context remains readable in either mode. The choice shares the private global
+preferences file with =/trace=. This changes terminal presentation only; every
+call and result remains in durable conversation history and provider context.
+With no argument, =/compact= still forces context compaction.
 
 Context compaction keeps long conversations going. When the newest provider
 step reports total token usage at or beyond the compaction limit, Autolith asks
