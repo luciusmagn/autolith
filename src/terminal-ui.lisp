@@ -610,17 +610,14 @@
 
 (-> terminal-ui--status-text-at (terminal-ui real) string)
 (defun terminal-ui--status-text-at (ui now)
-  "Return UI's activity and timing at monotonic NOW."
+  "Return UI's activity timing at monotonic NOW."
   (multiple-value-bind (elapsed idle)
       (terminal-ui--status-times-at ui now)
     (if (>= idle +terminal-ui-stale-status-seconds+)
-        (format nil "~A · ~A · no update ~A"
-                (terminal-ui-status ui)
+        (format nil "~A · no update ~A"
                 (terminal-ui--duration-text elapsed)
                 (terminal-ui--duration-text idle))
-        (format nil "~A · ~A"
-                (terminal-ui-status ui)
-                (terminal-ui--duration-text elapsed)))))
+        (terminal-ui--duration-text elapsed))))
 
 (-> terminal-ui--status-row-at (terminal-ui real integer) list)
 (defun terminal-ui--status-row-at (ui now row-width)
