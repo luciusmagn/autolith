@@ -5,6 +5,9 @@
 (defparameter *recovery-image-protocol-version* 2
   "The launcher handshake version implemented by this pristine recovery image.")
 
+(defparameter *recovery-rollback-status* 75
+  "The active-process status requesting an explicitly selected rollback.")
+
 (defclass recovery-context ()
   ((source-root
     :initarg :source-root
@@ -411,6 +414,17 @@
     (error ()
       nil)))
 
+(serapeum:-> recovery-generation-bootable-p
+    (recovery-generation &key (:source-commit (or null string)))
+    boolean)
+(defun recovery-generation-bootable-p (generation &key source-commit)
+  "Return true when GENERATION is compatible and matches SOURCE-COMMIT if given."
+  (and (recovery-generation-compatible-p generation)
+       (or (null source-commit)
+           (string= (recovery-generation-git-commit generation)
+                    source-commit))
+       t))
+
 (serapeum:-> recovery-generation-list (recovery-context) list)
 (defun recovery-generation-list (context)
   "Return valid retained generations in CONTEXT, newest first."
@@ -453,18 +467,22 @@
                                 :expected-identifier identifier))))
 
 (serapeum:-> recovery-newest-compatible-generation
-    (recovery-context)
+    (recovery-context &key (:source-commit (or null string)))
     (or null recovery-generation))
-(defun recovery-newest-compatible-generation (context)
-  "Return CONTEXT's newest valid generation compatible with this host, if any."
-  (find-if #'recovery-generation-compatible-p
-           (recovery-generation-list context)))
+(defun recovery-newest-compatible-generation (context &key source-commit)
+  "Return CONTEXT's newest bootable generation for SOURCE-COMMIT, if any."
+  (find-if
+   (lambda (generation)
+     (recovery-generation-bootable-p
+      generation
+      :source-commit source-commit))
+   (recovery-generation-list context)))
 
 (serapeum:-> recovery-selected-generation-or-fallback
-    (recovery-context)
+    (recovery-context &key (:source-commit (or null string)))
     (or null recovery-generation))
-(defun recovery-selected-generation-or-fallback (context)
-  "Return CONTEXT's selected generation or newest compatible fallback, if any."
+(defun recovery-selected-generation-or-fallback (context &key source-commit)
+  "Return the selected or newest bootable generation for SOURCE-COMMIT, if any."
   (let ((selected
           (handler-case
               (recovery-selected-generation context)
@@ -473,21 +491,45 @@
                       "Could not load the selected generation: ~A~%"
                       (recovery-sanitize-text condition))
               nil))))
-    (if (and selected (recovery-generation-compatible-p selected))
+    (if (and selected
+             (recovery-generation-bootable-p
+              selected
+              :source-commit source-commit))
         selected
-        (let ((fallback (recovery-newest-compatible-generation context)))
-          (if selected
-              (format *error-output*
-                      "Selected generation ~A is incompatible or corrupt.~%"
-                      (recovery-sanitize-text
-                       (recovery-generation-identifier selected)))
-              (format *error-output*
-                      "The selected-generation record is unusable.~%"))
+        (let ((fallback
+                (recovery-newest-compatible-generation
+                 context
+                 :source-commit source-commit)))
+          (cond
+            ((and selected
+                  source-commit
+                  (recovery-generation-compatible-p selected)
+                  (not
+                   (string=
+                    (recovery-generation-git-commit selected)
+                    source-commit)))
+             (format *error-output*
+                     "Selected generation ~A belongs to source ~A, not current source ~A.~%"
+                     (recovery-sanitize-text
+                      (recovery-generation-identifier selected))
+                     (recovery-sanitize-text
+                      (recovery-generation-git-commit selected))
+                     (recovery-sanitize-text source-commit)))
+            (selected
+             (format *error-output*
+                     "Selected generation ~A is incompatible or corrupt.~%"
+                     (recovery-sanitize-text
+                      (recovery-generation-identifier selected))))
+            (t
+             (format *error-output*
+                     "The selected-generation record is unusable.~%")))
           (if fallback
               (format *error-output*
-                      "Using the newest compatible retained generation.~%")
+                      "Using the newest compatible retained generation~:[.~; for current source.~]~%"
+                      (not (null source-commit)))
               (format *error-output*
-                      "No compatible retained generation is available.~%"))
+                      "No compatible retained generation~:[~; for current source~] is available.~%"
+                      (not (null source-commit))))
           fallback))))
 
 (serapeum:-> recovery-print-generations (recovery-context) null)
@@ -950,6 +992,17 @@
       (error "The current source revision is not one full Git commit."))
     commit))
 
+(serapeum:-> recovery-automatic-source-commit
+    (recovery-context (or null string) (or null string))
+    (or null string))
+(defun recovery-automatic-source-commit (context generation status)
+  "Return the source revision constraining automatic failure recovery."
+  (when (and (null generation)
+             status
+             (/= (parse-integer status :junk-allowed nil)
+                 *recovery-rollback-status*))
+    (recovery-source-commit context)))
+
 (serapeum:-> recovery-source-checkout-valid-p (pathname string) boolean)
 (defun recovery-source-checkout-valid-p (checkout commit)
   "Return true when CHECKOUT is a clean detached copy of COMMIT."
@@ -1117,11 +1170,12 @@
 
 (serapeum:-> recovery-boot-with-fallback
     (recovery-context recovery-generation list
-     &key (:capsule (or null string)))
+     &key (:capsule (or null string))
+          (:source-commit (or null string)))
     integer)
 (defun recovery-boot-with-fallback
-    (context selected forwarded-arguments &key capsule)
-  "Boot SELECTED, falling back to other compatible generations after fatal exits."
+    (context selected forwarded-arguments &key capsule source-commit)
+  "Boot SELECTED and fall back only to generations matching SOURCE-COMMIT."
   (let ((candidates
           (cons selected
                 (remove (recovery-generation-identifier selected)
@@ -1134,7 +1188,9 @@
            context capsule :session-p nil)))
     (loop for remaining on candidates
           for generation = (first remaining)
-          do (if (recovery-generation-compatible-p generation)
+          do (if (recovery-generation-bootable-p
+                  generation
+                  :source-commit source-commit)
                  (let ((status nil)
                        (completed-p nil))
                    (unwind-protect
@@ -1166,24 +1222,33 @@
                            (recovery-refresh-crash-context context
                                                            current-capsule))))
                  (format *error-output*
-                         "Skipping incompatible generation ~A.~%"
+                         "Skipping ~:[incompatible~;cross-revision~] generation ~A.~%"
+                         (and
+                          source-commit
+                          (recovery-generation-compatible-p generation)
+                          (not
+                           (string=
+                            (recovery-generation-git-commit generation)
+                            source-commit)))
                          (recovery-sanitize-text
                           (recovery-generation-identifier generation)))))
     (error "No retained generation could be booted.")))
 
 (serapeum:-> recovery-boot-with-source-fallback
     (recovery-context (or null recovery-generation) list
-     &key (:capsule (or null string)))
+     &key (:capsule (or null string))
+          (:source-commit (or null string)))
     integer)
 (defun recovery-boot-with-source-fallback
-    (context selected forwarded-arguments &key capsule)
+    (context selected forwarded-arguments &key capsule source-commit)
   "Boot retained state when possible, otherwise boot clean committed source."
   (if selected
       (handler-case
           (recovery-boot-with-fallback context
                                        selected
                                        forwarded-arguments
-                                       :capsule capsule)
+                                       :capsule capsule
+                                       :source-commit source-commit)
         (error (condition)
           (format *error-output*
                   "Retained-generation recovery failed: ~A~%"
@@ -1275,19 +1340,24 @@
                            :status status
                            :capsule capsule
                            :original-arguments original-arguments)))
-                    (let ((selected
+                    (let* ((source-commit
+                             (recovery-automatic-source-commit
+                              context generation status))
+                           (selected
                             (if generation
                                 (recovery-load-generation
                                  context
                                  (recovery-manifest-pathname context generation)
                                  :expected-identifier generation)
                                 (recovery-selected-generation-or-fallback
-                                 context))))
+                                 context
+                                 :source-commit source-commit))))
                       (recovery-boot-with-source-fallback
                        context
                        selected
                        forwarded
-                       :capsule reported-capsule))))))))))
+                       :capsule reported-capsule
+                       :source-commit source-commit))))))))))
 
 (serapeum:-> recovery-main () null)
 (defun recovery-main ()

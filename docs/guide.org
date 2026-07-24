@@ -810,12 +810,15 @@ sanitizes all terminal output, inspects pending
 mutation identities, creates a private detached Git checkout at the manifest's
 recorded commit, and points the resumed application at that source. A fatal
 active-path failure writes a private allowlisted crash capsule, publishes it to
-that launcher instance, exits with status 70, restores the terminal, and boots
-the selected generation. If that generation fails fatally, recovery tries other
-compatible retained generations newest first, restoring terminal state and
-refreshing crash context between attempts. If no compatible retained generation
-exists or all of them fail, recovery creates a private clean checkout of the
-current committed source and boots it with the locked dependency setup.
+that launcher instance, exits with status 70, and restores the terminal.
+Automatic failure recovery boots the selected generation only when its manifest
+names the current committed source revision. If that generation fails fatally,
+recovery tries other compatible generations from the same revision newest first,
+restoring terminal state and refreshing crash context between attempts. If no
+matching generation exists or all of them fail, recovery creates a private clean
+checkout of the current committed source and boots it with the locked dependency
+setup. Explicit =--generation= selection and =/rollback= may intentionally boot
+an older source revision.
 Before inspection begins, the pristine core prints a red =RECOVERY IMAGE= label
 and explains that it exists to avoid loading the damaged active core.
 

@@ -35,6 +35,25 @@
      :state-root state-root
      :current-pathname (merge-pathnames "current-generation.sexp" state-root))))
 
+(-> recovery-tests--generation
+    (pathname string string integer)
+    recovery-generation)
+(defun recovery-tests--generation (root identifier commit created-at)
+  "Return a synthetic retained generation below ROOT."
+  (let ((directory
+          (merge-pathnames (format nil "~A/" identifier) root)))
+    (make-instance
+     'recovery-generation
+     :identifier identifier
+     :core-pathname (merge-pathnames "autolith.core" directory)
+     :manifest-pathname (merge-pathnames "manifest.sexp" directory)
+     :git-commit commit
+     :sbcl-version (lisp-implementation-version)
+     :operating-system (software-type)
+     :operating-system-version (software-version)
+     :architecture (machine-type)
+     :created-at created-at)))
+
 (-> recovery-tests--migration-record (list) list)
 (defun recovery-tests--migration-record (entries)
   "Return one complete conversation identifier migration record for ENTRIES."
@@ -361,10 +380,228 @@ exit 64
                                   :if-does-not-exist :ignore)))
   nil)
 
+(-> test-recovery-generation-revision-boundary () null)
+(defun test-recovery-generation-revision-boundary ()
+  "Test automatic recovery revision matching and explicit rollback exceptions."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (context (recovery-tests--context root))
+         (current-commit "1111111111111111111111111111111111111111")
+         (stale-commit "2222222222222222222222222222222222222222")
+         (stale
+           (recovery-tests--generation root "stale" stale-commit 30))
+         (current-a
+           (recovery-tests--generation root "current-a" current-commit 20))
+         (current-b
+           (recovery-tests--generation root "current-b" current-commit 10))
+         (selected stale)
+         (generations (list stale current-a current-b)))
+    (unwind-protect
+         (let ((*error-output* (make-broadcast-stream)))
+           (test-call-with-function-replacements
+            (list
+             (list 'recovery-generation-compatible-p
+                   (lambda (generation)
+                     (declare (ignore generation))
+                     t))
+             (list 'recovery-selected-generation
+                   (lambda (active-context)
+                     (declare (ignore active-context))
+                     selected))
+             (list 'recovery-generation-list
+                   (lambda (active-context)
+                     (declare (ignore active-context))
+                     generations)))
+            (lambda ()
+              (test-assert
+               (eq
+                (recovery-selected-generation-or-fallback
+                 context
+                 :source-commit current-commit)
+                current-a)
+               "automatic recovery skips a selected cross-revision generation")
+              (setf selected current-b)
+              (test-assert
+               (eq
+                (recovery-selected-generation-or-fallback
+                 context
+                 :source-commit current-commit)
+                current-b)
+               "automatic recovery preserves a selected same-revision generation")
+              (setf selected stale)
+              (test-assert
+               (eq (recovery-selected-generation-or-fallback context)
+                   stale)
+               "manual recovery may use an explicitly selected older generation")
+              (setf generations (list stale))
+              (test-assert
+               (null
+                (recovery-selected-generation-or-fallback
+                 context
+                 :source-commit current-commit))
+               "automatic recovery returns to source when no matching core exists")))
+           (test-call-with-function-replacements
+            (list
+             (list 'recovery-source-commit
+                   (lambda (active-context)
+                     (declare (ignore active-context))
+                     current-commit)))
+            (lambda ()
+              (test-assert
+               (string=
+                (recovery-automatic-source-commit context nil "70")
+                current-commit)
+               "fatal automatic recovery is constrained to current source")
+              (test-assert
+               (string=
+                (recovery-automatic-source-commit context nil "1")
+                current-commit)
+               "unexpected active exits are constrained to current source")
+              (test-assert
+               (null
+                (recovery-automatic-source-commit context "stale" "70"))
+               "an explicit generation bypasses the automatic revision filter")
+              (test-assert
+               (null
+                (recovery-automatic-source-commit context nil "75"))
+               "rollback status preserves a selected older generation")
+              (test-assert
+               (null
+                (recovery-automatic-source-commit context nil nil))
+               "manual recovery without a status preserves explicit selection")))
+           (let ((selection-source :unset)
+                 (boot-source :unset)
+                 (selection-called-p nil))
+             (test-call-with-function-replacements
+              (list
+               (list 'recovery-context-create
+                     (lambda (source-root)
+                       (declare (ignore source-root))
+                       context))
+               (list 'recovery-normalize-forwarded-arguments
+                     (lambda (active-context arguments)
+                       (declare (ignore active-context))
+                       arguments))
+               (list 'recovery-print-introduction
+                     (lambda ()
+                       nil))
+               (list 'recovery-report-crash
+                     (lambda (active-context
+                              &key status capsule original-arguments)
+                       (declare
+                        (ignore active-context status capsule
+                                original-arguments))
+                       nil))
+               (list 'recovery-source-commit
+                     (lambda (active-context)
+                       (declare (ignore active-context))
+                       current-commit))
+               (list 'recovery-selected-generation-or-fallback
+                     (lambda (active-context &key source-commit)
+                       (declare (ignore active-context))
+                       (setf selection-called-p t
+                             selection-source source-commit)
+                       current-a))
+               (list 'recovery-load-generation
+                     (lambda (active-context pathname
+                              &key expected-identifier)
+                       (declare
+                        (ignore active-context pathname expected-identifier))
+                       stale))
+               (list 'recovery-boot-with-source-fallback
+                     (lambda (active-context generation arguments
+                              &key capsule source-commit)
+                       (declare
+                        (ignore active-context generation arguments capsule))
+                       (setf boot-source source-commit)
+                       0)))
+              (lambda ()
+                (test-assert
+                 (= (recovery-run
+                     (list (namestring root) "--status" "70" "--"))
+                    0)
+                 "automatic fatal recovery reaches the boot boundary")
+                (test-assert
+                 (and (string= selection-source current-commit)
+                      (string= boot-source current-commit))
+                 "recovery threads its source revision through selection and boot")
+                (setf selection-source :unset
+                      boot-source :unset)
+                (test-assert
+                 (= (recovery-run
+                     (list (namestring root) "--status" "75" "--"))
+                    0)
+                 "rollback recovery reaches the boot boundary")
+                (test-assert
+                 (and (null selection-source)
+                      (null boot-source))
+                 "rollback leaves selection and boot revision-unconstrained")
+                (setf selection-called-p nil
+                      boot-source :unset)
+                (test-assert
+                 (= (recovery-run
+                     (list (namestring root)
+                           "--generation" "stale"
+                           "--status" "70"
+                           "--"))
+                    0)
+                 "explicit generation recovery reaches the boot boundary")
+                (test-assert
+                 (and (not selection-called-p)
+                      (null boot-source))
+                 "explicit generation selection bypasses automatic revision policy"))))
+           (let ((booted nil)
+                 (generations (list stale current-a current-b)))
+             (test-call-with-function-replacements
+              (list
+               (list 'recovery-generation-compatible-p
+                     (lambda (generation)
+                       (declare (ignore generation))
+                       t))
+               (list 'recovery-generation-list
+                     (lambda (active-context)
+                       (declare (ignore active-context))
+                       generations))
+               (list 'recovery-terminal-state-capture
+                     (lambda ()
+                       (make-instance 'recovery-terminal-state
+                                      :settings nil)))
+               (list 'recovery-terminal-state-restore
+                     (lambda (state)
+                       (declare (ignore state))
+                       nil))
+               (list 'recovery-refresh-crash-context
+                     (lambda (active-context capsule &key session-p)
+                       (declare (ignore active-context session-p))
+                       capsule))
+               (list 'recovery-boot-generation
+                     (lambda (active-context generation arguments)
+                       (declare (ignore active-context arguments))
+                       (push (recovery-generation-identifier generation)
+                             booted)
+                       (if (eq generation current-a) 64 0))))
+              (lambda ()
+                (test-assert
+                 (= (recovery-boot-with-fallback
+                     context
+                     current-a
+                     nil
+                     :source-commit current-commit)
+                    0)
+                 "same-revision retained fallback may reach a healthy core")
+                (test-assert
+                 (equal (nreverse booted) '("current-a" "current-b"))
+                 "retained fallback never tries a cross-revision generation")))))
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil)
+
 (-> run-recovery-tests () null)
 (defun run-recovery-tests ()
   "Run recovery runtime regression tests."
   (test-recovery-conversation-identifiers)
   (test-recovery-session-handoff)
   (test-recovery-status-boundary)
+  (test-recovery-generation-revision-boundary)
   nil)

@@ -1084,6 +1084,11 @@ The recovery image may:
 7. Select the repaired image as active.
 8. Fall back to a retained working generation when repair fails.
 
+Automatic recovery after a failed active process considers only retained
+generations built from the currently checked-out source revision. If none is
+compatible, it boots clean committed source. An explicit =--generation=
+selection and rollback status may intentionally cross revisions.
+
 Recovery must remain possible without loading the damaged active core.
 
 * 11. Dependencies and External Tools
