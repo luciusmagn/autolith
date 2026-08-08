@@ -286,3 +286,32 @@
      (string= (resource-revision-stale-actual-revision condition) "revision-2")
      "stale revision conditions retain the current revision"))
   nil)
+
+(-> test-resource-edit-operation-schema () null)
+(defun test-resource-edit-operation-schema ()
+  "Pin the resource.edit operation schema against provider validator limits.
+
+Bare {\"required\": [...]} anyOf variants carry no type declaration, and the
+Fireworks JSON Schema validator rejects them with \"could not understand the
+instance\", failing the entire request before the model runs. Every anyOf
+variant must therefore declare its object type explicitly."
+  (let* ((schema (default-tools--resource-operation-schema))
+         (variants (json-get schema "oneOf"))
+         (anyof-count 0))
+    (test-assert (and (vectorp variants) (plusp (length variants)))
+                 "resource.edit operations offer one closed variant per operation")
+    (loop for variant across variants
+          for any-of = (and (json-object-p variant) (json-get variant "anyOf"))
+          when any-of
+          do (loop for entry across any-of
+                   do (incf anyof-count)
+                      (test-assert
+                       (string= (or (json-get entry "type") "") "object")
+                       "anyOf variants declare their object type for provider validators")
+                      (test-assert
+                       (and (vectorp (json-get entry "required"))
+                            (plusp (length (json-get entry "required"))))
+                       "anyOf variants retain their required-field constraint")))
+    (test-assert (= anyof-count 3)
+                 "the agenda-update operation requires one of text, status, or memory-ids"))
+  nil)
