@@ -162,6 +162,7 @@
     (test-openai-compatible-provider)
     (test-fireworks-provider)
     (test-resource-protocol)
+    (test-resource-edit-operation-schema)
     (test-workspace-file-resources)
     (test-agenda-resources)
     (test-memory-resources)

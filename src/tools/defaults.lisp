@@ -93,10 +93,17 @@
                                 "enum" (vector name)))
              (let ((schema (tool-object-schema properties (cons "op" required))))
                (when any-required
+                 ;; Each anyOf variant must declare its object type: bare
+                 ;; {"required": [...]} subschemas are rejected by the
+                 ;; Fireworks JSON Schema validator ("could not understand the
+                 ;; instance"), which fails the whole request. The validated
+                 ;; instance is always an object here, so the type check does
+                 ;; not change the accepted operations.
                  (setf (gethash "anyOf" schema)
                        (map 'vector
                             (lambda (field)
-                              (json-object "required" (vector field)))
+                              (json-object "type" "object"
+                                           "required" (vector field)))
                             any-required)))
                schema)))
     (json-object
